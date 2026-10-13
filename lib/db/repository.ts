@@ -1,0 +1,184 @@
+import { randomUUID } from "crypto"
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
+import { getDb, schema } from "./index"
+import { serializeRow, serializeRows } from "./serialize"
+import type { TableName } from "./schema"
+import type { CompendiumTable, ResolvableTable } from "./tables"
+import { isCompendiumTable } from "./tables"
+import { fillEmptySpellWriteup, fillEmptySpellWriteups } from "@/lib/compendium/fill-spell-writeup-from-srd"
+import { unionSpellClassNames } from "@/lib/import/class-spell-lists"
+import { mergeSpellRowForPersist } from "@/lib/import/merge-spell-persist"
+
+export type Filter =
+  | { op: "eq"; column: string; value: unknown }
+  | { op: "in"; column: string; values: unknown[] }
+
+export type OrderBy = { column: string; ascending?: boolean }
+
+function getTable(name: ResolvableTable) {
+  return schema.tableMap[name as TableName]
+}
+
+function buildWhere(table: ReturnType<typeof getTable>, filters: Filter[]) {
+  const conditions = filters.map((f) => {
+    const col = (table as unknown as Record<string, unknown>)[f.column]
+    if (!col) throw new Error(`Unknown column: ${f.column}`)
+    if (f.op === "eq") return eq(col as never, f.value as never)
+    return inArray(col as never, f.values as never[])
+  })
+  return conditions.length ? and(...conditions) : undefined
+}
+
+function buildOrder(table: ReturnType<typeof getTable>, orders: OrderBy[]) {
+  return orders.map((o) => {
+    const col = (table as unknown as Record<string, unknown>)[o.column]
+    if (!col) throw new Error(`Unknown column: ${o.column}`)
+    return o.ascending === false ? desc(col as never) : asc(col as never)
+  })
+}
+
+function withIds<T extends Record<string, unknown>>(rows: T[]): (T & { id: string })[] {
+  return rows.map((row) => ({
+    ...row,
+    id: typeof row.id === "string" ? row.id : randomUUID(),
+  }))
+}
+
+function defaultOrders(table: ResolvableTable): OrderBy[] {
+  if (table === "character_snapshots") return [{ column: "created_at", ascending: false }]
+  return [{ column: "name", ascending: true }]
+}
+
+function touchUpdatedAt(table: ResolvableTable, rest: Record<string, unknown>) {
+  if (
+    table === "characters" ||
+    table === "custom_abilities" ||
+    table === "parties" ||
+    table === "character_snapshots"
+  ) {
+    rest.updated_at = new Date()
+  }
+}
+
+export async function countRows(table: ResolvableTable, filters: Filter[] = []) {
+  const t = getTable(table)
+  const db = getDb()
+  const where = buildWhere(t, filters)
+  const [row] = await db.select({ value: count() }).from(t).where(where)
+  return Number(row?.value ?? 0)
+}
+
+export async function listRows(
+  table: ResolvableTable,
+  options: { filters?: Filter[]; orders?: OrderBy[]; limit?: number } = {},
+) {
+  const t = getTable(table)
+  const db = getDb()
+  let query = db.select().from(t).$dynamic()
+  const where = buildWhere(t, options.filters ?? [])
+  if (where) query = query.where(where)
+  const orderBy = buildOrder(t, options.orders?.length ? options.orders : defaultOrders(table))
+  if (orderBy.length) query = query.orderBy(...orderBy)
+  if (options.limit) query = query.limit(options.limit)
+  const rows = await query
+  const serialized = serializeRows(rows as unknown as Record<string, unknown>[])
+  return table === "spells" ? fillEmptySpellWriteups(serialized) : serialized
+}
+
+export async function getRowById(table: ResolvableTable, id: string) {
+  const t = getTable(table)
+  const db = getDb()
+  const [row] = await db.select().from(t).where(eq(t.id, id)).limit(1)
+  if (!row) return null
+  const serialized = serializeRow(row as unknown as Record<string, unknown>)
+  return table === "spells" ? fillEmptySpellWriteup(serialized) : serialized
+}
+
+export async function insertRows(table: ResolvableTable, rows: Record<string, unknown>[]) {
+  const t = getTable(table)
+  const db = getDb()
+  const payload = withIds(rows)
+  await db.insert(t).values(payload as never[])
+  return payload.map(serializeRow)
+}
+
+export async function updateRowById(
+  table: ResolvableTable,
+  id: string,
+  data: Record<string, unknown>,
+) {
+  const t = getTable(table)
+  const db = getDb()
+  const { id: _id, created_at: _c, ...rest } = data
+  touchUpdatedAt(table, rest as Record<string, unknown>)
+  await db.update(t).set(rest as never).where(eq(t.id, id))
+}
+
+export async function deleteRowById(table: ResolvableTable, id: string) {
+  const t = getTable(table)
+  const db = getDb()
+  await db.delete(t).where(eq(t.id, id))
+}
+
+export async function deleteWhere(table: ResolvableTable, filters: Filter[]) {
+  const t = getTable(table)
+  const db = getDb()
+  const where = buildWhere(t, filters)
+  if (!where) throw new Error("Refusing to delete without filters")
+  await db.delete(t).where(where)
+}
+
+export async function clearTable(table: ResolvableTable) {
+  const t = getTable(table)
+  const db = getDb()
+  await db.delete(t).where(sql`1=1`)
+}
+
+export async function upsertByName(table: CompendiumTable, rows: Record<string, unknown>[]) {
+  if (!isCompendiumTable(table)) throw new Error(`Upsert by name not supported for ${table}`)
+  const t = getTable(table) as (typeof schema.tableMap)[CompendiumTable]
+  const db = getDb()
+  for (const row of rows) {
+    const name = row.name as string
+    if (!name) continue
+    const [existing] = await db.select().from(t).where(eq(t.name, name)).limit(1)
+    const existingRow = existing
+      ? serializeRow(existing as unknown as Record<string, unknown>)
+      : null
+    const payload: Record<string, unknown> =
+      existingRow && table === "spells"
+        ? mergeSpellRowForPersist(existingRow, row)
+        : {
+            ...row,
+            id: existingRow?.id ?? randomUUID(),
+          }
+    if (existingRow) {
+      // Keep the user's enable/disable toggle across SRD reseeds.
+      if ("enabled" in existingRow) {
+        payload.enabled = existingRow.enabled
+      }
+      if (table === "spells") {
+        payload.classes = unionSpellClassNames(
+          Array.isArray(existingRow.classes) ? (existingRow.classes as string[]) : null,
+          Array.isArray(payload.classes) ? (payload.classes as string[]) : null,
+        )
+      } else {
+        payload.id = existingRow.id
+      }
+      const { id: _id, created_at: _c, ...rest } = payload
+      await db.update(t).set(rest as never).where(eq(t.id, existingRow.id as string))
+    } else {
+      if (!payload.id) payload.id = randomUUID()
+      await db.insert(t).values(payload as never)
+    }
+  }
+}
+
+export async function listRowsIn(
+  table: CompendiumTable,
+  column: string,
+  values: string[],
+) {
+  if (!values.length) return []
+  return listRows(table, { filters: [{ op: "in", column, values }] })
+}

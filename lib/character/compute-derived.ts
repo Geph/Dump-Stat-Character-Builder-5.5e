@@ -1,0 +1,1412 @@
+import { resolveAllSpeeds } from "@/lib/character/resolve-all-speeds"
+import { resolveVisionEntries } from "@/lib/character/resolve-vision"
+import {
+  applyAbilityScoreOverrides,
+} from "@/lib/character/apply-characteristic-runtime"
+import { normalizeBuilderPicks } from "@/lib/builder/builder-picks"
+import { catalogFeatPickIdsFromPicks } from "@/lib/builder/catalog-feat-options"
+import {
+  inferClassSkillPicks,
+  inferSpellPicksByClassId,
+} from "@/lib/builder/infer-builder-picks"
+import { aggregateAsiBonuses } from "@/lib/builder/asi-allocation"
+import { normalizeAsiAllocationsMap } from "@/lib/character/level-up-feat"
+import { aggregateBackgroundAbilityBonuses } from "@/lib/builder/background-asi"
+import { mergeSkillProficiencies } from "@/lib/builder/choices"
+import { pruneMissingClassSelections } from "@/lib/builder/prune-missing-class-picks"
+import {
+  aggregateClassArmorProficiencies,
+  aggregateClassToolProficiencies,
+  aggregateClassWeaponProficiencies,
+  fixedClassSkillProficiencies,
+} from "@/lib/builder/multiclass-proficiencies"
+import { collectBuilderModifierRefIds } from "@/lib/compendium/builder-modifier-refs"
+import {
+  collectEquipmentMagicCharacteristics,
+  resolveEquippedItems,
+} from "@/lib/compendium/equipment-magic-modifiers"
+import {
+  getEffectiveArmorProficiencies,
+  getEffectiveWeaponProficiencies,
+  mergeProficiencyLists,
+} from "@/lib/compendium/background-proficiencies"
+import {
+  ABILITY_SCORE_KEYS,
+  abilityModifierKeyToScoreKey,
+  aggregateCharacteristics,
+  applyAcCharacteristics,
+  acAbilityBonus,
+  applyHpCharacteristics,
+  computeInitiative,
+  resolveAggregatedAcFormula,
+  resolveWeaponDamageDieSidesOverride,
+  collectAbilityModifierDamageRules,
+  type SheetToggleKey,
+  sumAttackRollModifiers,
+  sumDamageRollModifiers,
+  type AbilityScoreKey,
+  type AggregatedCharacteristics,
+} from "@/lib/compendium/characteristic-modifiers"
+import { replaceDamageDiceSides } from "@/lib/compendium/weapon-damage-die-override"
+import { resolveClassResourceCounts } from "@/lib/character/resolve-class-resource-counts"
+import {
+  calculateArmorClass,
+  calculateWeaponAttack,
+  getArmorAcText,
+  getShieldBonus,
+  getWeaponAttackAbility,
+  getWeaponDamageText,
+  getWeaponPropertyTags,
+  isUnarmedStrikeWeapon,
+  isWeaponProficient,
+  parseArmorAc,
+  type AbilityMods,
+} from "@/lib/compendium/combat-stats"
+import {
+  buildUnarmedStrikeEquipment,
+  characterIsEmptyHanded,
+  extraUnarmedStrikeAbilityOverrides,
+} from "@/lib/character/unarmed-strike"
+import {
+  buildWeaponDamageExpression,
+  parseWeaponDamageDice,
+  shouldApplyAbilityModifierToWeaponDamage,
+  stepWeaponDamageDice,
+} from "@/lib/compendium/weapon-damage-roll"
+import {
+  anyEquippedWeaponIsMounted,
+  canMountWeapon,
+  isWeaponMounted,
+} from "@/lib/character/mounted-weapon"
+import { collectSpecialSaveDcs } from "@/lib/character/special-save-dc"
+import {
+  characterHasTwoWeaponFighting,
+  defaultOffHandIncludesAbilityMod,
+} from "@/lib/compendium/two-weapon-fighting"
+import type { Background, DndClass, Equipment, Feature } from "@/lib/types"
+import { resolveCheckRollMode } from "@/lib/compendium/class-feature-metadata"
+import type { LinkedModifierInstance } from "@/lib/compendium/linked-modifiers"
+import type { CharacterClassRow } from "@/lib/character/character-classes"
+import {
+  classLevelsToRows,
+  normalizeCharacterClassRows,
+  rowsToClassAddOrder,
+  rowsToClassLevels,
+  rowsToSubclassMap,
+  resolvePrimaryClassIdFromRows,
+} from "@/lib/character/character-classes"
+import type {
+  CharacterBuildInputs,
+  CharacterSaveSnapshot,
+  DerivedCharacter,
+  DerivedForcedSaveRemap,
+  DerivedSpellcastingEntry,
+  DerivedTelepathy,
+  SaveBonus,
+  SkillBonus,
+  StatBreakdownPart,
+  ToolBonus,
+  WeaponAttackDerived,
+} from "@/lib/character/types"
+import {
+  collectFeatureDamageBonuses,
+  collectFeatureRollBonuses,
+  computeRollBonusAmount,
+} from "@/lib/character/collect-limited-feature-effects"
+import { getExhaustionDerivedEffects } from "@/lib/srd/exhaustion-effects"
+import { resolveSpellcastingAbilityKey } from "@/lib/compendium/spell-slots"
+import { resolveSkillAbility } from "@/lib/character/skill-ability-overrides"
+import { collectGrantedSpellCastProfiles } from "@/lib/character/free-cast-spells"
+import { weaponSpellBuffRollBonuses } from "@/lib/character/weapon-spell-buff"
+
+const SKILL_ROWS: { name: string; ability: AbilityScoreKey }[] = [
+  { name: "Acrobatics", ability: "dexterity" },
+  { name: "Animal Handling", ability: "wisdom" },
+  { name: "Arcana", ability: "intelligence" },
+  { name: "Athletics", ability: "strength" },
+  { name: "Deception", ability: "charisma" },
+  { name: "History", ability: "intelligence" },
+  { name: "Insight", ability: "wisdom" },
+  { name: "Intimidation", ability: "charisma" },
+  { name: "Investigation", ability: "intelligence" },
+  { name: "Medicine", ability: "wisdom" },
+  { name: "Nature", ability: "intelligence" },
+  { name: "Perception", ability: "wisdom" },
+  { name: "Performance", ability: "charisma" },
+  { name: "Persuasion", ability: "charisma" },
+  { name: "Religion", ability: "intelligence" },
+  { name: "Sleight of Hand", ability: "dexterity" },
+  { name: "Stealth", ability: "dexterity" },
+  { name: "Survival", ability: "wisdom" },
+]
+
+function asRollFeature(
+  name: string,
+  description: string | null | undefined,
+  linkedModifiers: LinkedModifierInstance[] | null | undefined,
+  level = 1,
+): Feature {
+  return {
+    name,
+    description: description ?? null,
+    level,
+    linkedModifiers: linkedModifiers ?? undefined,
+  } as Feature
+}
+
+function featureGrantsInitiativeProficiency(
+  feature: { linkedModifiers?: LinkedModifierInstance[] | null },
+): boolean {
+  for (const instance of feature.linkedModifiers ?? []) {
+    const effects = [...(instance.activation?.effects ?? []), ...(instance.effects ?? [])]
+    for (const effect of effects) {
+      if (resolveCheckRollMode(effect) !== "bonus") continue
+      if (effect.checkCategory !== "initiative") continue
+      if (effect.bonusConfig?.mode === "proficiency") return true
+    }
+  }
+  return false
+}
+
+/** Feats / traits / class features that still store Alert-style PB as a FeatureEffect. */
+function collectInitiativeProficiencyFromFeatureEffects(
+  inputs: CharacterBuildInputs,
+): import("@/lib/compendium/characteristic-modifiers").CharacteristicModifier[] {
+  const features: Feature[] = [...(inputs.resolvedFeatures ?? [])]
+  const featIds = new Set([
+    ...(inputs.selectedFeatIds ?? []),
+    ...(inputs.grantedFeatIds ?? []),
+    ...(inputs.featSelectionEntries ?? []).map((entry) => entry.featId),
+  ])
+  for (const feat of inputs.feats ?? []) {
+    if (!featIds.has(feat.id)) continue
+    features.push(asRollFeature(feat.name, feat.description, feat.linkedModifiers))
+  }
+  for (const trait of inputs.species?.traits ?? []) {
+    features.push(asRollFeature(trait.name, trait.description, trait.linkedModifiers, trait.level ?? 1))
+  }
+  if (inputs.background?.feature) {
+    features.push(
+      asRollFeature(
+        inputs.background.feature.name,
+        inputs.background.feature.description,
+        inputs.background.feature.linkedModifiers,
+      ),
+    )
+  }
+  if (!features.some(featureGrantsInitiativeProficiency)) return []
+  return [
+    {
+      id: "fx_initiative_add_proficiency",
+      type: "initiative",
+      mode: "add_proficiency",
+      label: "Initiative Proficiency",
+    },
+  ]
+}
+
+function buildWeaponAttackDerived(
+  weapon: Equipment,
+  params: {
+    abilityMods: AbilityMods
+    proficiencyBonus: number
+    weaponProficiencies: string[]
+    aggregatedCharacteristics: AggregatedCharacteristics
+    featureDamageBonus: number
+    includeAbilityModifier?: boolean
+    characterLevel?: number
+    stepDamageDice?: boolean
+    activeSheetToggles?: ReadonlySet<string>
+    sheetToggleWeaponIds?: Record<string, string>
+  },
+): WeaponAttackDerived | null {
+  const unarmed = isUnarmedStrikeWeapon(weapon)
+  const overrides = params.aggregatedCharacteristics.weaponAbilityOverrides
+  const base = calculateWeaponAttack(
+    weapon,
+    params.abilityMods,
+    params.proficiencyBonus,
+    unarmed || isWeaponProficient(weapon, params.weaponProficiencies),
+    overrides,
+  )
+  if (!base) return null
+
+  const weaponProps = getWeaponPropertyTags(weapon)
+  let modifierBonus = sumAttackRollModifiers(params.aggregatedCharacteristics, {
+    subcategory: weapon.subcategory ?? "",
+    properties: weaponProps,
+    unarmed,
+  })
+  let damageBonus =
+    sumDamageRollModifiers(params.aggregatedCharacteristics, {
+      subcategory: weapon.subcategory ?? "",
+      properties: weaponProps,
+      damageType: weapon.damage_type ?? "",
+      unarmed,
+    }) + params.featureDamageBonus
+
+  const spellBuff = weaponSpellBuffRollBonuses({
+    mods: params.aggregatedCharacteristics.weaponBoundSpellBuffModifiers,
+    weaponId: weapon.id,
+    activeToggleIds: params.activeSheetToggles,
+    bindings: params.sheetToggleWeaponIds,
+  })
+  modifierBonus += spellBuff.attack
+  damageBonus += spellBuff.damage
+
+  const attackBonus = base.attackBonus + modifierBonus
+  const attackBreakdown = [...base.attackBreakdown]
+  if (modifierBonus !== 0) {
+    const label =
+      spellBuff.labels.length && modifierBonus === spellBuff.attack
+        ? spellBuff.labels.join(" / ")
+        : "Bonuses"
+    attackBreakdown.push({ label, value: modifierBonus })
+  }
+
+  const parsed = parseWeaponDamageDice(getWeaponDamageText(weapon)).oneHanded
+  const overrideSides = resolveWeaponDamageDieSidesOverride(
+    params.aggregatedCharacteristics,
+    { ...weapon, damage: getWeaponDamageText(weapon) },
+    params.characterLevel ?? 1,
+  )
+  let damageDice =
+    parsed != null && overrideSides != null
+      ? replaceDamageDiceSides(parsed, overrideSides)
+      : parsed
+  if (damageDice && params.stepDamageDice) {
+    damageDice = stepWeaponDamageDice(damageDice) ?? damageDice
+  }
+
+  const attackAbility = getWeaponAttackAbility(weapon, params.abilityMods, {
+    overrides,
+    forRoll: "attack",
+  })
+  const damageAbility = getWeaponAttackAbility(weapon, params.abilityMods, {
+    overrides,
+    forRoll: "damage",
+  })
+  const abilityDamageRules = collectAbilityModifierDamageRules(params.aggregatedCharacteristics, {
+    subcategory: weapon.subcategory ?? "",
+    properties: weaponProps,
+    unarmed,
+  })
+  const includeAbilityModifier = params.includeAbilityModifier ?? true
+  const includesAbilityModifierOnDamage = shouldApplyAbilityModifierToWeaponDamage({
+    weapon,
+    includeAbilityModifier,
+    grantAbilityModifierWhenMissing: abilityDamageRules.grantAbilityModifierWhenMissing,
+    abilityMod: damageAbility.mod,
+  })
+
+  const damageDisplay =
+    damageDice != null
+      ? buildWeaponDamageExpression({
+          weapon,
+          abilityMods: params.abilityMods,
+          dice: damageDice,
+          includeAbilityModifier,
+          flatDamageBonus: damageBonus,
+          grantAbilityModifierWhenMissing: abilityDamageRules.grantAbilityModifierWhenMissing,
+          bonusDiceWhenModifierIncluded: abilityDamageRules.bonusDiceWhenModifierIncluded,
+          bonusDiceUsesWeaponDamageType: abilityDamageRules.bonusDiceUsesWeaponDamageType,
+          overrides,
+        })
+      : damageBonus > 0
+        ? `${base.damageDisplay} + ${damageBonus}`
+        : base.damageDisplay
+
+  return {
+    attackBonus,
+    damageDisplay,
+    attackBreakdown,
+    attackAbilityMod: attackAbility.mod,
+    damageAbilityMod: damageAbility.mod,
+    includesAbilityModifierOnDamage,
+  }
+}
+
+function abilityModsFromScores(scores: Record<AbilityScoreKey, number>) {
+  return ABILITY_SCORE_KEYS.reduce(
+    (mods, key) => {
+      mods[key] = Math.floor((scores[key] - 10) / 2)
+      return mods
+    },
+    {} as Record<AbilityScoreKey, number>,
+  )
+}
+
+function resolvePrimaryClass(
+  inputs: CharacterBuildInputs,
+): DndClass | null {
+  const primaryId = inputs.primaryClassId ?? inputs.classLevels[0]?.classId ?? null
+  if (!primaryId) return null
+  return inputs.classes.find((cls) => cls.id === primaryId) ?? null
+}
+
+export function classesForHp(inputs: CharacterBuildInputs): { cls: DndClass; level: number }[] {
+  if (inputs.classLevels.length > 0) {
+    return inputs.classLevels
+      .map((entry) => ({
+        cls: inputs.classes.find((c) => c.id === entry.classId)!,
+        level: entry.level,
+      }))
+      .filter((row) => row.cls)
+  }
+  const primary = resolvePrimaryClass(inputs)
+  if (!primary) return []
+  const totalLevel = inputs.classLevels.reduce((sum, row) => sum + row.level, 0) || 1
+  return [{ cls: primary, level: totalLevel }]
+}
+
+export function calculateBaseMaxHp(
+  inputs: CharacterBuildInputs,
+  conMod: number,
+): number {
+  const rows = classesForHp(inputs)
+  if (!rows.length) return Math.max(8 + conMod, 1)
+
+  let hp = 0
+  let isFirstLevel = true
+  for (const { cls, level } of rows) {
+    const hitDie = cls.hit_die ?? 8
+    for (let i = 0; i < level; i++) {
+      if (isFirstLevel) {
+        hp += hitDie + conMod
+        isFirstLevel = false
+      } else {
+        hp += Math.floor(hitDie / 2) + 1 + conMod
+      }
+    }
+  }
+  return Math.max(Number.isFinite(hp) ? hp : 8 + conMod, 1)
+}
+
+function passiveSkillScore(
+  skillName: string,
+  ability: AbilityScoreKey,
+  abilityMods: Record<AbilityScoreKey, number>,
+  skillProficiencies: string[],
+  skillExpertise: string[],
+  proficiencyBonus: number,
+): number {
+  return (
+    10 +
+    abilityMods[ability] +
+    (skillProficiencies.includes(skillName)
+      ? proficiencyBonus * (skillExpertise.includes(skillName) ? 2 : 1)
+      : 0)
+  )
+}
+
+function buildSpellcastingEntries(params: {
+  classLevels: { classId: string; level: number }[]
+  classes: DndClass[]
+  abilityMods: Record<AbilityScoreKey, number>
+  proficiencyBonus: number
+  aggregatedSpellcastingAbility: AbilityScoreKey | null
+  resolvedFeatures: import("@/lib/types").Feature[]
+  featureLimitationCtx: import("@/lib/compendium/modifier-limitations").LimitationEvaluationContext
+  characterLevel: number
+}): DerivedSpellcastingEntry[] {
+  const saveDcFeatureBonus =
+    params.resolvedFeatures.length > 0
+      ? collectFeatureRollBonuses(
+          params.resolvedFeatures,
+          { kind: "spell_save_dc" },
+          {
+            ...params.featureLimitationCtx,
+            proficiencyBonus: params.proficiencyBonus,
+            abilityMods: params.abilityMods,
+            characterLevel: params.characterLevel,
+          },
+        ).total
+      : 0
+
+  const entries: DerivedSpellcastingEntry[] = []
+  for (const row of params.classLevels) {
+    const cls = params.classes.find((entry) => entry.id === row.classId)
+    if (!cls?.spellcasting?.ability) continue
+    const ability =
+      resolveSpellcastingAbilityKey(cls.spellcasting.ability) ??
+      params.aggregatedSpellcastingAbility
+    if (!ability) continue
+    const abilityMod = params.abilityMods[ability]
+    const abilityLabel =
+      ability.charAt(0).toUpperCase() + ability.slice(1)
+    entries.push({
+      classId: cls.id,
+      className: cls.name,
+      ability,
+      abilityLabel,
+      abilityMod,
+      saveDcFeatureBonus,
+      saveDc: 8 + params.proficiencyBonus + abilityMod + saveDcFeatureBonus,
+      attackBonus: params.proficiencyBonus + abilityMod,
+    })
+  }
+  return entries
+}
+
+function buildForcedSaveRemaps(
+  remaps: import("@/lib/compendium/characteristic-modifiers").ForcedSaveAbilityRemapCharacteristic[],
+): DerivedForcedSaveRemap[] {
+  return remaps.map((remap) => ({
+    fromAbility: remap.fromAbility,
+    toAbility: remap.toAbility,
+    scope: remap.scope,
+    label: remap.label,
+  }))
+}
+
+function buildTelepathyDerived(
+  telepathy: AggregatedCharacteristics["telepathy"],
+): DerivedTelepathy | null {
+  if (!telepathy) return null
+  return { rangeFeet: telepathy.rangeFeet, label: telepathy.label }
+}
+
+function resolveWalkSpeed(
+  inputs: CharacterBuildInputs,
+  aggregatedSpeedAdd: Record<string, number>,
+  aggregatedSpeedSet: Record<string, number>,
+) {
+  const species = inputs.species
+  const baseWalkSpeed =
+    typeof species?.speed === "number"
+      ? species.speed
+      : typeof species?.speed === "object" && species?.speed
+        ? (species.speed as { walking?: number; walk?: number }).walking ??
+          (species.speed as { walk?: number }).walk ??
+          30
+        : 30
+  return (aggregatedSpeedSet.walk ?? baseWalkSpeed) + (aggregatedSpeedAdd.walk ?? 0)
+}
+
+function buildSkillBonuses(
+  proficiencyBonus: number,
+  abilityMods: Record<AbilityScoreKey, number>,
+  skillProficiencies: string[],
+  skillExpertise: string[],
+  customSkills: import("@/lib/compendium/characteristic-modifiers").CustomSkillDefinition[],
+  featureBonusContext?: {
+    features: import("@/lib/types").Feature[]
+    limitationCtx: import("@/lib/compendium/modifier-limitations").LimitationEvaluationContext
+    characterLevel: number
+  },
+  skillAbilityOverrides?: Record<string, AbilityScoreKey> | null,
+): SkillBonus[] {
+  const srdSkillNames = new Set(SKILL_ROWS.map((row) => row.name))
+
+  const buildOne = (
+    name: string,
+    ability: AbilityScoreKey,
+    proficient: boolean,
+    expertise: boolean,
+  ): SkillBonus => {
+    let bonus =
+      abilityMods[ability] +
+      (proficient ? proficiencyBonus * (expertise ? 2 : 1) : 0)
+    if (featureBonusContext) {
+      const { total } = collectFeatureRollBonuses(
+        featureBonusContext.features,
+        { kind: "skill", skillName: name, ability },
+        {
+          ...featureBonusContext.limitationCtx,
+          proficiencyBonus,
+          abilityMods,
+          characterLevel: featureBonusContext.characterLevel,
+          skillProficient: proficient,
+        },
+      )
+      bonus += total
+    }
+    return { name, ability, defaultAbility: ability, proficient, expertise, bonus }
+  }
+
+  const srd = SKILL_ROWS.map(({ name, ability }) => {
+    const proficient = skillProficiencies.includes(name)
+    const expertise = skillExpertise.includes(name)
+    const governing = resolveSkillAbility(name, ability, skillAbilityOverrides)
+    return { ...buildOne(name, governing, proficient, expertise), defaultAbility: ability }
+  })
+
+  const custom = customSkills
+    .filter((entry) => entry.name.trim() && !srdSkillNames.has(entry.name.trim()))
+    .map((entry) => {
+      const name = entry.name.trim()
+      const governing = resolveSkillAbility(name, entry.ability, skillAbilityOverrides)
+      return { ...buildOne(name, governing, true, entry.expertise), defaultAbility: entry.ability }
+    })
+
+  return [...srd, ...custom]
+}
+
+function toolCheckAbility(toolName: string): AbilityScoreKey {
+  const normalized = toolName.toLowerCase()
+  if (normalized.includes("thieves")) return "dexterity"
+  if (
+    normalized.includes("herbalism") ||
+    normalized.includes("healer") ||
+    normalized.includes("poisoner")
+  ) {
+    return "wisdom"
+  }
+  if (
+    normalized.includes("smith") ||
+    normalized.includes("mason") ||
+    normalized.includes("carpenter") ||
+    normalized.includes("cobbler") ||
+    normalized.includes("cook")
+  ) {
+    return "strength"
+  }
+  return "intelligence"
+}
+
+function buildToolBonuses(
+  proficiencyBonus: number,
+  abilityMods: Record<AbilityScoreKey, number>,
+  toolProficiencies: string[],
+  toolExpertise: string[],
+  toolExpertiseAll: boolean,
+): ToolBonus[] {
+  const uniqueTools = [...new Set(toolProficiencies.map((tool) => tool.trim()).filter(Boolean))]
+  return uniqueTools.map((name) => {
+    const ability = toolCheckAbility(name)
+    const proficient = true
+    const expertise = toolExpertiseAll || toolExpertise.some((tool) => tool.toLowerCase() === name.toLowerCase())
+    const bonus = abilityMods[ability] + proficiencyBonus * (expertise ? 2 : 1)
+    return { name, ability, proficient, expertise, bonus }
+  })
+}
+
+function saveMatchesAlternateList(saveAbility: AbilityScoreKey, saves: string[]): boolean {
+  if (!saves.length) return true
+  const label = saveAbility.charAt(0).toUpperCase() + saveAbility.slice(1)
+  return saves.some((entry) => {
+    const normalized = entry.trim().toLowerCase()
+    return normalized === saveAbility || normalized === label.toLowerCase()
+  })
+}
+
+function resolveGoverningSaveAbility(
+  saveAbility: AbilityScoreKey,
+  alternates: AggregatedCharacteristics["savingThrowAlternateAbilities"],
+): AbilityScoreKey {
+  for (const alt of alternates) {
+    if (saveMatchesAlternateList(saveAbility, alt.saves ?? [])) {
+      return alt.ability
+    }
+  }
+  return saveAbility
+}
+
+function buildSaveBonuses(
+  proficiencyBonus: number,
+  abilityMods: Record<AbilityScoreKey, number>,
+  savingThrowProficiencies: string[],
+  aggregated: AggregatedCharacteristics,
+  characterLevel: number,
+): SaveBonus[] {
+  let auraBonus = 0
+  for (const aura of aggregated.auras) {
+    if (aura.affectsSelf === false) continue
+    if (!aura.saveBonusConfig) continue
+    auraBonus += computeRollBonusAmount(aura.saveBonusConfig, {
+      proficiencyBonus,
+      abilityMods,
+      characterLevel,
+    })
+  }
+
+  return ABILITY_SCORE_KEYS.map((ability) => {
+    const label = ability.charAt(0).toUpperCase() + ability.slice(1)
+    const proficient = savingThrowProficiencies.some(
+      (entry) => entry.toLowerCase() === ability || entry.toLowerCase() === label.toLowerCase(),
+    )
+    const governingAbility = resolveGoverningSaveAbility(
+      ability,
+      aggregated.savingThrowAlternateAbilities,
+    )
+    const abilityPart = abilityMods[governingAbility]
+    const profPart = proficient ? proficiencyBonus : 0
+    return {
+      ability,
+      proficient,
+      governingAbility: governingAbility !== ability ? governingAbility : undefined,
+      auraBonus: auraBonus !== 0 ? auraBonus : undefined,
+      bonus: abilityPart + profPart + auraBonus,
+    }
+  })
+}
+
+const ABILITY_MOD_LABELS: Record<AbilityScoreKey, string> = {
+  strength: "Strength",
+  dexterity: "Dexterity",
+  constitution: "Constitution",
+  intelligence: "Intelligence",
+  wisdom: "Wisdom",
+  charisma: "Charisma",
+}
+
+/** Itemize the Armor Class contributions so they sum to the value `applyAcCharacteristics` returns. */
+function buildAcBreakdown(params: {
+  aggregated: AggregatedCharacteristics
+  abilityMods: Record<AbilityScoreKey, number>
+  proficiencyBonus: number
+  dexMod: number
+  armor: Equipment | null
+  shield: Equipment | null
+  shieldBonus: number
+  wearingArmor: boolean
+}): StatBreakdownPart[] {
+  const { aggregated, abilityMods, proficiencyBonus, dexMod, armor, shield, shieldBonus, wearingArmor } =
+    params
+  const parts: StatBreakdownPart[] = []
+  const armoredFlat = (wearingArmor ? aggregated.acFlatBonusWhileArmored : 0) + acAbilityBonus(aggregated, abilityMods, wearingArmor)
+
+  const pushIf = (label: string, value: number) => {
+    if (value !== 0) parts.push({ label, value })
+  }
+
+  if (aggregated.acFixed != null && aggregated.acFixed > 0) {
+    parts.push({ label: "Fixed AC (feature)", value: aggregated.acFixed })
+    if (aggregated.acIncludeProficiency) pushIf("Proficiency Bonus", proficiencyBonus)
+    pushIf("Feature bonus", aggregated.acFlatBonus)
+    pushIf("While armored", armoredFlat)
+    pushIf(shield?.name ?? "Shield", shieldBonus)
+    return parts
+  }
+
+  if (aggregated.acAbilityMods.length > 0) {
+    const formulaLabel =
+      aggregated.acFormulaOptions.find((option) => {
+        if (option.kind !== "ability_modifiers") return false
+        const abilities = (option.abilities ?? []).slice(0, 2)
+        return (
+          abilities.length === aggregated.acAbilityMods.length &&
+          abilities.every((key, index) => key === aggregated.acAbilityMods[index]) &&
+          (option.base ?? 10) === aggregated.acBase
+        )
+      })?.label ??
+      aggregated.acFormulaOptions.find((option) => option.kind === "ability_modifiers")?.label ??
+      "Unarmored Defense"
+
+    parts.push({ label: "Base", value: aggregated.acBase })
+    const hasNonDexterity = aggregated.acAbilityMods.some(
+      (key) => abilityModifierKeyToScoreKey(key) !== "dexterity",
+    )
+    for (const key of aggregated.acAbilityMods) {
+      const scoreKey = abilityModifierKeyToScoreKey(key)
+      const abilityName = ABILITY_MOD_LABELS[scoreKey]
+      const showFormula =
+        Boolean(formulaLabel) && (!hasNonDexterity || scoreKey !== "dexterity")
+      parts.push({
+        label: showFormula ? `${abilityName} (${formulaLabel})` : abilityName,
+        value: abilityMods[scoreKey],
+      })
+    }
+    if (aggregated.acIncludeProficiency) pushIf("Proficiency Bonus", proficiencyBonus)
+    pushIf("Feature bonus", aggregated.acFlatBonus)
+    pushIf("While armored", armoredFlat)
+    pushIf(shield?.name ?? "Shield", shieldBonus)
+    return parts
+  }
+
+  if (armor) {
+    const acText = getArmorAcText(armor)
+    parts.push({
+      label: armor.name,
+      value: acText ? parseArmorAc(acText, dexMod) : 10 + dexMod,
+    })
+  } else {
+    parts.push({ label: "Base", value: 10 })
+    parts.push({ label: "Dexterity", value: dexMod })
+  }
+  pushIf(shield?.name ?? "Shield", shieldBonus)
+  pushIf("Feature bonus", aggregated.acFlatBonus)
+  pushIf("While armored", armoredFlat)
+  if (aggregated.acIncludeProficiency) pushIf("Proficiency Bonus", proficiencyBonus)
+  return parts
+}
+
+export function computeDerivedCharacter(inputs: CharacterBuildInputs): DerivedCharacter {
+  const primaryClass = resolvePrimaryClass(inputs)
+  const background = inputs.background
+
+  const builderCharacteristicMods = collectBuilderModifierRefIds({
+    catalog: inputs.modifierCatalog,
+    species: inputs.species ?? undefined,
+    speciesTraitPicks: inputs.speciesTraitPicks,
+    background,
+    feats: inputs.feats,
+    selectedFeatIds: inputs.selectedFeatIds,
+    grantedFeatIds: inputs.grantedFeatIds,
+    featSelectionEntries: inputs.featSelectionEntries,
+    featChoicePicks: inputs.featChoicePicks,
+    modifierPlayerPicks: inputs.modifierPlayerPicks,
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+    subclasses: inputs.subclasses,
+    subclassByClassId: inputs.subclassByClassId,
+    featureChoicePicks: inputs.featureChoicePicks,
+    customAbilities: inputs.customAbilities,
+  })
+
+  const equipmentMagicMods = collectEquipmentMagicCharacteristics({
+    equipment: inputs.equipment,
+    equippedArmorId: inputs.equippedArmorId,
+    equippedShieldId: inputs.equippedShieldId,
+    equippedWeaponId: inputs.equippedWeaponId,
+    equippedOffHandWeaponId: inputs.equippedOffHandWeaponId ?? null,
+    attunedItemIds: inputs.attunedItemIds ?? [],
+    modifierCatalog: inputs.modifierCatalog,
+  })
+
+  const { armor: equippedArmor, shield: equippedShield, weapon: equippedWeapon, offHandWeapon: equippedOffHandWeapon } =
+    resolveEquippedItems(
+      inputs.equipment,
+      {
+        equippedArmorId: inputs.equippedArmorId,
+        equippedShieldId: inputs.equippedShieldId,
+        equippedWeaponId: inputs.equippedWeaponId,
+        equippedOffHandWeaponId: inputs.equippedOffHandWeaponId ?? null,
+      },
+      inputs.equipmentBaseSelections ?? {},
+      inputs.equipmentCatalog,
+    )
+
+  const totalLevel =
+    inputs.classLevels.length > 0
+      ? inputs.classLevels.reduce((sum, row) => sum + row.level, 0)
+      : 1
+
+  const classResourceCounts = resolveClassResourceCounts({
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+  })
+
+  const aggregatedCharacteristics = aggregateCharacteristics(
+    [
+      ...builderCharacteristicMods,
+      ...equipmentMagicMods,
+      ...collectInitiativeProficiencyFromFeatureEffects(inputs),
+    ],
+    {
+      activeSheetToggles: inputs.activeSheetToggles,
+      activeConditions: inputs.activeConditions,
+      equippedArmor,
+      equippedShield,
+      currentHp: inputs.currentHp,
+      characterLevel: totalLevel,
+      classResourceCounts,
+    },
+  )
+  // Source IDs the character currently has, used to discard orphaned ability-score
+  // pool allocations left behind after a class/feat/species change.
+  const validAsiSourceIds = new Set<string>(
+    [
+      ...inputs.classLevels.map((entry) => entry.classId),
+      ...Object.values(inputs.subclassByClassId ?? {}),
+      ...(inputs.selectedFeatIds ?? []),
+      ...(inputs.grantedFeatIds ?? []),
+      ...(inputs.species?.id ? [inputs.species.id] : []),
+    ].filter(Boolean),
+  )
+  const asiBonuses = aggregateAsiBonuses(inputs.asiAllocations, validAsiSourceIds)
+  const backgroundAbilityBonuses = aggregateBackgroundAbilityBonuses(
+    background,
+    inputs.asiAllocations,
+  )
+
+  const abilityScores = applyAbilityScoreOverrides(
+    ABILITY_SCORE_KEYS.reduce(
+      (scores, key) => {
+        const uncapped =
+          inputs.baseAbilityScores[key] +
+          (aggregatedCharacteristics.abilityBonuses[key] ?? 0) +
+          (asiBonuses[key] ?? 0) +
+          (backgroundAbilityBonuses[key] ?? 0)
+        // Base + racial/fixed + ASI/background cannot exceed 20; feature overrides may still raise.
+        scores[key] = Math.min(20, uncapped)
+        return scores
+      },
+      {} as Record<AbilityScoreKey, number>,
+    ),
+    aggregatedCharacteristics.abilityScoreOverrides,
+  )
+
+  const abilityMods = abilityModsFromScores(abilityScores)
+
+  const proficiencyBonus = Math.floor((totalLevel - 1) / 4) + 2
+
+  const skillProficiencies = mergeSkillProficiencies(
+    background?.skill_proficiencies,
+    inputs.classSkillPicks,
+    [
+      ...inputs.extraSkillProficiencies,
+      ...aggregatedCharacteristics.skills,
+      ...fixedClassSkillProficiencies({
+        classLevels: inputs.classLevels,
+        classes: inputs.classes,
+        primaryClassId: inputs.primaryClassId,
+      }),
+    ],
+  )
+  const skillExpertise = [...aggregatedCharacteristics.skillExpertise]
+  for (const skill of aggregatedCharacteristics.expertiseIfProficientSkills) {
+    const name = skill.trim()
+    if (!name) continue
+    const alreadyProficient = skillProficiencies.some(
+      (entry) => entry.toLowerCase() === name.toLowerCase(),
+    )
+    if (alreadyProficient) {
+      if (!skillExpertise.some((entry) => entry.toLowerCase() === name.toLowerCase())) {
+        skillExpertise.push(name)
+      }
+    } else {
+      skillProficiencies.push(name)
+    }
+  }
+
+  const aggregatedClassWeaponProficiencies = aggregateClassWeaponProficiencies({
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+    primaryClassId: inputs.primaryClassId,
+  })
+  const aggregatedClassArmorProficiencies = aggregateClassArmorProficiencies({
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+    primaryClassId: inputs.primaryClassId,
+  })
+  const aggregatedClassToolProficiencies = aggregateClassToolProficiencies({
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+    primaryClassId: inputs.primaryClassId,
+    classToolPicks: inputs.classToolPicks,
+  })
+
+  const weaponProficiencies = getEffectiveWeaponProficiencies(
+    aggregatedClassWeaponProficiencies,
+    inputs.extraWeaponProficiencies,
+    aggregatedCharacteristics.weaponProficiencies,
+  )
+  const armorProficiencies = getEffectiveArmorProficiencies(
+    aggregatedClassArmorProficiencies,
+    inputs.extraArmorProficiencies,
+    aggregatedCharacteristics.armorProficiencies,
+  )
+  const toolProficiencies = mergeProficiencyLists(
+    aggregatedClassToolProficiencies,
+    inputs.extraToolProficiencies,
+    aggregatedCharacteristics.toolProficiencies,
+  )
+
+  const savingThrowProficiencies = [
+    ...new Set([
+      ...(primaryClass?.saving_throws ?? []),
+      ...aggregatedCharacteristics.savingThrows,
+    ]),
+  ]
+
+  const languages = [
+    ...new Set([...inputs.languages, ...aggregatedCharacteristics.languages]),
+  ]
+
+  const maxHpBase = applyHpCharacteristics(
+    calculateBaseMaxHp(inputs, abilityMods.constitution),
+    aggregatedCharacteristics,
+    totalLevel,
+  )
+  const exhaustionFx = getExhaustionDerivedEffects(inputs.exhaustionLevel ?? 0)
+  const maxHp =
+    exhaustionFx.hpMaxMultiplier < 1
+      ? Math.max(1, Math.floor(maxHpBase * exhaustionFx.hpMaxMultiplier))
+      : maxHpBase
+
+  const wearingArmor = Boolean(equippedArmor)
+  const shieldBonus = getShieldBonus(equippedShield)
+  const baseArmorClass = calculateArmorClass(abilityMods.dexterity, equippedArmor, equippedShield)
+  resolveAggregatedAcFormula(aggregatedCharacteristics, {
+    selectedFormulaId: inputs.modifierPlayerPicks.ac_formula?.[0] ?? null,
+    abilityMods,
+    proficiencyBonus,
+  })
+  const armorClass = applyAcCharacteristics(
+    baseArmorClass,
+    aggregatedCharacteristics,
+    abilityMods,
+    proficiencyBonus,
+    { shieldBonus, wearingArmor },
+  )
+  const acBreakdown = buildAcBreakdown({
+    aggregated: aggregatedCharacteristics,
+    abilityMods,
+    proficiencyBonus,
+    dexMod: abilityMods.dexterity,
+    armor: equippedArmor,
+    shield: equippedShield,
+    shieldBonus,
+    wearingArmor,
+  })
+
+  const heldWeapons = [equippedWeapon, equippedOffHandWeapon].filter(
+    (weapon): weapon is Equipment => Boolean(weapon),
+  )
+  const mountedMovement = anyEquippedWeaponIsMounted(inputs, heldWeapons, weaponProficiencies)
+
+  let speed = resolveWalkSpeed(
+    inputs,
+    aggregatedCharacteristics.speedAdd,
+    aggregatedCharacteristics.speedSet,
+  )
+  if (mountedMovement) {
+    speed = Math.floor(speed * 0.5)
+  }
+  const walkBeforeExhaustion = speed
+  if (exhaustionFx.speedMultiplier < 1) {
+    speed = Math.floor(speed * exhaustionFx.speedMultiplier)
+  }
+  if (exhaustionFx.speedZero) speed = 0
+
+  const speeds = resolveAllSpeeds({
+    walkSpeed: walkBeforeExhaustion,
+    aggregatedSpeed: aggregatedCharacteristics.speed,
+    aggregatedSpeedAdd: aggregatedCharacteristics.speedAdd,
+    aggregatedSpeedSet: aggregatedCharacteristics.speedSet,
+    speedEqualToWalk: aggregatedCharacteristics.speedEqualToWalk,
+    exhaustionMultiplier: exhaustionFx.speedMultiplier,
+    exhaustionZero: exhaustionFx.speedZero,
+  })
+
+  const initiative = computeInitiative(
+    abilityMods.dexterity,
+    aggregatedCharacteristics,
+    abilityMods,
+    proficiencyBonus,
+  )
+
+  const skillAbilityOverrides = inputs.skillAbilityOverrides
+  const passivePerception = passiveSkillScore(
+    "Perception",
+    resolveSkillAbility("Perception", "wisdom", skillAbilityOverrides),
+    abilityMods,
+    skillProficiencies,
+    skillExpertise,
+    proficiencyBonus,
+  )
+  const passiveInsight = passiveSkillScore(
+    "Insight",
+    resolveSkillAbility("Insight", "wisdom", skillAbilityOverrides),
+    abilityMods,
+    skillProficiencies,
+    skillExpertise,
+    proficiencyBonus,
+  )
+  const passiveInvestigation = passiveSkillScore(
+    "Investigation",
+    resolveSkillAbility("Investigation", "intelligence", skillAbilityOverrides),
+    abilityMods,
+    skillProficiencies,
+    skillExpertise,
+    proficiencyBonus,
+  )
+
+  const featureLimitationCtx = {
+    activeConditions: inputs.activeConditions,
+    activeSheetToggles: inputs.activeSheetToggles,
+    equippedArmor,
+    equippedShield,
+    currentHp: inputs.currentHp,
+  }
+  const resolvedFeatures = inputs.resolvedFeatures ?? []
+  const specialSaveDcs = collectSpecialSaveDcs(inputs, abilityMods, proficiencyBonus)
+  const spellcasting = buildSpellcastingEntries({
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+    abilityMods,
+    proficiencyBonus,
+    aggregatedSpellcastingAbility: aggregatedCharacteristics.spellcastingAbility,
+    resolvedFeatures,
+    featureLimitationCtx,
+    characterLevel: totalLevel,
+  })
+  const forcedSaveRemaps = buildForcedSaveRemaps(aggregatedCharacteristics.forcedSaveAbilityRemaps)
+  const telepathy = buildTelepathyDerived(aggregatedCharacteristics.telepathy)
+  const featureDamageBonus =
+    resolvedFeatures.length > 0
+      ? collectFeatureDamageBonuses(resolvedFeatures, {
+          ...featureLimitationCtx,
+          characterLevel: totalLevel,
+        }).flatBonus
+      : 0
+
+  const hasTwoWeaponFighting = characterHasTwoWeaponFighting(inputs.feats)
+  const weaponAttackContext = {
+    abilityMods,
+    proficiencyBonus,
+    weaponProficiencies,
+    aggregatedCharacteristics,
+    featureDamageBonus,
+    characterLevel: totalLevel,
+    activeSheetToggles: inputs.activeSheetToggles,
+    sheetToggleWeaponIds: inputs.sheetToggleWeaponIds,
+  }
+
+  const mainMounted =
+    Boolean(equippedWeapon) &&
+    isWeaponMounted(inputs.activeSheetToggles, equippedWeapon!.id) &&
+    canMountWeapon(equippedWeapon!, inputs, weaponProficiencies)
+
+  const equippedWeaponAttack =
+    equippedWeapon && primaryClass
+      ? buildWeaponAttackDerived(equippedWeapon, {
+          ...weaponAttackContext,
+          stepDamageDice: mainMounted,
+        })
+      : equippedWeapon
+        ? buildWeaponAttackDerived(equippedWeapon, {
+            ...weaponAttackContext,
+            weaponProficiencies: [],
+            stepDamageDice: mainMounted,
+          })
+        : null
+
+  const offHandMounted =
+    Boolean(equippedOffHandWeapon) &&
+    isWeaponMounted(inputs.activeSheetToggles, equippedOffHandWeapon!.id) &&
+    canMountWeapon(equippedOffHandWeapon!, inputs, weaponProficiencies)
+
+  const equippedOffHandWeaponAttack =
+    equippedOffHandWeapon && primaryClass
+      ? buildWeaponAttackDerived(equippedOffHandWeapon, {
+          ...weaponAttackContext,
+          stepDamageDice: offHandMounted,
+          includeAbilityModifier: defaultOffHandIncludesAbilityMod(
+            getWeaponAttackAbility(equippedOffHandWeapon, abilityMods, {
+              overrides: aggregatedCharacteristics.weaponAbilityOverrides,
+              forRoll: "attack",
+            }).mod,
+            hasTwoWeaponFighting,
+          ),
+        })
+      : equippedOffHandWeapon
+        ? buildWeaponAttackDerived(equippedOffHandWeapon, {
+            ...weaponAttackContext,
+            weaponProficiencies: [],
+            stepDamageDice: offHandMounted,
+            includeAbilityModifier: defaultOffHandIncludesAbilityMod(
+              getWeaponAttackAbility(equippedOffHandWeapon, abilityMods, {
+                overrides: aggregatedCharacteristics.weaponAbilityOverrides,
+                forRoll: "attack",
+              }).mod,
+              hasTwoWeaponFighting,
+            ),
+          })
+        : null
+
+  const unarmedHands = {
+    mainWeapon: equippedWeapon,
+    offHandWeapon: equippedOffHandWeapon,
+    shield: equippedShield,
+  }
+  const unarmedStrikeWeapon = buildUnarmedStrikeEquipment({
+    die: aggregatedCharacteristics.unarmedStrikeDie,
+    dieByLevel: aggregatedCharacteristics.unarmedStrikeDieByLevel,
+    emptyHandedDie: aggregatedCharacteristics.unarmedStrikeEmptyHandedDie,
+    emptyHanded: characterIsEmptyHanded(unarmedHands),
+    damageType: aggregatedCharacteristics.unarmedStrikeDamageType,
+    ability: aggregatedCharacteristics.unarmedStrikeAbility,
+    characterLevel: totalLevel,
+  })
+  const unarmedStrikeAttack = unarmedStrikeWeapon
+    ? buildWeaponAttackDerived(unarmedStrikeWeapon, {
+        ...weaponAttackContext,
+        aggregatedCharacteristics: {
+          ...aggregatedCharacteristics,
+          weaponAbilityOverrides: [
+            ...extraUnarmedStrikeAbilityOverrides(aggregatedCharacteristics),
+            ...aggregatedCharacteristics.weaponAbilityOverrides,
+          ],
+        },
+      })
+    : null
+
+  return {
+    abilityScores,
+    abilityMods,
+    asiBonuses,
+    proficiencyBonus,
+    totalLevel,
+    armorClass,
+    acBreakdown,
+    acFormulaOptions: aggregatedCharacteristics.acFormulaOptions,
+    maxHp,
+    initiative,
+    speed,
+    speeds,
+    passivePerception,
+    passiveInsight,
+    passiveInvestigation,
+    skillProficiencies,
+    skillExpertise,
+    toolProficiencies,
+    weaponProficiencies,
+    armorProficiencies,
+    savingThrowProficiencies,
+    languages,
+    skills: buildSkillBonuses(
+      proficiencyBonus,
+      abilityMods,
+      skillProficiencies,
+      skillExpertise,
+      aggregatedCharacteristics.customSkills,
+      resolvedFeatures.length
+        ? {
+            features: resolvedFeatures,
+            limitationCtx: featureLimitationCtx,
+            characterLevel: totalLevel,
+          }
+        : undefined,
+      skillAbilityOverrides,
+    ),
+    tools: buildToolBonuses(
+      proficiencyBonus,
+      abilityMods,
+      toolProficiencies,
+      aggregatedCharacteristics.toolExpertise,
+      aggregatedCharacteristics.toolExpertiseAll,
+    ),
+    saves: buildSaveBonuses(
+      proficiencyBonus,
+      abilityMods,
+      savingThrowProficiencies,
+      aggregatedCharacteristics,
+      totalLevel,
+    ),
+    spellcasting,
+    grantedSpellCasts: collectGrantedSpellCastProfiles(builderCharacteristicMods),
+    specialSaveDcs,
+    forcedSaveRemaps,
+    telepathy,
+    restReplacement: aggregatedCharacteristics.restReplacement,
+    magicalSleepImmunity: aggregatedCharacteristics.magicalSleepImmunity,
+    noSleepRequired: aggregatedCharacteristics.noSleepRequired,
+    vision: resolveVisionEntries({
+      speciesTraits: inputs.species?.traits,
+      aggregatedVision: aggregatedCharacteristics.vision,
+    }),
+    resistances: aggregatedCharacteristics.resistances,
+    immunities: aggregatedCharacteristics.immunities,
+    conditionImmunities: aggregatedCharacteristics.conditionImmunities,
+    conditionImmunitySources: aggregatedCharacteristics.conditionImmunitySources,
+    movementEffects: aggregatedCharacteristics.movementEffects,
+    extraTurns: aggregatedCharacteristics.extraTurns,
+    healingReceivedModifiers: aggregatedCharacteristics.healingReceivedModifiers,
+    spellHealingModifiers: aggregatedCharacteristics.spellHealingModifiers,
+    grantedCustomAbilityNames: aggregatedCharacteristics.grantedCustomAbilityNames,
+    grantedEquipment: aggregatedCharacteristics.grantedEquipment,
+    customAbilityModifications: aggregatedCharacteristics.customAbilityModifications,
+    featureChoiceCountBonuses: aggregatedCharacteristics.featureChoiceCountBonuses,
+    featureChoiceOptionGrants: aggregatedCharacteristics.featureChoiceOptionGrants,
+    powerRiders: aggregatedCharacteristics.powerRiders,
+    weaponAbilityOverrides: aggregatedCharacteristics.weaponAbilityOverrides,
+    equippedWeaponAttack,
+    equippedOffHandWeaponAttack,
+    unarmedStrikeWeapon,
+    unarmedStrikeAttack,
+    attunementSlots: aggregatedCharacteristics.attunementSlots ?? 3,
+    extraWieldSlots: aggregatedCharacteristics.extraWieldSlots,
+    extraWieldAllowedProperties: aggregatedCharacteristics.extraWieldAllowedProperties,
+  }
+}
+
+export type EquipmentLoadoutIds = {
+  armorId: string | null
+  shieldId: string | null
+  weaponId: string | null
+}
+
+/** AC for a hypothetical equipment loadout — same engine as the live character sheet. */
+export function deriveArmorClassForLoadout(
+  inputs: CharacterBuildInputs,
+  loadout: EquipmentLoadoutIds,
+): number {
+  return computeDerivedCharacter({
+    ...inputs,
+    equippedArmorId: loadout.armorId,
+    equippedShieldId: loadout.shieldId,
+    equippedWeaponId: loadout.weaponId,
+  }).armorClass
+}
+
+/** Snapshot combat/proficiency fields for persistence — derived from the same engine as preview. */
+export function buildCharacterSaveSnapshot(
+  inputs: CharacterBuildInputs,
+  derived: DerivedCharacter,
+): CharacterSaveSnapshot {
+  return {
+    strength: inputs.baseAbilityScores.strength,
+    dexterity: inputs.baseAbilityScores.dexterity,
+    constitution: inputs.baseAbilityScores.constitution,
+    intelligence: inputs.baseAbilityScores.intelligence,
+    wisdom: inputs.baseAbilityScores.wisdom,
+    charisma: inputs.baseAbilityScores.charisma,
+    hit_point_max: derived.maxHp,
+    armor_class: derived.armorClass,
+    initiative: derived.initiative,
+    speed: derived.speed,
+    proficiency_bonus: derived.proficiencyBonus,
+    skill_proficiencies: derived.skillProficiencies,
+    skill_expertise: derived.skillExpertise,
+    tool_proficiencies: derived.toolProficiencies,
+    weapon_proficiencies: derived.weaponProficiencies,
+    armor_proficiencies: derived.armorProficiencies,
+    languages: derived.languages,
+    character_classes: classLevelsToRows(
+      inputs.classLevels,
+      inputs.subclassByClassId,
+      inputs.classAddOrder ?? inputs.classLevels.map((row) => row.classId),
+    ),
+    class_add_order: inputs.classAddOrder ?? inputs.classLevels.map((row) => row.classId),
+  }
+}
+
+/** Recompute derived stats from a saved character row + compendium relations. */
+export function buildInputsFromSavedCharacter(params: {
+  character: {
+    strength: number
+    dexterity: number
+    constitution: number
+    intelligence: number
+    wisdom: number
+    charisma: number
+    level: number
+    class_id: string | null
+    subclass_id: string | null
+    character_classes?: CharacterClassRow[] | null
+    class_add_order?: string[] | null
+    species_id: string | null
+    background_id: string | null
+    asi_allocations: Record<string, Partial<Record<AbilityScoreKey, number>>> | null
+    skill_proficiencies: string[] | null
+    tool_proficiencies: string[] | null
+    weapon_proficiencies: string[] | null
+    armor_proficiencies: string[] | null
+    languages: string[] | null
+    equipment_ids: string[]
+    feat_ids: string[]
+    feat_choice_picks?: Record<string, string[]> | null
+    feature_choice_picks?: Record<string, string[]> | null
+    modifier_player_picks?: Record<string, string[]> | null
+    builder_picks?: import("@/lib/builder/builder-picks").CharacterBuilderPicks | null
+    spell_ids?: string[]
+    equipped_armor_id?: string | null
+    equipped_shield_id?: string | null
+    equipped_weapon_id?: string | null
+    equipped_off_hand_weapon_id?: string | null
+    attuned_item_ids?: string[] | null
+    equipment_base_selections?: Record<string, string> | null
+  }
+  classes: DndClass[]
+  subclasses?: import("@/lib/types").Subclass[]
+  species: import("@/lib/types").Species | null | undefined
+  background: Background | null | undefined
+  feats: import("@/lib/types").Feat[]
+  equipment: Equipment[]
+  equipmentCatalog?: Equipment[]
+  modifierCatalog: import("@/lib/compendium/modifier-catalog").ModifierCatalogEntry[]
+}): CharacterBuildInputs | null {
+  const { character, classes } = params
+  const classRows = normalizeCharacterClassRows(character as never)
+  if (!classRows.length) return null
+
+  const classLevels = rowsToClassLevels(classRows)
+  const subclassByClassId = rowsToSubclassMap(classRows)
+  const primaryClassId = resolvePrimaryClassIdFromRows(classRows, character.class_id)
+  const builderPicks = normalizeBuilderPicks(character.builder_picks)
+  const classSkillPicks =
+    builderPicks.class_skill_picks ??
+    inferClassSkillPicks(character as import("@/lib/types").Character, classes, params.background)
+  const pruned =
+    classes.length > 0
+      ? pruneMissingClassSelections({
+          knownClassIds: classes.map((cls) => cls.id),
+          classLevels,
+          classAddOrder: character.class_add_order ?? rowsToClassAddOrder(classRows),
+          primaryClassId,
+          subclassByClassId,
+          classSkillPicks,
+          classToolPicks: builderPicks.class_tool_picks ?? {},
+          featureChoicePicks: character.feature_choice_picks ?? {},
+          extraSkillProficiencies: character.skill_proficiencies ?? [],
+        })
+      : null
+  const savedFeatureChoicePicks =
+    pruned?.featureChoicePicks ?? character.feature_choice_picks ?? {}
+  const selectedFeatIds = [
+    ...new Set([
+      ...(character.feat_ids ?? []),
+      ...catalogFeatPickIdsFromPicks(savedFeatureChoicePicks),
+    ]),
+  ]
+  const featSelectionEntries = Object.entries(savedFeatureChoicePicks).flatMap(
+    ([slotKey, pickedIds]) =>
+      (pickedIds ?? [])
+        .filter((featId) => selectedFeatIds.includes(featId))
+        .map((featId) => ({ featId, choicePickKey: `feat:${slotKey}` })),
+  )
+  const featsWithSavedSlots = new Set(featSelectionEntries.map((entry) => entry.featId))
+  for (const featId of selectedFeatIds) {
+    if (!featsWithSavedSlots.has(featId)) {
+      featSelectionEntries.push({ featId, choicePickKey: `feat:${featId}` })
+    }
+  }
+
+  return {
+    baseAbilityScores: {
+      strength: character.strength,
+      dexterity: character.dexterity,
+      constitution: character.constitution,
+      intelligence: character.intelligence,
+      wisdom: character.wisdom,
+      charisma: character.charisma,
+    },
+    asiAllocations: normalizeAsiAllocationsMap(character.asi_allocations),
+    background: params.background ?? null,
+    species: params.species ?? null,
+    classLevels: pruned?.classLevels ?? classLevels,
+    classes,
+    subclasses: params.subclasses ?? [],
+    subclassByClassId: pruned?.subclassByClassId ?? subclassByClassId,
+    primaryClassId: pruned?.primaryClassId ?? primaryClassId,
+    classAddOrder: pruned?.classAddOrder ?? character.class_add_order ?? rowsToClassAddOrder(classRows),
+    classSkillPicks: pruned?.classSkillPicks ?? classSkillPicks,
+    classToolPicks: pruned?.classToolPicks ?? builderPicks.class_tool_picks ?? {},
+    featureChoicePicks: savedFeatureChoicePicks,
+    speciesTraitPicks: builderPicks.species_trait_picks ?? {},
+    featChoicePicks: character.feat_choice_picks ?? {},
+    modifierPlayerPicks: character.modifier_player_picks ?? {},
+    selectedFeatIds,
+    grantedFeatIds: [],
+    featSelectionEntries,
+    extraSkillProficiencies: pruned?.extraSkillProficiencies ?? character.skill_proficiencies ?? [],
+    extraToolProficiencies: character.tool_proficiencies ?? [],
+    extraWeaponProficiencies: character.weapon_proficiencies ?? [],
+    extraArmorProficiencies: character.armor_proficiencies ?? [],
+    languages: character.languages ?? ["Common"],
+    equipment: params.equipment,
+    equipmentCatalog: params.equipmentCatalog,
+    equippedArmorId: character.equipped_armor_id ?? null,
+    equippedShieldId: character.equipped_shield_id ?? null,
+    equippedWeaponId: character.equipped_weapon_id ?? null,
+    equippedOffHandWeaponId: character.equipped_off_hand_weapon_id ?? null,
+    attunedItemIds: character.attuned_item_ids ?? [],
+    equipmentBaseSelections: character.equipment_base_selections ?? {},
+    modifierCatalog: params.modifierCatalog,
+    feats: params.feats,
+  }
+}
+
+export { SKILL_ROWS }

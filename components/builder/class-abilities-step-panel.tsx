@@ -1,0 +1,490 @@
+"use client"
+
+import type { Dispatch, SetStateAction } from "react"
+import { CatalogFeatMultiPicker } from "@/components/builder/catalog-feat-multi-picker"
+import { ClassAbilityFeatureChoices } from "@/components/builder/class-ability-feature-choices"
+import { FeatModifierChoicePicker } from "@/components/builder/feat-modifier-choice-picker"
+import { FeatPickGallery } from "@/components/builder/feat-pick-gallery"
+import { MultiSelectChoices } from "@/components/builder/multi-select-choices"
+import { ModifierPlayerChoicePanel } from "@/components/builder/modifier-player-choice-panel"
+import type { CatalogFeatPickGroup } from "@/lib/builder/catalog-feat-pick-groups"
+import {
+  distributeCatalogFeatPicksToSlots,
+  readCatalogFeatPicksFromSlots,
+} from "@/lib/builder/catalog-feat-pick-groups"
+import { catalogFeatPickOptions } from "@/lib/builder/catalog-feat-options"
+import type { ClassAbilityFeatureEntry } from "@/lib/builder/class-ability-step"
+import type { FeatPickSlot } from "@/lib/builder/class-feat-features"
+import { featureChoiceKey, type SkillPickSource } from "@/lib/builder/choices"
+import {
+  clearModifierPicksForSource,
+  setModifierPlayerPickValue,
+  type ModifierPlayerChoiceSlot,
+} from "@/lib/builder/modifier-player-choices"
+import { isFeatEligibleForCategories } from "@/lib/builder/feat-selection"
+import { takenMagicInitiateSpellLists } from "@/lib/builder/magic-initiate"
+import { filterPreferredSourceReplacements } from "@/lib/compendium/prefer-same-source"
+import { featChoicePickKey } from "@/lib/builder/feat-choices"
+import type {
+  AbilityScoreKey,
+  FeatureChoiceCountBonusCharacteristic,
+  FeatureChoiceOptionGrantCharacteristic,
+} from "@/lib/compendium/characteristic-modifiers"
+import type { CustomAbility, Equipment, Feat, Spell } from "@/lib/types"
+import type { ResolveFeatureChoiceOptionsParams } from "@/lib/builder/aggregate-psionic-talents"
+import {
+  abilitySpecializationChoice,
+  abilitySpecializationChoiceKey,
+} from "@/lib/import/parse-alternate-effects-table"
+
+type ClassAbilitiesStepProps = {
+  pageFloatingHintClass: string
+  abilityFeatures: ClassAbilityFeatureEntry[]
+  featureChoicePicks: Record<string, string[]>
+  setFeatureChoicePicks: Dispatch<SetStateAction<Record<string, string[]>>>
+  setFeatChoicePicks: Dispatch<SetStateAction<Record<string, string[]>>>
+  setModifierPlayerPicks: Dispatch<SetStateAction<Record<string, string[]>>>
+  customAbilities: CustomAbility[]
+  equipment: Equipment[]
+  knownSpellNames: string[]
+  grantedCustomAbilityNames?: string[]
+  featChoicePicks?: Record<string, string[]>
+  featureChoiceCountBonuses?: FeatureChoiceCountBonusCharacteristic[]
+  featureChoiceOptionGrants?: FeatureChoiceOptionGrantCharacteristic[]
+  compactPickerLayout: "default" | "compact"
+  skillPickerLayout: "default" | "compact" | "visual"
+  cardViewMode: "dense" | "cinematic"
+  weaponMasteryDescriptions: Record<string, string>
+  skillPickSources: SkillPickSource[]
+  customSkillIconByName?: Record<string, string>
+  modifierPlayerChoiceSlots: ModifierPlayerChoiceSlot[]
+  modifierPlayerPicks: Record<string, string[]>
+  spells: Spell[]
+  featChoiceOptionContext: ResolveFeatureChoiceOptionsParams
+  modifierExpertisePickerProps: {
+    choiceLayout?: "default" | "compact"
+    skillPickerLayout?: "default" | "compact" | "visual"
+    skillIconByName?: Record<string, string>
+    proficientSkills?: string[]
+    proficientTools?: string[]
+    knownLanguages?: string[]
+    existingExpertiseSkills?: string[]
+  }
+  classCatalogFeatGroups: CatalogFeatPickGroup[]
+  classAbilityRegularFeatSlots: FeatPickSlot[]
+  feats: Feat[]
+  featsLoadError: string | null
+  hasCatalogFeatPickOptions: boolean
+  totalLevel: number
+  classIds: string[]
+  ownedFeatIds: string[]
+  speciesId: string | null
+  backgroundId: string | null
+  speciesCatalog?: { id: string; name: string }[]
+  classCatalog?: { id: string; name: string }[]
+  backgroundCatalog?: { id: string; name: string }[]
+  preferredFeatSources: string[]
+  armorProficiencies?: string[]
+  abilityScores?: Partial<Record<AbilityScoreKey, number>>
+  onShowFeatDetails: (feat: Feat) => void
+  selectedClassAbilityFeatCount: number
+  requiredClassAbilityFeatSlots: number
+  skillPickSourcesTaken: string[]
+}
+
+export function ClassAbilitiesStepPanel(props: ClassAbilitiesStepProps) {
+  const {
+    pageFloatingHintClass,
+    abilityFeatures,
+    featureChoicePicks,
+    setFeatureChoicePicks,
+    setFeatChoicePicks,
+    setModifierPlayerPicks,
+    customAbilities,
+    equipment,
+    knownSpellNames,
+    grantedCustomAbilityNames,
+    featChoicePicks,
+    featureChoiceCountBonuses,
+    featureChoiceOptionGrants,
+    compactPickerLayout,
+    skillPickerLayout,
+    cardViewMode,
+    weaponMasteryDescriptions,
+    skillPickSources,
+    customSkillIconByName,
+    modifierPlayerChoiceSlots,
+    modifierPlayerPicks,
+    spells,
+    featChoiceOptionContext,
+    modifierExpertisePickerProps,
+    classCatalogFeatGroups,
+    classAbilityRegularFeatSlots,
+    feats,
+    featsLoadError,
+    hasCatalogFeatPickOptions,
+    totalLevel,
+    classIds,
+    ownedFeatIds,
+    speciesId,
+    backgroundId,
+    speciesCatalog,
+    classCatalog,
+    backgroundCatalog,
+    preferredFeatSources,
+    armorProficiencies,
+    abilityScores,
+    onShowFeatDetails,
+    selectedClassAbilityFeatCount,
+    requiredClassAbilityFeatSlots,
+    skillPickSourcesTaken,
+  } = props
+
+  const pickedDisciplineNames = new Set(
+    Object.entries(featureChoicePicks)
+      .filter(([key]) => /discipline/i.test(key))
+      .flatMap(([, picks]) => picks.map((name) => name.trim().toLowerCase())),
+  )
+  const specializationAbilities = customAbilities.filter((ability) => {
+    const specialization = abilitySpecializationChoice(ability)
+    if (!specialization?.options?.length) return false
+    const name = ability.name.trim().toLowerCase()
+    return [...pickedDisciplineNames].some(
+      (pick) => name.includes(pick) || pick.includes(name),
+    )
+  })
+
+  const groupedByClass = new Map<string, ClassAbilityFeatureEntry[]>()
+  for (const entry of abilityFeatures) {
+    const list = groupedByClass.get(entry.classId) ?? []
+    list.push(entry)
+    groupedByClass.set(entry.classId, list)
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-black text-foreground mb-2">Class Abilities</h2>
+        <p className={`${pageFloatingHintClass} mb-3`}>
+          Pick class-specific ability pools — Metamagic, Eldritch Invocations, Fighting Styles,
+          disciplines, talents, knacks, exploits, and feature-granted skill, language, or tool
+          choices.
+        </p>
+      </div>
+
+      {[...groupedByClass.entries()].map(([classId, entries]) => {
+        const className = entries[0]?.className ?? "Class"
+        const choiceEntries = entries.filter(
+          (entry) => entry.feature.isChoice && entry.feature.choices,
+        )
+        return (
+          <div key={classId} className="space-y-3 border-t border-border pt-4">
+            <h3 className="text-lg font-bold text-foreground">{className}</h3>
+            <ClassAbilityFeatureChoices
+              abilityScores={abilityScores}
+              proficientSkills={skillPickSourcesTaken}
+              entries={choiceEntries}
+              customAbilities={customAbilities}
+              featureChoicePicks={featureChoicePicks}
+              equipment={equipment}
+              knownSpellNames={knownSpellNames}
+              grantedCustomAbilityNames={grantedCustomAbilityNames}
+              additionalChoicePicks={featChoicePicks}
+              skillPickSources={skillPickSources}
+              knownLanguages={modifierExpertisePickerProps.knownLanguages}
+              proficientTools={modifierExpertisePickerProps.proficientTools}
+              skillPickerLayout={skillPickerLayout}
+              compactPickerLayout={compactPickerLayout}
+              customSkillIconByName={customSkillIconByName}
+              weaponMasteryDescriptions={weaponMasteryDescriptions}
+              cardViewMode={cardViewMode}
+              featureChoiceCountBonuses={featureChoiceCountBonuses}
+              featureChoiceOptionGrants={featureChoiceOptionGrants}
+              onFeatureChoiceChange={(key, selected) =>
+                setFeatureChoicePicks((prev) => ({ ...prev, [key]: selected }))
+              }
+              onClearModifierPicks={(sourceKey) =>
+                setModifierPlayerPicks((prev) => clearModifierPicksForSource(prev, sourceKey))
+              }
+            />
+            {entries.map((entry) => {
+              const key = featureChoiceKey(entry.classId, entry.feature.name, entry.feature.level)
+              return (
+                <ModifierPlayerChoicePanel
+                  key={`${key}:mods`}
+                  sourceKey={key}
+                  sourceLabel={`${entry.className}: ${entry.feature.name}`}
+                  slots={modifierPlayerChoiceSlots}
+                  picks={modifierPlayerPicks}
+                  spells={spells}
+                  excludeKinds={["spell"]}
+                  unavailableOptions={skillPickSourcesTaken}
+                  {...modifierExpertisePickerProps}
+                  onChange={(slotKey, selected) => {
+                    const slot = modifierPlayerChoiceSlots.find((s) => s.slotKey === slotKey)
+                    if (!slot) return
+                    setModifierPlayerPicks((prev) =>
+                      setModifierPlayerPickValue(
+                        prev,
+                        slot,
+                        modifierPlayerChoiceSlots,
+                        selected,
+                      ),
+                    )
+                  }}
+                />
+              )
+            })}
+          </div>
+        )
+      })}
+
+      {specializationAbilities.length > 0 ? (
+        <div className="space-y-2 border-t border-border pt-6">
+          <h3 className="text-lg font-bold text-foreground">Discipline Specializations</h3>
+          <p className={`${pageFloatingHintClass} text-xs mb-2`}>
+            Optional one-time specializations (e.g. Psychokinesis Cryokinetic). Selecting one
+            replaces that discipline&apos;s default Alternate Effects spell list.
+          </p>
+          {specializationAbilities.map((ability) => {
+            const specialization = abilitySpecializationChoice(ability)!
+            const key = abilitySpecializationChoiceKey(ability.id)
+            return (
+              <MultiSelectChoices
+                key={key}
+                title={`${ability.name}: ${specialization.category}`}
+                hint={`Choose up to ${specialization.count} (optional — leave empty for the default Alternate Effects list).`}
+                options={specialization.options.map((option) => ({
+                  name: option.name,
+                  description: option.description,
+                }))}
+                maxCount={specialization.count}
+                selected={featureChoicePicks[key] ?? []}
+                onChange={(selected) =>
+                  setFeatureChoicePicks((prev) => ({
+                    ...prev,
+                    [key]: selected,
+                  }))
+                }
+                showOptionInfo
+                showOptionSummaries
+              />
+            )
+          })}
+        </div>
+      ) : null}
+
+      {(classCatalogFeatGroups.length > 0 || classAbilityRegularFeatSlots.length > 0) && (
+        <div className="space-y-3 border-t border-border pt-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-foreground">Granted class abilities</h3>
+              <p className="text-xs text-muted-foreground">
+                Metamagic, Eldritch Invocations, Fighting Styles, and similar grants.
+              </p>
+            </div>
+            {requiredClassAbilityFeatSlots > 0 ? (
+              <span className="text-xs font-bold text-muted-foreground">
+                {selectedClassAbilityFeatCount}/{requiredClassAbilityFeatSlots}
+              </span>
+            ) : null}
+          </div>
+
+          {featsLoadError && (
+            <p className="text-xs text-destructive">
+              Could not load feats from the database ({featsLoadError}).
+            </p>
+          )}
+          {!featsLoadError && feats.length === 0 && !hasCatalogFeatPickOptions && (
+            <p className={`${pageFloatingHintClass} text-xs`}>
+              No feats in your compendium yet. Seed SRD content from Settings or add feats in the
+              Compendium.
+            </p>
+          )}
+
+          {classCatalogFeatGroups.map((group) => {
+            const catalogOptions = catalogFeatPickOptions(group.featCategories, customAbilities)
+            const selectedPickIds = readCatalogFeatPicksFromSlots(group.slots, featureChoicePicks)
+            return (
+              <CatalogFeatMultiPicker
+                key={group.groupKey}
+                className="mt-3"
+                classPrefix={group.className || undefined}
+                label={group.label}
+                options={catalogOptions}
+                maxCount={group.slots.length}
+                selectedPickIds={selectedPickIds}
+                customAbilities={customAbilities}
+                cardViewMode={cardViewMode}
+                onChange={(nextPickIds) => {
+                  const slotPicks = distributeCatalogFeatPicksToSlots(group.slots, nextPickIds)
+                  setFeatureChoicePicks((prev) => ({ ...prev, ...slotPicks }))
+                  setFeatChoicePicks((prev) => {
+                    const next = { ...prev }
+                    for (const slot of group.slots) {
+                      delete next[featChoicePickKey(slot.key)]
+                    }
+                    return next
+                  })
+                  setModifierPlayerPicks((prev) => {
+                    let next = prev
+                    for (const slot of group.slots) {
+                      next = clearModifierPicksForSource(next, featChoicePickKey(slot.key))
+                    }
+                    return next
+                  })
+                }}
+              />
+            )
+          })}
+
+          {classAbilityRegularFeatSlots.map((slot) => {
+            const pickedId = featureChoicePicks[slot.key]?.[0] ?? null
+            const picked = feats.find((f) => f.id === pickedId) ?? null
+            const featContext = {
+              totalLevel,
+              classIds,
+              feats,
+              ownedFeatIds,
+              speciesId,
+              backgroundId,
+              currentSlotFeatId: pickedId,
+              preferredSources: preferredFeatSources,
+              armorProficiencies,
+              abilityScores,
+              speciesCatalog,
+              classCatalog,
+              backgroundCatalog,
+              takenMagicInitiateSpellLists: [
+                ...takenMagicInitiateSpellLists(
+                  modifierPlayerChoiceSlots,
+                  modifierPlayerPicks,
+                ),
+              ],
+            }
+            const eligibleFeats = filterPreferredSourceReplacements(
+              feats.filter((feat) =>
+                isFeatEligibleForCategories(
+                  feat,
+                  slot.featCategories,
+                  slot.milestoneLevel,
+                  featContext,
+                ),
+              ),
+              preferredFeatSources,
+            ).sort((a, b) => a.name.localeCompare(b.name))
+
+            const selectPick = (nextId: string | null) => {
+              const choiceKey = featChoicePickKey(slot.key)
+              setFeatureChoicePicks((prev) => ({
+                ...prev,
+                [slot.key]: nextId ? [nextId] : [],
+              }))
+              setFeatChoicePicks((prev) => {
+                if (!nextId) {
+                  const next = { ...prev }
+                  delete next[choiceKey]
+                  return next
+                }
+                if (prev[choiceKey] && pickedId === nextId) return prev
+                const next = { ...prev }
+                delete next[choiceKey]
+                return next
+              })
+              setModifierPlayerPicks((prev) => clearModifierPicksForSource(prev, choiceKey))
+            }
+
+            return (
+              <div key={slot.key} className="mt-3">
+                <p className="text-xs font-bold text-primary uppercase mb-2">
+                  {slot.className ? `${slot.className}: ` : ""}
+                  {slot.label}
+                </p>
+                <FeatPickGallery
+                  feats={eligibleFeats}
+                  selectedId={pickedId}
+                  onSelect={selectPick}
+                  onShowDetails={onShowFeatDetails}
+                  layout={cardViewMode}
+                />
+                {picked ? (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Selected: <span className="font-semibold text-foreground">{picked.name}</span>
+                  </p>
+                ) : null}
+                {picked?.isChoice &&
+                (picked.choices?.options?.length || picked.choices?.optionsSource) ? (
+                  <div className="mt-3">
+                    <FeatModifierChoicePicker
+                      entry={{
+                        featId: picked.id,
+                        choicePickKey: featChoicePickKey(slot.key),
+                      }}
+                      feat={picked}
+                      choiceOptionContext={featChoiceOptionContext}
+                      selected={featChoicePicks?.[featChoicePickKey(slot.key)] ?? []}
+                      onChange={(selected) => {
+                        const choiceKey = featChoicePickKey(slot.key)
+                        setFeatChoicePicks((prev) => ({
+                          ...prev,
+                          [choiceKey]: selected,
+                        }))
+                        setModifierPlayerPicks((prev) =>
+                          clearModifierPicksForSource(prev, choiceKey),
+                        )
+                      }}
+                      layout={compactPickerLayout}
+                    />
+                  </div>
+                ) : null}
+                {picked ? (
+                  <ModifierPlayerChoicePanel
+                    sourceKey={featChoicePickKey(slot.key)}
+                    sourceLabel={picked.name}
+                    slots={modifierPlayerChoiceSlots}
+                    picks={modifierPlayerPicks}
+                    spells={spells}
+                    unavailableOptions={skillPickSourcesTaken}
+                    {...modifierExpertisePickerProps}
+                    onChange={(slotKey, selected) => {
+                      const slotEntry = modifierPlayerChoiceSlots.find(
+                        (entry) => entry.slotKey === slotKey,
+                      )
+                      if (!slotEntry) return
+                      setModifierPlayerPicks((prev) =>
+                        setModifierPlayerPickValue(
+                          prev,
+                          slotEntry,
+                          modifierPlayerChoiceSlots,
+                          selected,
+                        ),
+                      )
+                    }}
+                  />
+                ) : null}
+              </div>
+            )
+          })}
+
+          {selectedClassAbilityFeatCount !== requiredClassAbilityFeatSlots &&
+          requiredClassAbilityFeatSlots > 0 ? (
+            <p className="text-xs text-destructive mt-3">
+              Select {requiredClassAbilityFeatSlots - selectedClassAbilityFeatCount} more abilit
+              {requiredClassAbilityFeatSlots - selectedClassAbilityFeatCount === 1 ? "y" : "ies"} to
+              continue.
+            </p>
+          ) : null}
+        </div>
+      )}
+
+      {abilityFeatures.length === 0 &&
+      classCatalogFeatGroups.length === 0 &&
+      classAbilityRegularFeatSlots.length === 0 &&
+      specializationAbilities.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No class ability pools for your current classes and levels.
+        </p>
+      ) : null}
+    </div>
+  )
+}

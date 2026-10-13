@@ -1,0 +1,469 @@
+import type { FeatureDurationKey } from "@/lib/types"
+
+export type SheetToggleSourceType = "builtin" | "class_feature" | "magic_item"
+
+export type SheetToggleEndsWhen = {
+  incapacitated?: boolean
+  speedZero?: boolean
+}
+
+export type SheetToggleDefinition = {
+  id: string
+  label: string
+  sourceType: SheetToggleSourceType
+  sourceId?: string
+  defaultActive?: boolean
+  /** Optional explanation shown beside a runtime reminder toggle. */
+  hint?: string
+  /** Label for a persisted free-text note attached to this toggle (for example, a target). */
+  noteLabel?: string
+  notePlaceholder?: string
+  /** When set, activating this toggle deactivates other toggles in the same group. */
+  exclusiveGroup?: string
+  /** Duration reminder created when this toggle turns on (e.g. Dance → 1 minute). */
+  defaultDuration?: FeatureDurationKey
+  /** Play-state conditions that automatically turn this toggle off. */
+  endsWhen?: SheetToggleEndsWhen
+  /**
+   * Hide the banner chip. Duration reminders and Combat Passive notices own the UI
+   * (e.g. first turn of combat).
+   */
+  hideFromBanner?: boolean
+}
+
+export const BUILTIN_SHEET_TOGGLES: SheetToggleDefinition[] = [
+  { id: "while_raging", label: "Raging", sourceType: "builtin" },
+  { id: "while_wild_shape", label: "Wild Shape", sourceType: "builtin" },
+  { id: "while_innate_sorcery_active", label: "Innate Sorcery", sourceType: "builtin" },
+  { id: "reckless_attack", label: "Attacking Recklessly", sourceType: "builtin" },
+  { id: "form_of_dread", label: "Form of Dread", sourceType: "builtin" },
+  { id: "vow_of_enmity", label: "Vow of Enmity", sourceType: "builtin" },
+  { id: "peerless_athlete_active", label: "Peerless Athlete", sourceType: "builtin" },
+  { id: "living_legend_active", label: "Living Legend", sourceType: "builtin" },
+  { id: "tides_of_chaos_active", label: "Tides of Chaos", sourceType: "builtin" },
+  { id: "dragon_wings_active", label: "Dragon Wings", sourceType: "builtin" },
+  { id: "below_half_hp", label: "Bloodied", sourceType: "builtin" },
+  {
+    id: "while_dancing",
+    label: "Dancing",
+    sourceType: "builtin",
+    defaultDuration: "1_minute",
+    endsWhen: { incapacitated: true, speedZero: true },
+    hint: "Lasts 1 minute, or until you are Incapacitated, your Speed is 0, or you stop dancing (no action).",
+  },
+  { id: "quarry_marked", label: "Quarry marked", sourceType: "builtin" },
+  {
+    id: "masterwork_weapon_active",
+    label: "Masterwork weapon",
+    sourceType: "builtin",
+  },
+  {
+    id: "masterwork_armor_active",
+    label: "Masterwork armor",
+    sourceType: "builtin",
+  },
+  {
+    id: "magic_weapon_active",
+    label: "Magic Weapon",
+    sourceType: "builtin",
+    defaultDuration: "until_ended",
+    hideFromBanner: true,
+    hint: "Concentration, up to 1 hour. Pick a wielded weapon when casting; manage it from that weapon on the Combat tab. Clear the duration reminder when the spell ends.",
+  },
+  {
+    id: "elemental_weapon_active",
+    label: "Elemental Weapon",
+    sourceType: "builtin",
+    defaultDuration: "until_ended",
+    hideFromBanner: true,
+    hint: "Concentration. Pick a wielded weapon when casting; manage it from that weapon on the Combat tab.",
+  },
+]
+
+/** Feature-specific toggles resolvable by id but not shown on every character sheet. */
+export const OPTIONAL_SHEET_TOGGLES: SheetToggleDefinition[] = [
+  { id: "battle_trance_active", label: "Battle Trance", sourceType: "class_feature", defaultDuration: "1_minute", endsWhen: { incapacitated: true }, hint: "End when wearing heavy armor or a shield. Track the once-per-turn free exploit manually." },
+  { id: "runic_might_active", label: "Runic Might", sourceType: "class_feature", defaultDuration: "1_minute", endsWhen: { incapacitated: true }, hint: "Track size and once-per-turn damage manually." },
+  { id: "heroic_focus_active", label: "Heroic Focus", sourceType: "class_feature", defaultDuration: "1_minute", endsWhen: { incapacitated: true }, hint: "Requires concentration. End this toggle when concentration ends. Double walking, climbing and swimming speeds and track the restricted extra action manually." },
+  { id: "in_combat_or_high_stakes", label: "In combat / high-stakes", sourceType: "class_feature" },
+  {
+    id: "first_turn_of_combat",
+    label: "First turn of combat",
+    sourceType: "class_feature",
+    defaultDuration: "1_round",
+    hideFromBanner: true,
+  },
+  {
+    id: "attacking_chosen_foe",
+    label: "Attacking a chosen foe",
+    sourceType: "class_feature",
+    hint: "Turn on while attacking a creature your feature singled out (sworn enemy, designated target).",
+  },
+  { id: "while_concentrating", label: "Concentrating", sourceType: "class_feature" },
+  { id: "while_flying", label: "Flying", sourceType: "class_feature" },
+  { id: "physical_surge_active", label: "Physical Surge", sourceType: "class_feature" },
+  {
+    id: "self_medication_active",
+    label: "Self-Medication (after healing potion)",
+    sourceType: "class_feature",
+  },
+  {
+    id: "counter_discharge_active",
+    label: "Counter-Discharge (vs this spell)",
+    sourceType: "class_feature",
+  },
+  {
+    id: "dance_style_dueling_stance",
+    label: "Dance Style: Dueling Stance",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  {
+    id: "dance_style_inspiring_chant",
+    label: "Dance Style: Inspiring Chant",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  {
+    id: "dance_style_pantomime",
+    label: "Dance Style: Pantomime",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  {
+    id: "dance_style_agile_movement",
+    label: "Dance Style: Agile Movement",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  {
+    id: "dance_style_elegant_form",
+    label: "Dance Style: Elegant Form",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  {
+    id: "dance_style_retaliatory_swipe",
+    label: "Dance Style: Retaliatory Swipe",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  {
+    id: "dance_style_spinning_shot",
+    label: "Dance Style: Spinning Shot",
+    sourceType: "class_feature",
+    exclusiveGroup: "dance_style",
+    hideFromBanner: true,
+  },
+  // Heroes of Faerûn subclass transformation toggles
+  { id: "bladesong_active", label: "Bladesong", sourceType: "class_feature" },
+  { id: "frozen_haunt_form", label: "Frozen Haunt", sourceType: "class_feature" },
+  { id: "crown_of_spellfire_active", label: "Crown of Spellfire", sourceType: "class_feature" },
+  // Ravenloft subclass transformation toggles (form_of_dread is builtin)
+  { id: "wrath_of_the_wild_form", label: "Wrath of the Wild", sourceType: "class_feature" },
+  { id: "ghost_walk_form", label: "Ghost Walk", sourceType: "class_feature" },
+  { id: "umbral_form", label: "Umbral Form", sourceType: "class_feature" },
+  // KibblesTasty Psion
+  {
+    // Derived from Rampage Die play-state, not clicked by the player.
+    id: "rampage_die_d8_plus",
+    label: "Rampage Die d8+",
+    sourceType: "class_feature",
+  },
+  { id: "full_awakening_active", label: "Full Awakening", sourceType: "class_feature" },
+  {
+    id: "mind_rider_active",
+    label: "Mind Rider",
+    sourceType: "class_feature",
+    hint:
+      "Name the willing creature whose senses you are using. You are blind and deaf to your own senses; that creature has Advantage on Intelligence, Wisdom, and Charisma saves.",
+    noteLabel: "Target creature",
+    notePlaceholder: "Creature name",
+  },
+  {
+    id: "swollen_muscles_active",
+    label: "Swollen Muscles (STR = INT)",
+    sourceType: "class_feature",
+  },
+  {
+    id: "projected_self_active",
+    label: "Projected Self (concentrating)",
+    sourceType: "class_feature",
+  },
+]
+
+export const EDITOR_SHEET_TOGGLE_OPTIONS: SheetToggleDefinition[] = [
+  ...BUILTIN_SHEET_TOGGLES,
+  ...OPTIONAL_SHEET_TOGGLES,
+]
+
+export const PRIMORDIAL_ASPECT_TOGGLES: SheetToggleDefinition[] = [
+  {
+    id: "primordial_aspect_cold",
+    label: "Primordial Aspect: Cold",
+    sourceType: "class_feature",
+    exclusiveGroup: "primordial_aspect",
+  },
+  {
+    id: "primordial_aspect_fire",
+    label: "Primordial Aspect: Fire",
+    sourceType: "class_feature",
+    exclusiveGroup: "primordial_aspect",
+  },
+  {
+    id: "primordial_aspect_lightning",
+    label: "Primordial Aspect: Lightning",
+    sourceType: "class_feature",
+    exclusiveGroup: "primordial_aspect",
+  },
+]
+
+/** Active Guardian Tactics option — exclusive; set when you Use Block / Challenge / Grasp. */
+export const GUARDIAN_TACTICS_TOGGLES: SheetToggleDefinition[] = [
+  {
+    id: "guardian_tactics_block",
+    label: "Guardian Tactics: Block",
+    sourceType: "class_feature",
+    exclusiveGroup: "guardian_tactics",
+  },
+  {
+    id: "guardian_tactics_challenge",
+    label: "Guardian Tactics: Challenge",
+    sourceType: "class_feature",
+    exclusiveGroup: "guardian_tactics",
+  },
+  {
+    id: "guardian_tactics_grasp",
+    label: "Guardian Tactics: Grasp",
+    sourceType: "class_feature",
+    exclusiveGroup: "guardian_tactics",
+  },
+]
+
+export function guardianTacticsToggleIdForOption(optionName: string): string | null {
+  const n = optionName.toLowerCase().replace(/[^a-z]+/g, " ").trim()
+  if (n === "block" || n.includes("block")) return "guardian_tactics_block"
+  if (n === "challenge" || n.includes("challenge")) return "guardian_tactics_challenge"
+  if (n === "grasp" || n.includes("grasp")) return "guardian_tactics_grasp"
+  return null
+}
+
+/** Active Weapon Morph option — exclusive; set when you Use a morph menu option. */
+export const WEAPON_MORPH_TOGGLES: SheetToggleDefinition[] = [
+  {
+    id: "weapon_morph_bone_spike",
+    label: "Weapon Morph: Bone Spike",
+    sourceType: "class_feature",
+    exclusiveGroup: "weapon_morph",
+  },
+  {
+    id: "weapon_morph_flesh_club",
+    label: "Weapon Morph: Flesh Club",
+    sourceType: "class_feature",
+    exclusiveGroup: "weapon_morph",
+  },
+  {
+    id: "weapon_morph_sinew_whip",
+    label: "Weapon Morph: Sinew Whip",
+    sourceType: "class_feature",
+    exclusiveGroup: "weapon_morph",
+  },
+  {
+    id: "weapon_morph_viscera_cannon",
+    label: "Weapon Morph: Viscera Cannon",
+    sourceType: "class_feature",
+    exclusiveGroup: "weapon_morph",
+  },
+  {
+    id: "weapon_morph_chitinous_plating",
+    label: "Weapon Morph: Chitinous Plating",
+    sourceType: "class_feature",
+    exclusiveGroup: "weapon_morph",
+  },
+]
+
+/** Sentinel returned by weaponMorphToggleIdForOption for End morph. */
+export const END_WEAPON_MORPH_TOGGLE_ID = "__end_weapon_morph__"
+
+export function clearExclusiveSheetToggleGroup(
+  activeIds: readonly string[],
+  exclusiveGroup: string,
+  definitions: SheetToggleDefinition[],
+): string[] {
+  const byId = new Map(definitions.map((entry) => [entry.id, entry]))
+  return activeIds.filter((id) => byId.get(id)?.exclusiveGroup !== exclusiveGroup)
+}
+
+/**
+ * Feature / action use that should turn a banner sheet toggle on (Rage → Raging, etc.).
+ * Resource key is preferred when present so renamed homebrew ports still wire.
+ */
+const ACTION_NAME_ACTIVATES_TOGGLE: Record<string, string> = {
+  "heroic focus": "heroic_focus_active",
+  "battle trance": "battle_trance_active",
+  "reactive trance": "battle_trance_active",
+  "runic might": "runic_might_active",
+  rage: "while_raging",
+  "wild shape": "while_wild_shape",
+  "innate sorcery": "while_innate_sorcery_active",
+  "form of dread": "form_of_dread",
+  bladesong: "bladesong_active",
+  "reckless attack": "reckless_attack",
+  "full awakening": "full_awakening_active",
+  "mind rider": "mind_rider_active",
+  dance: "while_dancing",
+  "consecrated whetstone": "magic_weapon_active",
+  "magic weapon": "magic_weapon_active",
+  "elemental weapon": "elemental_weapon_active",
+}
+
+const RESOURCE_KEY_ACTIVATES_TOGGLE: Record<string, string> = {
+  rage: "while_raging",
+  wild_shape: "while_wild_shape",
+  dances: "while_dancing",
+}
+
+export function sheetToggleIdActivatedByAction(action: {
+  name: string
+  classResourceKey?: string | null
+}): string | null {
+  const resourceKey = action.classResourceKey?.trim().toLowerCase()
+  if (resourceKey && RESOURCE_KEY_ACTIVATES_TOGGLE[resourceKey]) {
+    return RESOURCE_KEY_ACTIVATES_TOGGLE[resourceKey]
+  }
+  const name = action.name.trim().toLowerCase()
+  return ACTION_NAME_ACTIVATES_TOGGLE[name] ?? null
+}
+
+/** Converts a class/subclass's declared new_toggles into sheet toggle definitions. */
+export function sheetToggleDefinitionsFromNewToggles(
+  declarations: readonly { key: string; name: string; grantingFeature?: string | null }[] | null | undefined,
+): SheetToggleDefinition[] {
+  if (!declarations?.length) return []
+  return declarations
+    .filter((entry) => entry.key && entry.name)
+    .map((entry) => ({
+      id: entry.key,
+      label: entry.name,
+      sourceType: "class_feature" as const,
+      sourceId: entry.grantingFeature ?? undefined,
+    }))
+}
+
+const builtinById = new Map(BUILTIN_SHEET_TOGGLES.map((entry) => [entry.id, entry]))
+const optionalById = new Map(OPTIONAL_SHEET_TOGGLES.map((entry) => [entry.id, entry]))
+
+export type SheetToggleKey = string
+
+export function isKnownSheetToggleId(id: string): boolean {
+  return (
+    builtinById.has(id) ||
+    optionalById.has(id) ||
+    id.startsWith("magic_item:") ||
+    id.startsWith("dance_style_")
+  )
+}
+
+/** Idle banner copy — "Dance Style: Inspiring Chant" → "Dance Style: not activated". */
+export function inactiveSheetToggleLabel(label: string): string {
+  const colon = label.indexOf(":")
+  if (colon > 0) {
+    return `${label.slice(0, colon).trim()}: not activated`
+  }
+  return `Not ${label.toLowerCase()}`
+}
+
+export function getSheetToggleDefinition(id: string): SheetToggleDefinition | null {
+  const builtin = builtinById.get(id)
+  if (builtin) return builtin
+
+  const optional = optionalById.get(id)
+  if (optional) return optional
+
+  // Import-authored temporary states use a shared namespace instead of a new
+  // runtime branch for every class form, mutation, stance, or item enhancement.
+  if (id.startsWith("feature_state:")) {
+    const label = id.slice("feature_state:".length).trim()
+    if (!label) return null
+    return { id, label, sourceType: "class_feature", defaultActive: false,
+      hint: "Enable only while this feature's stated conditions and duration apply." }
+  }
+
+  if (id.startsWith("dance_style_")) {
+    const slug = id.slice("dance_style_".length).replace(/_/g, " ").trim()
+    if (!slug) return null
+    const name = slug.replace(/\b\w/g, (ch) => ch.toUpperCase())
+    return {
+      id,
+      label: `Dance Style: ${name}`,
+      sourceType: "class_feature",
+      exclusiveGroup: "dance_style",
+      hideFromBanner: true,
+    }
+  }
+
+  if (id.startsWith("magic_item:")) {
+    const parts = id.split(":")
+    const itemId = parts[1] ?? ""
+    const effectKey = parts.slice(2).join(":") || "power"
+    return {
+      id,
+      label: effectKey.replace(/_/g, " "),
+      sourceType: "magic_item",
+      sourceId: itemId,
+      defaultActive: false,
+    }
+  }
+
+  return null
+}
+
+export function mergeSheetToggleDefinitions(
+  dynamic: SheetToggleDefinition[],
+): SheetToggleDefinition[] {
+  const seen = new Set(BUILTIN_SHEET_TOGGLES.map((entry) => entry.id))
+  const merged = [...BUILTIN_SHEET_TOGGLES]
+  for (const entry of dynamic) {
+    if (seen.has(entry.id)) continue
+    seen.add(entry.id)
+    merged.push(entry)
+  }
+  return merged
+}
+
+const definitionIndex = (definitions: SheetToggleDefinition[]): Map<string, SheetToggleDefinition> =>
+  new Map(definitions.map((entry) => [entry.id, entry]))
+
+/**
+ * Toggle on/off with optional exclusive-group deactivation.
+ * Returns the next active toggle id list.
+ */
+export function applySheetToggleChange(
+  activeIds: readonly string[],
+  toggleId: string,
+  definitions: SheetToggleDefinition[],
+): string[] {
+  const byId = definitionIndex(definitions)
+  const def = byId.get(toggleId)
+  const isActive = activeIds.includes(toggleId)
+
+  if (isActive) {
+    return activeIds.filter((id) => id !== toggleId)
+  }
+
+  let next = [...activeIds, toggleId]
+  const group = def?.exclusiveGroup
+  if (group) {
+    next = next.filter((id) => {
+      if (id === toggleId) return true
+      return byId.get(id)?.exclusiveGroup !== group
+    })
+  }
+  return next
+}

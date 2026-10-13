@@ -1,0 +1,53 @@
+import { enrichSubclassFeaturesWithResources } from "@/lib/compendium/class-resource-features"
+import { enrichSubclassFeaturesWithModifierPresets } from "@/lib/compendium/enrich-srd-class-features"
+import { wirePhbSubclassFeatures } from "@/lib/compendium/phb-subclass-wiring"
+import { wireSettingSubclassFeatures } from "@/lib/compendium/setting-subclass-wiring"
+import { enrichSubclassSpellTableFeatures } from "@/lib/compendium/enrich-subclass-spell-features"
+import { applyFeatureSheetDisplay } from "@/lib/compendium/feature-sheet-display"
+import { applySrdFlavorDescription } from "@/lib/compendium/srd-flavor-descriptions"
+import type { NamedSourceRow } from "@/lib/compendium/prefer-same-source"
+import { applyBundledSubclassCardImage } from "@/lib/compendium/subclass-card-images-defaults"
+import { applySubclassIcon } from "@/lib/compendium/subclass-icons-defaults"
+
+/** Apply SRD defaults to subclass feature rows (class resource links, modifier presets, icons, card art). */
+export function enrichSrdSubclassRow(
+  row: Record<string, unknown>,
+  parentClassName: string,
+  spellCatalog: NamedSourceRow[] = [],
+  preferredSource?: string | null,
+): Record<string, unknown> {
+  const subclassName = String(row.name ?? "")
+  const features = enrichSubclassFeaturesWithResources(parentClassName, row.features)
+  const withPresets = {
+    ...row,
+    features: wireSettingSubclassFeatures(wirePhbSubclassFeatures(enrichSubclassFeaturesWithModifierPresets(
+      parentClassName,
+      subclassName,
+      features,
+    ), parentClassName, subclassName), parentClassName, subclassName).map(applyFeatureSheetDisplay),
+  }
+  const withSpells = spellCatalog.length
+    ? enrichSubclassSpellTableFeatures(withPresets, spellCatalog, preferredSource)
+    : withPresets
+  // Card art is keyed by parent class + subclass name (avoids Reanimator-style collisions).
+  return applySrdFlavorDescription(
+    applyBundledSubclassCardImage(
+      applySubclassIcon(withSpells, parentClassName),
+      parentClassName,
+    ),
+    "subclass",
+  )
+}
+
+export function enrichSrdSubclassList(
+  rows: Record<string, unknown>[],
+  classNameById: Map<string, string>,
+  spellCatalog: NamedSourceRow[] = [],
+  preferredSource?: string | null,
+): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const classId = String(row.class_id ?? "")
+    const parentClassName = classNameById.get(classId) ?? ""
+    return enrichSrdSubclassRow(row, parentClassName, spellCatalog, preferredSource)
+  })
+}

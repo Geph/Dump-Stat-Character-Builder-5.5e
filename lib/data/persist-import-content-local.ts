@@ -1,0 +1,676 @@
+import { invalidateBuilderCompendiumCache } from "@/lib/data/builder-compendium-cache"
+import { upsertByName as upsertByNameLocal } from "@/lib/data/indexed-db-store"
+import { resolveAbilityAttachmentRow } from "@/lib/import/resolve-ability-attachment"
+import { mergeSharedAbilityRows } from "@/lib/import/merge-shared-ability-rows"
+import { formatFeatDescription } from "@/lib/compendium/feat-description"
+import { enrichImportedSubclassRows } from "@/lib/compendium/enrich-import-subclasses"
+import { normalizeBackgroundRows } from "@/lib/compendium/normalize-backgrounds"
+import { applyFeatRecommendedClasses } from "@/lib/compendium/phb-feat-recommended-classes"
+import type { FoundryImportMeta } from "@/lib/import/foundry-types"
+import { stripFoundryMeta, type ImportContentWithFoundryMeta } from "@/lib/import/foundry-manifest"
+import { buildImportReport, type ImportReport } from "@/lib/import/build-import-report"
+import { enrichFeatRowWithPrerequisites } from "@/lib/import/resolve-feat-prerequisites"
+import {
+  resolveFeatureChoiceLinkedSpells,
+  resolveFeatureListLinkedSpells,
+  resolveFeatureLinkedSpells,
+  resolveLinkedModifierSpells,
+} from "@/lib/import/resolve-linked-modifier-spells"
+import type { Feature } from "@/lib/types"
+import type { ImportSourceLabel } from "@/lib/import/import-material-source"
+import { sanitizeImportRowSource } from "@/lib/import/sanitize-import-source"
+import { sanitizeImportContentForPersist } from "@/lib/import/sanitize-import-content"
+import { classNamesFuzzyMatch, resolveParentClassRow } from "@/lib/import/resolve-parent-class"
+import {
+  buildClassResourceRowsForClass,
+  enrichImportedClassList,
+  enrichSubclassFeaturesWithPsiCosts,
+  resolvePsiResourceKeyForClass,
+  type ClassResourceImportRow,
+} from "@/lib/import/enrich-import-classes"
+import { normalizeEquipmentRows } from "@/lib/import/normalize-equipment"
+import { buildCreaturePersistRows } from "@/lib/import/build-creature-persist-rows"
+import type { ImportContent, ImportContentWithAbilities } from "@/lib/import/content-schema"
+import {
+  deleteWhereLocal,
+  insertRowsLocal,
+  listRowsLocal,
+} from "@/lib/import/detect-import-collisions-local"
+import { collectSpellSchoolsFromImportContent } from "@/lib/compendium/schools-of-magic"
+import {
+  isCardArtOnlyImport,
+  persistCardArtImport,
+  syncCardArtEntriesFromContent,
+} from "@/lib/import/apply-card-art-import"
+import type { PersistImportResult } from "@/lib/import/persist-import-types"
+import {
+  preferredSourceForPersist,
+  type PersistImportOptions,
+} from "@/lib/import/persist-import-options"
+import {
+  applyUpdateMergesToLanguageRows,
+  applyUpdateMergesToNamedRows,
+  filterNewResourceRows,
+  findExistingSubclassRow,
+  mergeRowForUpdate,
+  shouldMergeClassResources,
+} from "@/lib/import/merge-collision-update"
+import { spellRowsToUpsertForClassLists } from "@/lib/import/merge-spell-persist"
+import { normalizeSpellImportRows } from "@/lib/import/normalize-spell-import"
+
+function withResolvedFeatureSpells(
+  rows: Record<string, unknown>[],
+  featureKey: "features" | "traits",
+  catalog: { id: string; name: string; source: string | null }[],
+  preferredSource?: string | null,
+): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const features = row[featureKey]
+    if (!Array.isArray(features)) return row
+    return {
+      ...row,
+      [featureKey]: resolveFeatureListLinkedSpells(
+        features as Feature[],
+        catalog,
+        preferredSource,
+      ),
+    }
+  })
+}
+
+function stampSource<T extends Record<string, unknown>>(row: T, importerSource: string): T {
+  const existing = "source" in row ? row.source : undefined
+  return {
+    ...row,
+    source: sanitizeImportRowSource(existing, importerSource),
+  }
+}
+
+function normalizeFeatCategory(category: string | null | undefined): string | null {
+  const trimmed = category?.trim()
+  return trimmed ? trimmed : null
+}
+
+async function loadSpellCatalogLocal(): Promise<
+  { id: string; name: string; source: string | null }[]
+> {
+  const rows = await listRowsLocal("spells")
+  return rows.map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    source: (row.source as string | null | undefined) ?? null,
+  }))
+}
+
+function asClassResourceImports(content: ImportContent): ClassResourceImportRow[] | undefined {
+  return content.class_resources as ClassResourceImportRow[] | undefined
+}
+
+export async function persistImportedContentLocal(
+  content: ImportContent | ImportContentWithFoundryMeta,
+  source: ImportSourceLabel,
+  options: PersistImportOptions = {},
+): Promise<PersistImportResult> {
+  try {
+    return await persistImportedContentLocalBody(content, source, options)
+  } finally {
+    invalidateBuilderCompendiumCache()
+  }
+}
+
+async function persistImportedContentLocalBody(
+  content: ImportContent | ImportContentWithFoundryMeta,
+  source: ImportSourceLabel,
+  options: PersistImportOptions = {},
+): Promise<PersistImportResult> {
+  const foundryMeta = (content as ImportContentWithFoundryMeta).foundryImportMeta
+  const sanitized = sanitizeImportContentForPersist(stripFoundryMeta(content as ImportContentWithFoundryMeta))
+  const preferredSource = preferredSourceForPersist(source, options)
+  let totalImported = 0
+  const breakdown: Record<string, number> = {}
+  const warnings: string[] = []
+  let enrichedSubclasses: Record<string, unknown>[] = []
+  let skippedSubclasses: { name: string; class_name: string }[] = []
+  let enrichedClasses: Record<string, unknown>[] = []
+  let classNameById = new Map<string, string>()
+  let spellCatalog = await loadSpellCatalogLocal()
+  const explicitResources = asClassResourceImports(sanitized)
+
+  if (isCardArtOnlyImport(sanitized) && sanitized.card_art?.length) {
+    const artResult = await persistCardArtImport(syncCardArtEntriesFromContent(sanitized), {
+      listRows: listRowsLocal,
+      upsertByName: upsertByNameLocal,
+    })
+    return {
+      totalImported: artResult.totalImported,
+      breakdown: artResult.breakdown,
+      warnings: artResult.warnings,
+    }
+  }
+
+  if (sanitized.species?.length) {
+    let speciesRows = withResolvedFeatureSpells(
+      sanitized.species.map((s) => stampSource({ ...s }, source)),
+      "traits",
+      spellCatalog,
+      preferredSource,
+    )
+    if (options.updateExistingNames?.species?.length) {
+      speciesRows = applyUpdateMergesToNamedRows(
+        speciesRows,
+        await listRowsLocal("species"),
+        options.updateExistingNames.species,
+      )
+    }
+    await upsertByNameLocal("species", speciesRows)
+    breakdown.species = sanitized.species.length
+    totalImported += sanitized.species.length
+  }
+
+  if (sanitized.classes?.length) {
+    enrichedClasses = withResolvedFeatureSpells(
+      enrichImportedClassList(
+        sanitized.classes.map((c) =>
+          stampSource(
+            {
+              ...c,
+              prefer_same_source_replacements: Boolean(options.preferSameSourceReplacements),
+            },
+            source,
+          ),
+        ),
+        explicitResources,
+      ),
+      "features",
+      spellCatalog,
+      preferredSource,
+    )
+    const updateClassNames = new Set(options.updateExistingNames?.class ?? [])
+    if (updateClassNames.size) {
+      const existingClasses = await listRowsLocal("classes")
+      enrichedClasses = applyUpdateMergesToNamedRows(
+        enrichedClasses,
+        existingClasses,
+        updateClassNames,
+      )
+    }
+    await upsertByNameLocal("classes", enrichedClasses)
+    breakdown.classes = enrichedClasses.length
+    totalImported += enrichedClasses.length
+  }
+
+  if (sanitized.classes?.length || sanitized.class_resources?.length) {
+    const preferNames = [
+      ...new Set([
+        ...(sanitized.classes?.map((c) => c.name) ?? []),
+        ...(sanitized.class_resources?.map((r) => r.class_name) ?? []),
+      ]),
+    ]
+    const classData = (await listRowsLocal("classes")).map((c) => ({
+      id: c.id as string,
+      name: c.name as string,
+      source: (c.source as string | null) ?? null,
+    }))
+    const sameSourceNames = classData
+      .filter((c) => c.source === source)
+      .map((c) => c.name)
+    const resolvePrefer = [...new Set([...preferNames, ...sameSourceNames])]
+
+    const classNames = [
+      ...new Set([
+        ...(sanitized.classes?.map((c) => c.name) ?? []),
+        ...(sanitized.class_resources?.map((r) => r.class_name) ?? []),
+      ]),
+    ]
+
+    let resourceCount = 0
+    for (const className of classNames) {
+      const parent = resolveParentClassRow(className, classData, { preferNames: resolvePrefer })
+      if (!parent) {
+        warnings.push(`Skipped class resources — class not found: ${className}`)
+        continue
+      }
+      const classId = parent.id
+
+      const importClassRow =
+        enrichedClasses.find((row) => row.name === className) ??
+        enrichedClasses.find((row) => row.name === parent.name) ??
+        ({ name: parent.name, description: null, features: [] } as unknown as Record<string, unknown>)
+
+      const resourceRows = buildClassResourceRowsForClass(
+        importClassRow,
+        explicitResources,
+        source,
+        classId,
+      )
+
+      const mergeResources = shouldMergeClassResources(
+        parent.name,
+        options.updateExistingNames?.class,
+      )
+      let rowsToWrite = resourceRows
+      if (mergeResources) {
+        const existingResources = await listRowsLocal("class_resources", {
+          filters: [{ op: "eq", column: "class_id", value: classId }],
+        })
+        rowsToWrite = filterNewResourceRows(resourceRows, existingResources)
+      } else {
+        for (const resource of resourceRows) {
+          await deleteWhereLocal("class_resources", [
+            { op: "eq", column: "class_id", value: classId },
+            { op: "eq", column: "resource_key", value: resource.resource_key as string },
+          ])
+        }
+      }
+      if (rowsToWrite.length > 0) {
+        await insertRowsLocal("class_resources", rowsToWrite)
+        resourceCount += rowsToWrite.length
+      }
+    }
+
+    if (resourceCount > 0) {
+      breakdown.class_resources = resourceCount
+      totalImported += resourceCount
+    }
+  }
+
+  if (sanitized.classes?.length || sanitized.spells?.length) {
+    const normalizedSpells = sanitized.spells?.length
+      ? normalizeSpellImportRows(sanitized.spells as unknown as Record<string, unknown>[])
+      : undefined
+    const { catalogPatches, incoming } = spellRowsToUpsertForClassLists({
+      existingSpells: await listRowsLocal("spells"),
+      existingClasses: await listRowsLocal("classes"),
+      incomingClasses: sanitized.classes as unknown as Record<string, unknown>[] | undefined,
+      incomingSpells: normalizedSpells?.map((s) => stampSource({ ...s }, source)),
+      replaceSourceNames: options.overwriteExistingNames?.spell,
+    })
+    const spellRows = [...catalogPatches, ...incoming]
+    if (spellRows.length) {
+      await upsertByNameLocal("spells", spellRows)
+    }
+    if (sanitized.spells?.length) {
+      breakdown.spells = sanitized.spells.length
+      totalImported += sanitized.spells.length
+    }
+    spellCatalog = await loadSpellCatalogLocal()
+    // Re-link class/species spell grants now that same-batch spells exist.
+    if (enrichedClasses.length) {
+      enrichedClasses = withResolvedFeatureSpells(
+        enrichedClasses,
+        "features",
+        spellCatalog,
+        preferredSource,
+      )
+      await upsertByNameLocal("classes", enrichedClasses)
+    }
+    if (sanitized.species?.length) {
+      let speciesRows = withResolvedFeatureSpells(
+        sanitized.species.map((s) => stampSource({ ...s }, source)),
+        "traits",
+        spellCatalog,
+        preferredSource,
+      )
+      if (options.updateExistingNames?.species?.length) {
+        speciesRows = applyUpdateMergesToNamedRows(
+          speciesRows,
+          await listRowsLocal("species"),
+          options.updateExistingNames.species,
+        )
+      }
+      await upsertByNameLocal("species", speciesRows)
+    }
+  }
+
+  if (sanitized.subclasses?.length) {
+    const preferNames = [
+      ...new Set([
+        ...(sanitized.classes?.map((c) => c.name) ?? []),
+        ...(sanitized.class_resources?.map((r) => r.class_name) ?? []),
+        ...sanitized.subclasses.map((sc) => sc.class_name),
+      ]),
+    ]
+    const classData = (await listRowsLocal("classes")).map((c) => ({
+      id: c.id as string,
+      name: c.name as string,
+      source: (c.source as string | null) ?? null,
+    }))
+    classNameById = new Map(classData.map((c) => [c.id, c.name]))
+    const sameSourceNames = classData
+      .filter((c) => c.source === source)
+      .map((c) => c.name)
+    const resolvePrefer = [...new Set([...preferNames, ...sameSourceNames])]
+
+    skippedSubclasses = []
+    const subclassesWithIds = sanitized.subclasses
+      .map((sc) => {
+        const parent = resolveParentClassRow(sc.class_name, classData, {
+          preferNames: resolvePrefer,
+        })
+        if (!parent) {
+          skippedSubclasses.push({ name: sc.name, class_name: sc.class_name })
+          return null
+        }
+        return {
+          name: sc.name,
+          description: sc.description,
+          features: sc.features,
+          source,
+          class_id: parent.id,
+          class_name: parent.name,
+        }
+      })
+      .filter((sc): sc is NonNullable<typeof sc> => sc != null)
+      .map((sc) => stampSource(sc, source)) as Array<
+      Record<string, unknown> & { class_id: string; class_name: string }
+    >
+
+    if (skippedSubclasses.length > 0) {
+      warnings.push(
+        `Skipped ${skippedSubclasses.length} subclass(es) — parent class not found: ${skippedSubclasses.map((s) => `${s.name} (${s.class_name})`).join(", ")}`,
+      )
+    }
+
+    if (subclassesWithIds.length > 0) {
+      enrichedSubclasses = enrichImportedSubclassRows(
+        subclassesWithIds.map(({ class_name: _className, ...row }) => row),
+        classNameById,
+        spellCatalog,
+        preferredSource,
+      )
+
+      enrichedSubclasses = enrichedSubclasses.map((row, index) => {
+        const sourceRow = subclassesWithIds[index]
+        const parentClassName = sourceRow.class_name
+        const psiKey = resolvePsiResourceKeyForClass(parentClassName, explicitResources) ?? "psi_points"
+        const importText = JSON.stringify(row.features ?? []).toLowerCase()
+        const shouldLinkPsi =
+          psiKey &&
+          (importText.includes("psi point") ||
+            explicitResources?.some((resource) =>
+              classNamesFuzzyMatch(resource.class_name, parentClassName),
+            ))
+        const withPsi = shouldLinkPsi
+          ? {
+              ...row,
+              features: enrichSubclassFeaturesWithPsiCosts(
+                (row.features as Feature[]) ?? [],
+                psiKey,
+              ),
+            }
+          : row
+        return {
+          ...withPsi,
+          features: resolveFeatureListLinkedSpells(
+            (withPsi.features as Feature[]) ?? [],
+            spellCatalog,
+            preferredSource,
+          ),
+        }
+      })
+
+      const existingSubclasses = await listRowsLocal("subclasses")
+      const subclassesToInsert: Record<string, unknown>[] = []
+      for (let index = 0; index < enrichedSubclasses.length; index++) {
+        const sc = enrichedSubclasses[index]!
+        const sourceRow = subclassesWithIds[index]!
+        if (shouldMergeClassResources(sourceRow.class_name, options.updateExistingNames?.class)) {
+          const existing = findExistingSubclassRow(existingSubclasses, sc.name, sourceRow.class_id)
+          if (existing) {
+            await deleteWhereLocal("subclasses", [{ op: "eq", column: "id", value: existing.id }])
+            subclassesToInsert.push(mergeRowForUpdate(existing, sc))
+          } else {
+            subclassesToInsert.push(sc)
+          }
+        } else {
+          await deleteWhereLocal("subclasses", [
+            { op: "eq", column: "name", value: sc.name as string },
+            { op: "eq", column: "source", value: source },
+          ])
+          subclassesToInsert.push(sc)
+        }
+      }
+      await insertRowsLocal("subclasses", subclassesToInsert)
+      breakdown.subclasses = subclassesToInsert.length
+      totalImported += subclassesToInsert.length
+    }
+  }
+
+  if (sanitized.backgrounds?.length) {
+    const backgroundRows = normalizeBackgroundRows(
+      sanitized.backgrounds.map((b) => stampSource({ ...b }, source)),
+    ).map((row) => {
+      if (!row.feature || typeof row.feature !== "object") return row
+      return {
+        ...row,
+        feature: resolveFeatureLinkedSpells(
+          row.feature as Feature,
+          spellCatalog,
+          preferredSource,
+        ),
+      }
+    })
+    let backgroundsToWrite = backgroundRows
+    if (options.updateExistingNames?.background?.length) {
+      backgroundsToWrite = applyUpdateMergesToNamedRows(
+        backgroundRows,
+        await listRowsLocal("backgrounds"),
+        options.updateExistingNames.background,
+      )
+    }
+    await upsertByNameLocal("backgrounds", backgroundsToWrite)
+    breakdown.backgrounds = sanitized.backgrounds.length
+    totalImported += sanitized.backgrounds.length
+  }
+
+  if (sanitized.feats?.length) {
+    const featSpellCatalog = await loadSpellCatalogLocal()
+    const featRows = sanitized.feats.map((f) => {
+      const row = f as unknown as Record<string, unknown>
+      const linkedModifiers = resolveLinkedModifierSpells(
+        (row.linkedModifiers ?? row.linked_modifiers) as import("@/lib/compendium/linked-modifiers").LinkedModifierInstance[] | undefined,
+        featSpellCatalog,
+        preferredSource,
+      )
+      const modifierRefs = (row.modifierRefs ?? row.modifier_refs) as string[] | undefined
+      const withRecommended = applyFeatRecommendedClasses({
+        name: f.name,
+        recommended_classes: (f as { recommended_classes?: string[] | null }).recommended_classes,
+      })
+      return {
+        name: f.name,
+        description: f.description ? formatFeatDescription(f.description) : null,
+        prerequisite: f.prerequisite ?? null,
+        prerequisite_rules: f.prerequisite_rules ?? null,
+        category: normalizeFeatCategory(f.category) ?? "General",
+        level_requirement:
+          typeof (f as { level_requirement?: unknown }).level_requirement === "number"
+            ? (f as { level_requirement: number }).level_requirement
+            : null,
+        recommended_classes: (withRecommended.recommended_classes as string[] | undefined) ?? null,
+        linked_modifiers: linkedModifiers ?? [],
+        modifier_refs: modifierRefs ?? [],
+        is_choice: Boolean(f.isChoice),
+        choices: resolveFeatureChoiceLinkedSpells(f.choices as Feature["choices"], featSpellCatalog, preferredSource) ?? null,
+        source: sanitizeImportRowSource((f as { source?: string | null }).source, source),
+        prerequisite_feat_ids: [] as string[],
+      }
+    })
+    let featsToWrite = featRows
+    if (options.updateExistingNames?.feat?.length) {
+      featsToWrite = applyUpdateMergesToNamedRows(
+        featRows as unknown as Record<string, unknown>[],
+        await listRowsLocal("feats"),
+        options.updateExistingNames.feat,
+      ) as typeof featRows
+    }
+    await upsertByNameLocal("feats", featsToWrite)
+
+    const existingFeats = (await listRowsLocal("feats")).map((row) => ({
+      id: row.id as string,
+      name: row.name as string,
+      source: ((row.source as string | null | undefined) ?? "") as string,
+    }))
+    for (const row of featRows) {
+      const enriched = enrichFeatRowWithPrerequisites(row, existingFeats, preferredSource)
+      if (
+        enriched.level_requirement !== row.level_requirement ||
+        (enriched.prerequisite_feat_ids?.length ?? 0) > 0 ||
+        (enriched.prerequisite_rules?.length ?? 0) > 0
+      ) {
+        await upsertByNameLocal("feats", [
+          {
+            name: enriched.name,
+            level_requirement: enriched.level_requirement,
+            prerequisite_feat_ids: enriched.prerequisite_feat_ids ?? [],
+            prerequisite_rules: enriched.prerequisite_rules ?? [],
+          },
+        ])
+      }
+    }
+
+    breakdown.feats = sanitized.feats.length
+    totalImported += sanitized.feats.length
+  }
+
+  if (sanitized.creatures?.length) {
+    const creatureRows = buildCreaturePersistRows(sanitized.creatures, source)
+    await upsertByNameLocal("creatures", creatureRows)
+    breakdown.creatures = sanitized.creatures.length
+    totalImported += sanitized.creatures.length
+  }
+
+  if (sanitized.equipment?.length) {
+    const equipment = normalizeEquipmentRows(
+      sanitized.equipment.map((e) => stampSource({ ...e }, source)) as unknown as Record<string, unknown>[],
+    )
+    await upsertByNameLocal("equipment", equipment)
+    breakdown.equipment = sanitized.equipment.length
+    totalImported += sanitized.equipment.length
+  }
+
+  if (sanitized.languages?.length) {
+    let languageRows = sanitized.languages.map((row) =>
+      stampSource(
+        {
+          ...row,
+          pool: row.pool === "rare" ? "rare" : "standard",
+          description: row.description ?? null,
+          typical_speakers: row.typical_speakers ?? null,
+          script: row.script ?? null,
+          icon: row.icon ?? null,
+        },
+        source,
+      ),
+    )
+    if (options.updateExistingNames?.language?.length) {
+      languageRows = applyUpdateMergesToLanguageRows(
+        languageRows as unknown as Record<string, unknown>[],
+        await listRowsLocal("languages"),
+        options.updateExistingNames.language,
+      ) as typeof languageRows
+    }
+    await upsertByNameLocal("languages", languageRows)
+    breakdown.languages = sanitized.languages.length
+    totalImported += sanitized.languages.length
+  }
+
+  if ((sanitized as ImportContentWithAbilities).abilities?.length) {
+    const rawAbilities = (sanitized as ImportContentWithAbilities).abilities!
+    const { enrichAbilityImportRows } = await import("@/lib/import/enrich-ability-import")
+    const { normalizeAbilityImportRows } = await import("@/lib/import/normalize-ability-import")
+    const classIdByName = new Map(
+      (await listRowsLocal("classes")).map((row) => [row.name as string, row.id as string]),
+    )
+    const subclassIdByName = new Map(
+      (await listRowsLocal("subclasses")).map((row) => [row.name as string, row.id as string]),
+    )
+    const speciesIdByName = new Map(
+      (await listRowsLocal("species")).map((row) => [row.name as string, row.id as string]),
+    )
+    const backgroundIdByName = new Map(
+      (await listRowsLocal("backgrounds")).map((row) => [row.name as string, row.id as string]),
+    )
+    const featIdByName = new Map(
+      (await listRowsLocal("feats")).map((row) => [row.name as string, row.id as string]),
+    )
+    const attachmentMaps = {
+      classIdByName,
+      subclassIdByName,
+      speciesIdByName,
+      backgroundIdByName,
+      featIdByName,
+    }
+    const abilityRows = enrichAbilityImportRows(
+      normalizeAbilityImportRows(
+        rawAbilities.map((a) => stampSource({ ...a, show_in_builder: true }, source)),
+      ),
+    ).map((row) => {
+      const linkedModifiers = resolveLinkedModifierSpells(
+        (row.linkedModifiers ?? row.linked_modifiers) as
+          | import("@/lib/compendium/linked-modifiers").LinkedModifierInstance[]
+          | undefined,
+        spellCatalog,
+        preferredSource,
+      )
+      const choices = resolveFeatureChoiceLinkedSpells(
+        row.choices as Feature["choices"] | undefined,
+        spellCatalog,
+        preferredSource,
+      )
+      const specializationChoices = resolveFeatureChoiceLinkedSpells(
+        row.specialization_choices as Feature["choices"] | null | undefined,
+        spellCatalog,
+        preferredSource,
+      )
+      const withSpells = {
+        ...row,
+        linked_modifiers: linkedModifiers ?? row.linked_modifiers ?? [],
+        linkedModifiers: linkedModifiers ?? row.linkedModifiers ?? [],
+        ...(choices !== undefined ? { choices } : {}),
+        ...(specializationChoices !== undefined
+          ? { specialization_choices: specializationChoices }
+          : {}),
+      }
+      return resolveAbilityAttachmentRow(withSpells, attachmentMaps)
+    })
+    const existingAbilities = await listRowsLocal("custom_abilities")
+    let abilitiesToWrite = mergeSharedAbilityRows(abilityRows, existingAbilities, {
+      classes: await listRowsLocal("classes"),
+      subclasses: await listRowsLocal("subclasses"),
+    })
+    if (options.updateExistingNames?.ability?.length) {
+      abilitiesToWrite = applyUpdateMergesToNamedRows(
+        abilitiesToWrite as unknown as Record<string, unknown>[],
+        existingAbilities,
+        options.updateExistingNames.ability,
+      ) as typeof abilityRows
+    }
+    await upsertByNameLocal("custom_abilities", abilitiesToWrite)
+    breakdown.abilities = abilitiesToWrite.length
+    totalImported += abilityRows.length
+  }
+
+  const report = buildImportReport({
+    content: sanitized,
+    enrichedClasses,
+    enrichedSubclasses,
+    classNameById,
+    skippedSubclasses,
+    spellCatalog,
+    totalImported,
+    breakdown,
+    warnings,
+    explicitResources,
+    foundryMeta: foundryMeta as FoundryImportMeta | undefined,
+  })
+
+  const discoveredSpellSchools = collectSpellSchoolsFromImportContent(sanitized)
+  return {
+    totalImported,
+    breakdown,
+    warnings,
+    report,
+    ...(discoveredSpellSchools.length > 0 ? { discoveredSpellSchools } : {}),
+  }
+}

@@ -1,0 +1,1365 @@
+import { z } from "zod"
+import type { LinkedModifierInstance } from "@/lib/compendium/linked-modifiers"
+import { AI_MECHANIC_KINDS } from "@/lib/import/common-modifiers-import-hints"
+
+export { AI_MECHANIC_KINDS } from "@/lib/import/common-modifiers-import-hints"
+
+const ABILITY_SCORE_KEYS = [
+  "strength",
+  "dexterity",
+  "constitution",
+  "intelligence",
+  "wisdom",
+  "charisma",
+] as const
+
+const SAVE_ABILITY_NAMES = [
+  "Strength",
+  "Dexterity",
+  "Constitution",
+  "Intelligence",
+  "Wisdom",
+  "Charisma",
+] as const
+
+const USES_ABILITY_CODES = ["STR", "DEX", "CON", "INT", "WIS", "CHA"] as const
+
+export const ImportMechanicSchema = z.object({
+  /** Known catalog kinds, `unresolved`, or an invented name kept for the unresolved list. */
+  kind: z.string().min(1),
+  confidence: z.enum(["high", "medium", "low"]).optional(),
+  sourcePhrase: z.string().optional(),
+  skills: z.array(z.string()).optional(),
+  grantExpertise: z.boolean().optional(),
+  choiceCount: z.number().optional(),
+  /** grant_creature (and similar): pick totals that scale by class level. */
+  choiceCountByLevel: z
+    .array(z.object({ level: z.number(), count: z.number() }))
+    .optional(),
+  tools: z.array(z.string()).optional(),
+  armor: z.array(z.string()).optional(),
+  weaponMode: z.enum(["martial_weapons", "simple_weapons"]).optional(),
+  savingThrows: z.array(z.enum(SAVE_ABILITY_NAMES)).optional(),
+  acBase: z.number().optional(),
+  acAbilities: z.array(z.enum(ABILITY_SCORE_KEYS)).optional(),
+  acFlatBonus: z.number().optional(),
+  acBonusAbility: z.enum(USES_ABILITY_CODES).optional(),
+  acBonusMinimum: z.number().optional(),
+  hpMode: z.enum(["per_level", "flat"]).optional(),
+  hpValue: z.number().optional(),
+  hpLevelScope: z.enum(["character", "owning_class"]).optional(),
+  attackBonus: z.number().optional(),
+  attackTarget: z.enum(["all", "spell", "melee", "ranged"]).optional(),
+  criticalHitMinimum: z.number().min(2).max(20).optional(),
+  criticalHitMinimumByLevel: z
+    .array(z.object({ level: z.number(), fixed: z.number().min(2).max(20) }))
+    .optional(),
+  /** Ranged-attack cover handling (Sharpshooter / Zeroed Sights). */
+  ignoreHalfCover: z.boolean().optional(),
+  treatThreeQuartersCoverAsHalf: z.boolean().optional(),
+  /** Flat damage bonus (Dueling +2). Prefer over inventing bonusDice for non-dice bonuses. */
+  damageBonus: z.number().optional(),
+  damageTarget: z.enum(["all", "melee", "ranged"]).optional(),
+  bonusDice: z.string().optional(),
+  /** Add the governing ability modifier when the base damage roll omits it. */
+  grantAbilityModifierWhenMissing: z.boolean().optional(),
+  /** Alternate extra dice when the base damage roll already includes its ability modifier. */
+  bonusDiceWhenModifierIncluded: z.string().optional(),
+  bonusDiceUsesWeaponDamageType: z.boolean().optional(),
+  damageType: z.string().optional(),
+  damageTypes: z.array(z.string()).optional(),
+  conditions: z.array(z.string()).optional(),
+  speedType: z.enum(["walk", "fly", "swim", "climb"]).optional(),
+  speedFeet: z.number().optional(),
+  /** "equal_to_walk" for "you gain a Swim/Fly/Climb Speed equal to your (walking) Speed" — speedFeet is ignored in that mode. */
+  speedMode: z.enum(["fixed", "equal_to_walk"]).optional(),
+  visionRangeFeet: z.number().optional(),
+  /** darkvision (default) | blindsight | truesight | tremorsense — required for Blind Fighting / Skulker. */
+  visionType: z.enum(["darkvision", "blindsight", "truesight", "tremorsense"]).optional(),
+  usesFixed: z.number().optional(),
+  usesAbility: z.enum(USES_ABILITY_CODES).optional(),
+  /** When true, uses scale with Proficiency Bonus (Lucky, etc.). Prefer over usesFixed: null. */
+  usesProficiency: z.boolean().optional(),
+  usesRecharge: z
+    .enum(["short_rest", "long_rest", "both", "until_item_consumed", "on_resource_reactivation"])
+    .optional(),
+  /** For usesRecharge on_resource_reactivation — resource/state whose activation refreshes the use (e.g. "rage"). */
+  gatingResourceKey: z.string().optional(),
+  /** Spend another class resource OR a spell slot to restore one use early. */
+  alternateRefresh: z
+    .object({
+      spendResourceKey: z.string().optional(),
+      spendAmount: z.number().optional(),
+      /** Expend a spell slot of at least this level (e.g. 3 for "a level 3+ spell slot"). */
+      spendSpellSlotMinLevel: z.number().optional(),
+      actionCost: z.enum(["none", "action", "bonus_action", "reaction"]),
+    })
+    .optional(),
+  /** Cap how many units of a class resource may be spent per use. */
+  classResourceKey: z.string().optional(),
+  /** Alias accepted for resource_ability_menu (same as classResourceKey). */
+  resourceKey: z.string().optional(),
+  classResourceCost: z.number().optional(),
+  classResourceCostMode: z
+    .enum(["fixed", "up_to_proficiency_bonus", "up_to_ability_modifier", "up_to_available"])
+    .optional(),
+  classResourceCostAbility: z.enum(USES_ABILITY_CODES).optional(),
+  checkRollMode: z.enum(["advantage", "disadvantage", "bonus"]).optional(),
+  /** Attacks against this character (Nimble Start, Escape the Horde, Reckless drawback). */
+  incomingAttackMode: z.enum(["advantage", "disadvantage"]).optional(),
+  checkCategory: z.enum(["save", "skill", "ability", "attack", "initiative", "death_save"]).optional(),
+  checkAbility: z.enum(SAVE_ABILITY_NAMES).optional(),
+  checkSkills: z.array(z.string()).optional(),
+  /** Freeform qualifier that cannot be auto-enforced (e.g. "that involves you dancing"). */
+  conditionNote: z.string().optional(),
+  /**
+   * Enforced condition scope for check_roll_modifier (e.g. ["Frightened"] for saves to avoid/end
+   * Frightened). Prefer this over conditionNote when the gate is a named condition.
+   */
+  checkConditionTypes: z.array(z.string()).optional(),
+  bonusConfig: z
+    .object({
+      mode: z.enum(["fixed", "proficiency", "ability_modifier", "die"]),
+      fixed: z.number().optional(),
+      ability: z.enum(ABILITY_SCORE_KEYS).optional(),
+      multiplier: z.number().optional(),
+      /** Minimum value of the bonus itself ("minimum bonus of +1"). */
+      minimum: z.number().optional(),
+      dieCount: z.number().optional(),
+      dieScaling: z.enum(["fixed", "by_level", "class_resource"]).optional(),
+      classResourceKey: z.string().optional(),
+    })
+    .optional(),
+  /** Shared multi-target / beneficiary scope for die bonuses, THP, movement, etc. */
+  targets: z
+    .enum(["self", "self_and_allies_in_range", "self_and_chosen_ally", "chosen_creatures", "chosen_creatures_in_range"])
+    .optional(),
+  targetCount: z
+    .object({
+      mode: z.enum(["ability_modifier", "fixed"]),
+      ability: z.enum(ABILITY_SCORE_KEYS).optional(),
+      minimum: z.number().optional(),
+      count: z.number().optional(),
+    })
+    .optional(),
+  /** When damage/check bonus comes from rolling a class resource die. */
+  plusAbilityModifier: z.boolean().optional(),
+  amountMultiplier: z.number().optional(),
+  /** damage_reduction */
+  reductionMode: z.enum(["evasion", "flat"]).optional(),
+  reductionAmount: z.number().optional(),
+  /** movement_grant */
+  distanceMode: z.enum(["fixed", "fraction_of_speed", "full_speed"]).optional(),
+  distanceFeet: z.number().optional(),
+  fraction: z.number().optional(),
+  trigger: z.string().optional(),
+  provokesOpportunityAttacks: z.boolean().optional(),
+  /** movement_grant: true for "teleport to a space you can see" (ignores terrain/occupied
+   * spaces along the way); false/omitted for ordinary movement along the ground. */
+  teleport: z.boolean().optional(),
+  featCategories: z
+    .array(
+      z.enum([
+        "Origin",
+        "Dark Gift",
+        "General",
+        "Fighting Style",
+        "Epic Boon",
+        "Planar Pact",
+        "Metamagic",
+        "Mystic Technique",
+        "Eldritch Invocation",
+      ]),
+    )
+    .optional(),
+  featCount: z.number().optional(),
+  /** grant_creature: creature names from the Creatures & Companions compendium. */
+  creatureNames: z.array(z.string()).optional(),
+  /** grant_creature: optional player-pick list (subset of creatureNames). */
+  creatureChoiceOptions: z.array(z.string()).optional(),
+  /** grant_creature: Wild Shape / polymorph form. */
+  creaturePolymorph: z.boolean().optional(),
+  /** grant_creature: combined CR cap table (`count` is the CR number, 0.25 = 1/4). */
+  creatureCombinedCrByLevel: z
+    .array(z.object({ level: z.number(), count: z.number() }))
+    .optional(),
+  /** grant_creature: offer the choice on a rest overlay. */
+  creaturePickOnRest: z.enum(["short_rest", "long_rest", "short_or_long_rest"]).optional(),
+  /** grant_creature: picker heading (e.g. Animate Thralls). */
+  creaturePickerTitle: z.string().optional(),
+  /** equipment_and_magic_items: named mundane items the player may select. */
+  itemOptions: z.array(z.string()).optional(),
+  /** equipment_and_magic_items: permit a free-text item name. */
+  allowCustom: z.boolean().optional(),
+  /** player_note: label, placeholder, and display target for a persistent sheet note. */
+  notePrompt: z.string().optional(),
+  notePlaceholder: z.string().optional(),
+  noteTarget: z.enum(["feature", "equipment"]).optional(),
+  /** inventory_container */
+  containerName: z.string().optional(),
+  capacityMode: z.enum(["slot_count", "weight_lb", "cubic_feet", "unbounded"]).optional(),
+  capacityAmount: z.number().optional(),
+  capacityLabel: z.string().optional(),
+  contentKinds: z.array(z.enum(["equipment", "corpse", "companion", "freeform"])).optional(),
+  maxCreatureSize: z
+    .enum(["Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan"])
+    .optional(),
+  linkHostItem: z.boolean().optional(),
+  attachToEquipmentNames: z.array(z.string()).optional(),
+  languages: z.array(z.string()).optional(),
+  languageChoiceCount: z.number().optional(),
+  choicePool: z.enum(["standard", "standard_and_rare"]).optional(),
+  spellNames: z.array(z.string()).optional(),
+  /**
+   * Class level when this mechanic unlocks: spells_known spellNames become always-prepared
+   * (one mechanic per tier), or a special_attack profile (e.g. thrall heal at Necromancer 2).
+   * Not the same as spellChoiceGrants[].unlocksAtClassLevel, which gates a player-chosen grant
+   * instead of a fixed list.
+   */
+  unlocksAtClassLevel: z.number().optional(),
+  spellChoiceGrants: z
+    .array(
+      z.object({
+        level: z.number(),
+        count: z.number(),
+        unlocksAtClassLevel: z.number().optional(),
+        /** When true, `level` is an inclusive max (Investigator grimoire), not exact. */
+        upToLevel: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+  spellChoiceLabel: z.string().optional(),
+  alwaysPrepared: z.boolean().optional(),
+  castAsRitual: z.boolean().optional(),
+  spellcastingAbility: z.enum(ABILITY_SCORE_KEYS).optional(),
+  spellcastingAbilityOptions: z.array(z.enum(ABILITY_SCORE_KEYS)).optional(),
+  attunementTotal: z.number().optional(),
+  attunementBonus: z.number().optional(),
+  targetCreatureTypes: z.array(z.string()).optional(),
+  requiresSheetToggle: z.string().optional(),
+  sheetToggleLabel: z.string().optional(),
+  /** Alternate ability for skill checks / saves / weapon rolls. */
+  alternateAbility: z.enum(ABILITY_SCORE_KEYS).optional(),
+  alternateSkills: z.array(z.string()).optional(),
+  alternateSaves: z.array(z.string()).optional(),
+  weaponAbilityAppliesTo: z.enum(["attack", "damage", "both"]).optional(),
+  weaponAbilityScope: z.enum(["all", "melee", "ranged", "finesse", "specific"]).optional(),
+  weaponNames: z.array(z.string()).optional(),
+  /** Extra Finesse–style grants: use higher of STR/DEX instead of a fixed alternateAbility. */
+  treatAsFinesse: z.boolean().optional(),
+  /** Restrict Extra Finesse / weapon_sheet_badge to printed dice (`1d4`, `1d6`, `2d4`). */
+  whenDamageDice: z.array(z.string()).optional(),
+  excludedWeaponProperties: z.array(z.string()).optional(),
+  onlyIncrease: z.boolean().optional(),
+  /** weapon_sheet_badge */
+  badgeLabel: z.string().optional(),
+  badgeDescription: z.string().optional(),
+  includeUnarmed: z.boolean().optional(),
+  requireFirearm: z.boolean().optional(),
+  fromSaveAbility: z.enum(["any", "STR", "DEX", "CON", "INT", "WIS", "CHA"]).optional(),
+  toSaveAbility: z.enum(USES_ABILITY_CODES).optional(),
+  forcedSaveScope: z.enum(["your_spells", "your_features", "all"]).optional(),
+  restoreResourceKey: z.string().optional(),
+  restoreResourceAmount: z.number().optional(),
+  /** turn_start_bonus_grant — resource these bonus units count as (often same as the main pool key). */
+  grantResourceKey: z.string().optional(),
+  grantAmount: z.number().optional(),
+  grantAmountByLevel: z
+    .array(z.object({ level: z.number(), amount: z.number() }))
+    .optional(),
+  expiresEndOfTurn: z.boolean().optional(),
+  usageRestriction: z.string().optional(),
+  /** on_hit_trigger */
+  triggerOn: z.enum(["hit", "crit"]).optional(),
+  oncePerTurn: z.boolean().optional(),
+  maximizeWeaponDamage: z.boolean().optional(),
+  maximizeWeaponDamageAtLevel: z.number().optional(),
+  spendResourceKey: z.string().optional(),
+  spendResourceAmount: z.number().optional(),
+  /** failed_roll_trigger — fail (Guided Strike / Peerless Skill) or success (Cutting Words). */
+  failedTriggerOn: z.enum(["fail", "success"]).optional(),
+  rollKind: z.enum(["ability", "skill", "attack", "save"]).optional(),
+  /** d20_test_reaction — may be action-free when useReaction is false. */
+  modifierMode: z.enum(["add", "subtract"]).optional(),
+  rollKinds: z.array(z.enum(["ability", "skill", "attack", "save"])).optional(),
+  dieSource: z.enum(["resource_die", "fixed", "ability_modifier"]).optional(),
+  fixedDie: z.string().optional(),
+  dieAbility: z.enum(ABILITY_SCORE_KEYS).optional(),
+  targetScope: z
+    .enum([
+      "self",
+      "target_creature",
+      "allied_creature",
+      "targets_in_area",
+      "allies_in_area",
+      "enemies_in_area",
+    ])
+    .optional(),
+  useReaction: z.boolean().optional(),
+  /** Flat bonus applied by a failed_roll_trigger nested check_roll_modifier (e.g. Guided Strike +10). */
+  bonusFixed: z.number().optional(),
+  automaticBonusMode: z
+    .enum(["character_level", "half_character_level_round_down", "none"])
+    .optional(),
+  scalingMode: z
+    .enum(["none", "character_level", "half_character_level_round_down"])
+    .optional(),
+  damageTypeOptions: z.array(z.string()).optional(),
+  /**
+   * initiative. "ability_modifier" REPLACES the roll's governing ability (e.g. some feature
+   * says initiative uses INT instead of DEX). "add_ability_modifier" ADDS the ability on top of
+   * the normal DEX-based roll — use this for "you can add your Wisdom modifier to the roll"
+   * phrasing (Ranger's Dread Ambusher, etc.), which is the far more common wording.
+   */
+  initiativeMode: z
+    .enum(["flat_bonus", "add_proficiency", "ability_modifier", "add_ability_modifier"])
+    .optional(),
+  initiativeAbility: z.enum(ABILITY_SCORE_KEYS).optional(),
+  initiativeFlatBonus: z.number().optional(),
+  /** telepathy */
+  telepathyRangeFeet: z.number().optional(),
+  /** unarmed_strike_damage */
+  unarmedDie: z.string().optional(),
+  dieByLevel: z.array(z.object({ level: z.number(), die: z.string() })).optional(),
+  /** weapon_damage_die_override — sides to rewrite weapon dice to (NdX → NdY). Not for optional 2d4 replacements like Deadly D4s. */
+  dieSides: z.number().optional(),
+  /** weapon_damage_die_override scope. */
+  weaponDamageScope: z
+    .enum(["all", "melee", "ranged", "unarmed", "weapons", "specific"])
+    .optional(),
+  /** resource_ability_menu */
+  waiveResourceCost: z.boolean().optional(),
+  menuAbilityNames: z.array(z.string()).optional(),
+  menuOptions: z
+    .array(
+      z.object({
+        name: z.string(),
+        description: z.string().optional(),
+        resourceCost: z.number().optional(),
+        hitDiceCost: z.number().optional(),
+        unlocksAtLevel: z.number().optional(),
+        actionKind: z.enum(["action", "bonus", "reaction"]).optional(),
+        bonusConfig: z
+          .object({
+            mode: z.enum(["fixed", "proficiency", "ability_modifier", "die"]),
+            fixed: z.number().optional(),
+            ability: z.enum(ABILITY_SCORE_KEYS).optional(),
+            multiplier: z.number().optional(),
+            minimum: z.number().optional(),
+            dieCount: z.number().optional(),
+            dieScaling: z.enum(["fixed", "by_level", "class_resource"]).optional(),
+            classResourceKey: z.string().optional(),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
+  /** extra_attack: additional attacks beyond the first (1 = attack twice, 2 = attack three times). */
+  extraAttackCount: z.number().int().min(1).optional(),
+  /** power_rider — attach sheet alert to named actions / menu options */
+  parentPowerNames: z.array(z.string()).optional(),
+  parentMenuOptionNames: z.array(z.string()).optional(),
+  alertSummary: z.string().optional(),
+  appliesToAttackVariants: z.array(z.enum(["attack", "primed", "explode"])).optional(),
+  selectable: z.boolean().optional(),
+  /**
+   * power_rider — optional extra weapon/unarmed damage the player ticks on the
+   * weapon DMG ··· menu (Bloodied riders, first-round bonuses, "you can deal extra…").
+   */
+  weaponDamageMenu: z.boolean().optional(),
+  defaultSelectedWhenToggle: z.string().optional(),
+  menuConditionLabel: z.string().optional(),
+  /** power_rider — when selected, replace the parent action's HP spend. */
+  spendHitPoints: z.number().optional(),
+  /** replace_feature — prior feature names this upgrade supersedes. */
+  replacedFeatureNames: z.array(z.string()).optional(),
+  /** First use each turn does not spend action economy. */
+  firstUseNoAction: z.boolean().optional(),
+  firstUseNoActionFromLevel: z.number().optional(),
+  /** temporary_hit_points / hit_dice_restore fallback */
+  amount: z.number().optional(),
+  amountMinimum: z.number().nonnegative().optional(),
+  /** hit_dice_restore — expended Hit Point Dice regained (prefer over amount). */
+  hitDiceRestoreAmount: z.number().optional(),
+  hitDiceRestoreByLevel: z
+    .array(z.object({ level: z.number(), amount: z.number() }))
+    .optional(),
+  restoreOnRest: z.enum(["short_rest", "long_rest"]).optional(),
+  amountDice: z.string().optional(),
+  amountScaling: z
+    .enum(["character_level", "class_resource_die", "ability_modifier", "proficiency"])
+    .optional(),
+  ability: z.enum(ABILITY_SCORE_KEYS).optional(),
+  thpTrigger: z.enum(["on_activation", "turn_start", "on_use", "on_hit"]).optional(),
+  thpTarget: z.enum(["self", "chosen_creature_in_range", "allies_in_range"]).optional(),
+  /** grant_inspiration — self flips sheet Inspiration; ally opens the party picker. */
+  inspirationTarget: z.enum(["self", "ally"]).optional(),
+  rangeFeet: z.number().optional(),
+  expiresOnTriggerEnd: z.boolean().optional(),
+  /** grant_custom_ability — names of custom abilities / formulas / discoveries to unlock. */
+  abilityNames: z.array(z.string()).optional(),
+  /** modify_custom_ability — upgrade text appended to each named ability. */
+  abilityAddendum: z.string().optional(),
+  checkBonusDieOverride: z.enum(["d4", "d6", "d8", "d10", "d12", "d20"]).optional(),
+  removeUseLimit: z.boolean().optional(),
+  abilityFilter: z.object({ role: z.string(), eligibleClassNames: z.array(z.string()).optional(), minLevel: z.number().optional(), maxLevel: z.number().optional() }).optional(),
+  resourceCostWaiver: z.string().optional(),
+  resourceCostReduction: z.number().nonnegative().optional(),
+  /** speed hover */
+  canHover: z.boolean().optional(),
+  /** turn_start_trigger */
+  hpBelowFraction: z.number().optional(),
+  blockedByConditions: z.array(z.string()).optional(),
+  /** weapon_reach_modifier */
+  reachBonusFeet: z.number().optional(),
+  weaponPropertyFilter: z.array(z.string()).optional(),
+  /** special_attack */
+  attackName: z.string().optional(),
+  icon: z.string().optional(),
+  attackProfile: z.enum(["melee", "ranged", "emanation", "force_save"]).optional(),
+  targetMode: z.enum(["single", "multi", "area"]).optional(),
+  areaShape: z
+    .enum(["cone", "line", "sphere", "cylinder", "cube", "cone_or_line"])
+    .optional(),
+  areaLengthFeet: z.number().optional(),
+  areaWidthFeet: z.number().optional(),
+  /** Damage dice for special_attack (e.g. "2d6", "6d6"). Prefer over inventing bonusDice here. */
+  damageDice: z.string().optional(),
+  /** special_attack damage equals the variable class-resource spend rather than dice. */
+  damageFromResourceSpend: z.boolean().optional(),
+  /** special_attack restores HP equal to the chosen class-resource spend (no attack roll). */
+  healFromResourceSpend: z.boolean().optional(),
+  /** special_attack healFromResourceSpend target scope. */
+  healTarget: z.enum(["controlled_companion", "choose_ally"]).optional(),
+  /** special_attack deducts the chosen class-resource spend only after a hit. */
+  spendResourceOnHit: z.boolean().optional(),
+  /** special_attack multiplier for resource-spend damage on a critical hit. */
+  criticalDamageMultiplier: z.number().min(1).max(4).optional(),
+  saveAbility: z.enum(SAVE_ABILITY_NAMES).optional(),
+  saveHalfDamage: z.boolean().optional(),
+})
+
+export type ImportMechanic = z.infer<typeof ImportMechanicSchema>
+
+/** Declared once on a class/subclass before features reference it via requiresSheetToggle. */
+export const NewToggleImportSchema = z.object({
+  key: z.string(),
+  name: z.string(),
+  grantingFeature: z.string(),
+})
+
+export type NewToggleImport = z.infer<typeof NewToggleImportSchema>
+
+const AbilityScoreKeySchema = z.enum([
+  "strength",
+  "dexterity",
+  "constitution",
+  "intelligence",
+  "wisdom",
+  "charisma",
+])
+
+/**
+ * Prerequisites attached to importable content.
+ * - `other`: informational (campaign/setting) — not evaluated by the builder
+ * - `armor_training` / `ability_score`: mechanically evaluated for feats
+ */
+export const PrerequisiteRuleSchema = z.discriminatedUnion("category", [
+  z.object({
+    category: z.literal("other"),
+    value: z.string().min(1),
+  }),
+  z.object({
+    category: z.literal("armor_training"),
+    value: z.enum(["Light armor", "Medium armor", "Heavy armor", "Shields"]),
+  }),
+  z.object({
+    category: z.literal("ability_score"),
+    /** Character must meet the minimum in any one of these abilities. */
+    abilities: z.array(AbilityScoreKeySchema).min(1),
+    minimum: z.number().int().positive(),
+  }),
+])
+
+export type PrerequisiteRule = z.infer<typeof PrerequisiteRuleSchema>
+
+export const ChoiceOptionsSchema = z.object({
+  category: z.string(),
+  count: z.number(),
+  options: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string(),
+      prerequisite: z.string().nullable().optional(),
+      repeatable: z.boolean().nullable().optional(),
+      level_requirement: z.number().nullable().optional(),
+      linkedModifiers: z
+        .array(z.record(z.unknown()))
+        .transform((value) => value as LinkedModifierInstance[])
+        .optional(),
+      modifierRefs: z.array(z.string()).optional(),
+    }),
+  ),
+  optionsSource: z
+    .enum([
+      "known_discipline_talents",
+      "fusion_talents",
+      "class_talents",
+      "class_disciplines",
+      "class_knacks",
+      "class_upgrades",
+      "class_bomb_formulas",
+      "class_discoveries",
+    ])
+    .nullable()
+    .optional(),
+  resourceKey: z.string().nullable().optional(),
+  /** Cumulative pick totals by class level (when not driven by a class_resources count). */
+  choiceCountByLevel: z
+    .array(z.object({ level: z.number(), count: z.number() }))
+    .optional(),
+  swappableOnRest: z.boolean().optional(),
+  swappableOnLevelUp: z.boolean().optional(),
+  swapRestType: z.enum(["short", "long"]).nullable().optional(),
+  /**
+   * Where picked (or auto-applied) option modifiers apply. `"companion"` keeps
+   * resistances / immunities off the character and onto matching companions.
+   */
+  applyTo: z.enum(["self", "companion"]).optional(),
+  /** Companion-granting feature that receives the modifiers (e.g. `"Thralls"`). */
+  applyToCompanionFeature: z.string().nullable().optional(),
+})
+
+export const SpeciesTraitSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  isChoice: z.boolean().optional(),
+  choices: ChoiceOptionsSchema.optional(),
+  mechanics: z.array(ImportMechanicSchema).optional(),
+  /** Exact SRD-standard feature name when this trait is a renamed/lightly-modified port. */
+  basedOnSrdFeature: z.string().optional(),
+})
+
+export const ClassFeatureSchema = z.object({
+  level: z.number(),
+  name: z.string(),
+  description: z.string(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  isChoice: z.boolean().optional(),
+  choices: ChoiceOptionsSchema.optional(),
+  mechanics: z.array(ImportMechanicSchema).optional(),
+  /** Exact SRD-standard feature name when this feature is a renamed/lightly-modified port. */
+  basedOnSrdFeature: z.string().optional(),
+  psionic_augments: z.unknown().optional(),
+  /** Companion/minion stat block (Steel Defender, Homunculus, etc.). */
+  companion_stat_block: z.record(z.unknown()).nullable().optional(),
+  /** Names of Creatures & Companions this feature grants (resolve from creatures table). */
+  companion_creature_names: z.array(z.string()).nullable().optional(),
+  linkedModifiers: z
+    .array(z.record(z.unknown()))
+    .transform((value) => value as LinkedModifierInstance[])
+    .optional(),
+  modifierRefs: z.array(z.string()).optional(),
+  importModifierMeta: z.array(z.record(z.unknown())).optional(),
+  claims: z
+    .array(
+      z.object({
+        id: z.string(),
+        text: z.string(),
+        status: z.enum(["wired", "unresolved", "narrative"]),
+        modifierId: z.string().nullable().optional(),
+        effectId: z.string().nullable().optional(),
+      }),
+    )
+    .nullable()
+    .optional(),
+  sheetDisplay: z
+    .object({
+      abilitiesActions: z.boolean().optional(),
+      combatActions: z.boolean().optional(),
+      featuresTab: z.boolean().optional(),
+      restDialogues: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
+})
+
+/**
+ * Shared by class-level and subclass-granted spellcasting (e.g. Eldritch Knight, Arcane
+ * Trickster) — a subclass can grant its own spell slots separate from its base class.
+ */
+export const ClassSpellcastingImportSchema = z.object({
+  ability: z.string(),
+  cantrips: z.number().optional(),
+  spells_known: z.number().optional(),
+  prepared: z.boolean().optional(),
+  progression: z
+    .array(
+      z.object({
+        level: z.number(),
+        cantrips: z.number(),
+        prepared: z.number(),
+        max_spell_level: z.number(),
+      }),
+    )
+    .optional(),
+  caster_progression: z.enum(["full", "half", "third", "pact"]).optional(),
+  explicit_slot_progression: z
+    .array(
+      z.object({
+        level: z.number(),
+        slots: z.array(z.number()),
+      }),
+    )
+    .nullable()
+    .optional(),
+  point_pool: z
+    .object({
+      resource_key: z.string(),
+      cost_by_level: z.record(z.string(), z.number()),
+      base_cost_cap_resource_key: z.string().optional(),
+      metamagic_cost_cap: z.enum(["proficiency_bonus"]).optional(),
+      replaces_spell_slots: z.boolean(),
+    })
+    .optional(),
+  hit_point_cost_by_level: z.record(z.string(), z.number()).nullable().optional(),
+})
+
+export const SubclassImportSchema = z.object({
+  name: z.string(),
+  class_name: z.string(),
+  source: z.string().nullable().optional(),
+  description: z.string().nullable(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  card_image_url: z.string().nullable().optional(),
+  card_blurb: z.string().max(120).nullable().optional(),
+  features: z.array(ClassFeatureSchema),
+  new_toggles: z.array(NewToggleImportSchema).optional(),
+  /**
+   * Subclass-granted spellcasting (e.g. Eldritch Knight, Arcane Trickster) — supply
+   * `caster_progression` ("third" for these two) so the character sheet resolves spell slots.
+   * Most subclasses won't set this; only use it when the subclass itself grants spell slots.
+   */
+  spellcasting: ClassSpellcastingImportSchema.nullable().optional(),
+})
+
+export const FeatImportSchema = z.object({
+  /** Hand-authored catalog wiring: do not infer additional modifiers from prose/name. */
+  modifierWiring: z.literal("explicit").optional(),
+  linkedModifiers: z.array(z.record(z.unknown())).transform((value) => value as LinkedModifierInstance[]).optional(),
+  modifierRefs: z.array(z.string()).optional(),
+  name: z.string(),
+  source: z.string().nullable().optional(),
+  description: z.string().nullable(),
+  prerequisite: z.string().nullable().optional(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  category: z.string().nullable().optional(),
+  level_requirement: z.number().nullable().optional(),
+  /** Soft recommendations — class names (not hard eligibility). */
+  recommended_classes: z.array(z.string()).nullable().optional(),
+  /** Ability-catalog picks (discipline / class talent / exploit). Not for ASI / Fighting Style / Epic Boon milestones. */
+  isChoice: z.boolean().optional(),
+  choices: ChoiceOptionsSchema.optional(),
+  mechanics: z.array(ImportMechanicSchema).optional(),
+})
+
+/**
+ * Creatures & Companions import row.
+ * Prefer schema v2.0 structured records (category creature|companion + ability_scores, etc.).
+ * Legacy prose-only rows (name + description) are still accepted and parsed on persist.
+ */
+export {
+  CreatureImportSchema,
+  CreatureImportV2Schema,
+  CreatureImportLegacySchema,
+  CreatureImportDocumentSchema,
+  isCreatureImportV2,
+  CREATURE_IMPORT_SCHEMA_VERSION,
+  type CreatureImportRow,
+  type CreatureImportV2,
+  type CreatureImportLegacy,
+  type CreatureImportDocument,
+} from "@/lib/import/creature-import-v2-schema"
+
+import { CreatureImportSchema } from "@/lib/import/creature-import-v2-schema"
+
+/** Concrete v2 field spec — without this, models invent their own stat-block field names. */
+export const CREATURE_COMPANION_IMPORT_HINT = `For creatures[] (companions, summons, monsters — Eldritch Cannon, Steel Defender, Homunculus Servant, primal companions, etc.):
+- Always emit the full schema v2.0 record when the source has a stat block. Do NOT invent field names (no armor_class, hit_points, hit_points_formula, abilities, challenge_rating — unknown keys are silently dropped on import and the stat block is lost).
+- Required v2 fields: name; creature_type (e.g. "Construct"); size; alignment; category "companion" or "creature"; ac (string — formulas allowed, e.g. "12 + your Intelligence modifier"); hp (string — formulas allowed, e.g. "5 + five times your Artificer level"); hit_dice (string or null); speed { walk, fly, swim, climb, burrow: numbers or null, notes: string or null }; ability_scores { str, dex, con, int, wis, cha: { score: number, mod: string, save: string } } (mod/save are strings so companions can hold "+2 plus PB"); senses { darkvision, blindsight, tremorsense, truesight, passive_perception: numbers or null }; description.
+- Category branching: "companion" requires scaling { scales_with, notes } (e.g. { "scales_with": "Artificer level", "notes": "HP = 5 + 5 × level; AC = 12 + INT mod" }) and cr: null. "creature" requires cr (string) and scaling: null.
+- Nullable string fields: skills, proficiencies, gear, resistances, damage_immunities, condition_immunities, vulnerabilities, languages, ac_note, initiative_modifier; nullable number: xp, initiative_passive.
+- Traits/actions go in structured arrays — traits, actions, bonus_actions, reactions, legendary_actions: each entry { unlock_level_label, unlock_level_number, name, tag (e.g. "3/Day" or null), text }. Do not mash the whole stat block into description as one run-on line; keep description for flavor/summary prose.
+- Pair every summoned/attached companion with mechanics [{ "kind": "grant_creature", "creatureNames": ["<name>"] }] on the class/subclass feature that grants it, and emit the creatures[] row in the same JSON. Never leave a companion stat block only inside a feature description.`
+
+export const SpellImportSchema = z.object({
+  creator_url: z.string().max(512).nullable().optional(),
+  name: z.string(),
+  source: z.string().nullable().optional(),
+  card_image_url: z.string().nullable().optional(),
+  level: z.number(),
+  school: z.string(),
+  casting_time: z.string().nullable(),
+  range: z.string().nullable(),
+  components: z.array(z.string()).nullable(),
+  duration: z.string().nullable(),
+  concentration: z.boolean(),
+  description: z.string().nullable(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  classes: z.array(z.string()).nullable(),
+  psionic_augments: z.unknown().optional(),
+  companion_stat_block: z.record(z.unknown()).nullable().optional(),
+  companion_creature_names: z.array(z.string()).nullable().optional(),
+  linkedModifiers: z.array(z.record(z.unknown())).nullable().optional(),
+})
+
+export const ClassImportSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  icon: z.string().nullable().optional(),
+  creator_url: z.string().max(512).nullable().optional(),
+  source: z.string().nullable().optional(),
+  card_image_url: z.string().nullable().optional(),
+  card_blurb: z.string().max(120).nullable().optional(),
+  complexity: z.enum(["easy", "medium", "hard"]).nullable().optional(),
+  hit_die: z.number(),
+  primary_ability: z.array(z.string()).nullable(),
+  saving_throws: z.array(z.string()).nullable().optional(),
+  armor_proficiencies: z.array(z.string()).nullable().optional(),
+  weapon_proficiencies: z.array(z.string()).nullable().optional(),
+  /**
+   * Fixed tools (e.g. "Thieves' Tools") and/or choice phrasing
+   * ("Choose 3 Musical Instruments", "Choose one kind of Artisan's Tools").
+   * Choice phrases become builder tool pickers; fixed names grant proficiency.
+   */
+  tool_proficiencies: z.array(z.string()).nullable().optional(),
+  skill_choices: z
+    .object({
+      count: z.number(),
+      options: z.array(z.string()),
+      /** Always-granted skills (e.g. Psionics) that are not chosen from options. */
+      fixed: z.array(z.string()).optional(),
+    })
+    .nullable()
+    .optional(),
+  spellcasting: ClassSpellcastingImportSchema.nullable().optional(),
+  features: z.array(ClassFeatureSchema),
+  spell_list: z.array(z.string()).nullable().optional(),
+  starting_equipment_groups: z
+    .array(
+      z.object({
+        description: z.string(),
+        options: z.array(
+          z.object({
+            label: z.string(),
+            items: z.array(
+              z.object({
+                name: z.string(),
+                quantity: z.number(),
+              }),
+            ),
+          }),
+        ),
+      }),
+    )
+    .nullable()
+    .optional(),
+  starting_gold: z.number().nullable().optional(),
+  multiclass_prerequisites: z
+    .array(
+      z.object({
+        ability: z.string(),
+        minimum: z.number(),
+      }),
+    )
+    .nullable()
+    .optional(),
+  multiclass_prerequisite_groups: z
+    .array(
+      z.object({
+        options: z.array(
+          z.object({
+            ability: z.string(),
+            minimum: z.number(),
+          }),
+        ),
+      }),
+    )
+    .nullable()
+    .optional(),
+  multiclass_proficiencies_gained: z.array(z.string()).nullable().optional(),
+  special_ability: z
+    .object({
+      save_dc_ability: z.string(),
+      label: z.string().nullable().optional(),
+      dc_formula: z.enum(["8_plus_prof_plus_ability_mod"]).optional(),
+    })
+    .nullable()
+    .optional(),
+  new_toggles: z.array(NewToggleImportSchema).optional(),
+})
+
+export const BackgroundImportSchema = z.object({
+  name: z.string(),
+  card_image_url: z.string().nullable().optional(),
+  description: z.string().nullable(),
+  /** Optional book/product label; importer stamp fills when omitted. */
+  source: z.string().nullable().optional(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  skill_proficiencies: z.array(z.string()).nullable(),
+  tool_proficiencies: z.array(z.string()).nullable().optional(),
+  /**
+   * null = pre-2024 legacy background. The builder offers free +2/+1 or +1/+1/+1 ASI
+   * and any Origin feat — do NOT substitute zero-valued ability objects or invent a feat.
+   */
+  feat_granted: z.string().nullable(),
+  ability_bonuses: z.record(z.string(), z.number()).nullable(),
+  feature: z.object({ name: z.string(), description: z.string() }).nullable().optional(),
+  grants_spells: z.boolean().optional(),
+  granted_spells: z.record(z.string(), z.array(z.string())).nullable().optional(),
+  proficiencies: z
+    .object({
+      tools: z.array(z.string()).optional(),
+      vehicles: z.array(z.string()).optional(),
+      weapons: z.array(z.string()).optional(),
+      armor: z.array(z.string()).optional(),
+      languages: z.array(z.string()).optional(),
+    })
+    .nullable()
+    .optional(),
+  starting_equipment: z
+    .array(z.object({ name: z.string(), quantity: z.number() }))
+    .nullable()
+    .optional(),
+  /** Prefer this over a flat starting_equipment list when the source offers Choose A or B packages. */
+  starting_equipment_groups: z
+    .array(
+      z.object({
+        description: z.string(),
+        options: z.array(
+          z.object({
+            label: z.string(),
+            items: z.array(
+              z.object({
+                name: z.string(),
+                quantity: z.number(),
+              }),
+            ),
+          }),
+        ),
+      }),
+    )
+    .nullable()
+    .optional(),
+  starting_gold: z.number().nullable().optional(),
+})
+
+/** Prompt hint for background PDF / BYO extraction. */
+export const BACKGROUND_LEGACY_IMPORT_HINT = `Background ability scores and feats:
+- D&D 2024 backgrounds: set ability_bonuses to eligible abilities with value 0 (e.g. {"intelligence":0,"wisdom":0,"charisma":0}) or fixed +1/+2 values; set feat_granted to the Origin feat name (e.g. "Magic Initiate (Cleric)").
+- When the source says a Dark Gift pick (e.g. "A Dark Gift feat of your choice"), set feat_granted to that phrasing verbatim — e.g. "Choose one Dark Gift feat" or "A Dark Gift feat of your choice". Do NOT set feat_granted: null when ability_bonuses are present.
+- When the source offers a named Origin feat OR a Dark Gift (e.g. "Survivor or a Dark Gift feat of your choice"), keep the full or-phrasing in feat_granted — do NOT collapse to only the named feat.
+- Optional campaign gates on backgrounds: prerequisite_rules: [{ "category": "other", "value": "Ravenloft Campaign" }] (or Planescape Campaign) when the source implies a setting gate.
+- ability_bonuses keys MUST be exactly these lowercase names and no others: strength, dexterity, constitution, intelligence, wisdom, charisma. Never invent keys (especially never "desktop" — that is not an ability; use "dexterity").
+- Pre-2024 / legacy backgrounds (no fixed ASI or Origin feat): set ability_bonuses: null and feat_granted: null. Do NOT invent zero-valued ability objects or placeholder feats — the character builder offers the player a free +2/+1 or +1/+1/+1 allocation and any Origin feat pick.
+- Optional source: set source to the book/product name when known (e.g. "Player's Handbook", "Planescape: Adventures in the Multiverse", "Van Richten's Guide to Ravenloft"). The Dump Stat importer also stamps a source label at paste time if omitted.
+- For a fixed skill plus an unrestricted/faction fallback (e.g. "Arcana, the skill associated with your faction or one skill of your choice"), emit skill_proficiencies: ["Arcana", "One skill of your choice"]. Keep any faction-to-skill table in description; Dump Stat turns the choice phrase into a skill picker.
+- Extract Languages into proficiencies.languages (e.g. ["Two of your choice"] or ["One language of your choice"]). Keep choice phrasing — Dump Stat turns it into a language picker.
+- Tool choice phrasing belongs in tool_proficiencies (e.g. "Choose one kind of Artisan's Tools", "Choose one kind of Gaming Set", "Choose one kind of Musical Instrument") — Dump Stat turns these into tool pickers.
+- Equipment Choose A or B: use starting_equipment_groups as ONE group object with nested options[] — never a flat array of { label, items } packages. Required shape:
+  starting_equipment_groups: [{
+    "description": "Choose A or B:",
+    "options": [
+      { "label": "A", "items": [{ "name": "…", "quantity": 1 }, { "name": "Gold Pieces", "quantity": 8 }] },
+      { "label": "B", "items": [{ "name": "Gold Pieces", "quantity": 50 }] }
+    ]
+  }]
+  Put pouch GP for package A as a Gold Pieces item inside option A (or set background-level starting_gold). Do NOT put starting_gold on each option. Wrong (will be dropped): [{ "label": "A", "items": [...], "starting_gold": 8 }, { "label": "B", "items": [...] }].
+- Prefer quantity on the item (e.g. Parchment quantity 10) over parenthetical counts in the name.
+- Flat starting_equipment alone is package A only — use groups whenever the source says Choose A or B.
+- Classic "belt pouch containing N gp" packages (no Choose A/B): emit starting_equipment including a Belt Pouch item AND starting_gold: N. Do not drop the pouch when you set starting_gold.
+- Do not invent feat_granted from a separate feats chapter that only says a feat is "provided by some backgrounds" (e.g. Old Hand) unless that background's own text grants the feat.
+- Assign each Feature to the background whose toolset/theme it matches — do not attach a feature to the wrong background because of PDF column flow.
+- Do not copy d6 Ideals/Bonds/Flaws/Personality Trait tables into descriptions.`
+
+/** Cross-cutting name consistency for multi-pass library ↔ class/feat imports. */
+export const NAME_SOURCE_MATCHING_HINT = `Name and source matching (multi-pass imports)
+
+Custom ability libraries (disciplines, talents, exploits, upgrades, fusion/combo abilities, etc.) are often imported in a separate pass from the class or feat that references them. You do not need to resolve or embed those references yourself — the importer matches them by name after the fact. What you must do is be exact and consistent: use the identical name string, verbatim from the source text, every time an ability is named — whether it's the full write-up, a short grant reference in a class table/feature, or a prerequisite string on a feat or another ability. Also keep source_type/source_name consistent for the same ability across passes (e.g. always attribute a class-level talent to the class, not sometimes to a subclass it happens to be gated behind). If a name is capitalized or punctuated inconsistently in the source (e.g. running headers vs. body text), prefer the spelling used in the ability's own heading.
+
+Undefined class-specific terms (cross-pass flags):
+If an ability references a derived stat, resource, or term that reads as class-specific (capitalized, mechanically load-bearing — e.g. "Leadership modifier," "Ki save DC") and that term is not defined anywhere in the current extraction pass, do not silently treat it as ordinary prose. Note it in the entry's definition using the exact term as written (e.g. "References Warlord's Leadership modifier, defined in the class chapter") so a later pass that defines it can match by name.
+
+Action-economy gates vs resource spends:
+Some abilities in a resource-pool library are gated by action economy rather than spending that pool (e.g. "forgo an attack to issue this Order" with no Exploit Die spent). Do not assume every custom ability in an Exploit/Psi/maneuver library spends the pool — check each entry's own trigger / Execution text.`
+
+/** Applies to every content type — not only backgrounds. */
+export const GENERAL_SOURCE_CLEANUP_HINT = `Source text cleanup (all content types)
+- Omit chapter running heads, page numbers, and nav ribbons from every description field.
+- Repeated running-head or footer text (e.g. a pipe-separated list of section names) must never be copied into description, regardless of what you are extracting.
+- Doubled ALL-CAPS PDF glyphs (common in LaserLlama and similar homebrew PDFs): some copy-pastes repeat every capital letter, often with spaces between pairs. Collapse those runs into the intended word before extracting — never leave the doubled form in names, headers, ability abbreviations, or description text. Examples: "S ST T R R" → "STR"; "I IN N T T" → "INT"; "D DE E X X" → "DEX"; "T TR RA AI IT TS S" → "TRAITS". This only applies to ALL-CAPS runs (headers, stat abbreviations, section titles); leave mixed-case and normal prose alone.
+- Trailing superscript markers pasted as letters (common in KibblesTasty and similar homebrew PDFs): footnote/superscript markers on names often copy as a glued trailing capital letter — especially superscript K on custom/homebrew entries (e.g. "Returning WeaponK" → "Returning Weapon"). Before emitting JSON, strip marker letters from every name field (spells[], feats[], features[], traits[], equipment[], custom_abilities / abilities[], choice options, etc.). Do not leave the marker in the stored name. If a nearby legend defines what the marker means (homebrew vs SRD), use that to decide which rows need full extraction — but always output the clean name without the suffix.
+- Narrow OCR / line-join repair: fix clear copy-paste artifacts such as duplicated words ("to to cast") and missing whitespace at hard line breaks ("ImmutableWill" → "Immutable Will"). Never alter numbers, dice, costs, or other mechanical wording.
+- Use straight ASCII apostrophes and quotes in every name field ("Tinker's Magic", not "Tinker’s Magic") — curly quotes from PDF copy-paste break name-matched preset lookups. Descriptions may keep curly punctuation as written.`
+
+export const PREREQUISITE_RULES_IMPORT_HINT = `Campaign and other non-mechanical prerequisites (all content types)
+- When any item, feature, or trait has a campaign/content gate such as "Prerequisite: Planescape Campaign" or "Prerequisite: Ravenloft Campaign", preserve it as prerequisite_rules: [{ "category": "other", "value": "Planescape Campaign" }].
+- Use category "other" for campaign, setting, DM-permission, story, faction, or similarly informational prerequisites the builder cannot evaluate mechanically.
+- Keep mechanically evaluable feat prerequisites in the freeform prerequisite string (and level_requirement when known). The importer parses armor training (e.g. "Medium Armor Training") and ability-score gates (e.g. "Strength 13+") from that text.
+- Do not discard a prerequisite merely because it appears between an item heading and its description.`
+
+/** Marker legends near spell/option tables (homebrew vs SRD). */
+export const MARKER_LEGEND_SCAN_HINT = `Footnote / marker legends near tables
+Before extracting spell tables or option lists, check for a legend, footnote, or "Special Cases" callout near them that defines a marker (superscript letter, dagger, asterisk, etc.) attached to some names but not others. These markers commonly distinguish homebrew/custom entries (which need full extraction from this document) from standard SRD entries (which should resolve against the existing compendium and not be re-extracted). If you find such a marker, note in your own extraction which names carried it, and extract full entries only for those. PDF copy-paste often turns superscript markers into a trailing letter on the name (e.g. KibblesTasty superscript K → "Returning WeaponK"); strip that suffix from every emitted name while still honoring the legend for which rows are homebrew.`
+
+/** Brief grant + full write-up = one ability. */
+export const DUPLICATE_ABILITY_MERGE_HINT = `Duplicate references / same-ability merge
+The same ability is sometimes introduced twice in a source — once as a brief grant reference (a bullet inside another ability's list, or a one-line mention) and again later as a full write-up with its own heading and rules text (e.g. under a "Special Powers" or appendix-style section). These are one ability, not two. If you encounter a name you've already extracted, use the fuller/more detailed version as the entry's description and don't emit a second custom_abilities row — reuse the identical name string so the importer's own matching (see Name and source matching) doesn't need to deduplicate on your behalf.`
+
+export const EquipmentImportSchema = z.object({
+  name: z.string(),
+  source: z.string().nullable().optional(),
+  card_image_url: z.string().nullable().optional(),
+  category: z.string(),
+  subcategory: z.string().nullable(),
+  description: z.string().nullable(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  cost: z.object({ amount: z.number(), unit: z.string() }).nullable().optional(),
+  weight: z.number().nullable().optional(),
+  properties: z.record(z.unknown()).nullable().optional(),
+  requires_attunement: z.boolean().nullable().optional(),
+  magic_item_category: z.string().nullable().optional(),
+  rarity: z.string().nullable().optional(),
+  base_equipment_ids: z.array(z.string()).nullable().optional(),
+  selected_base_equipment_id: z.string().nullable().optional(),
+  base_equipment_filter: z.enum(["any_melee_weapon", "any_ranged_weapon", "any_weapon"]).nullable().optional(),
+  magic_effects: z.array(z.record(z.unknown())).nullable().optional(),
+})
+
+export const AbilityImportSchema = z.object({
+  /** Hand-authored catalog wiring: do not infer additional modifiers from prose/name. */
+  modifierWiring: z.literal("explicit").optional(),
+  linkedModifiers: z.array(z.record(z.unknown())).transform((value) => value as LinkedModifierInstance[]).optional(),
+  modifierRefs: z.array(z.string()).optional(),
+  name: z.string(),
+  card_image_url: z.string().nullable().optional(),
+  description: z.string(),
+  prerequisite: z.string().nullable().optional(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  repeatable: z.boolean().optional(),
+  source_type: z
+    .enum(["class", "subclass", "species", "background", "feat", "item", "compendium"])
+    .nullable(),
+  source_name: z.string().nullable(),
+  level_requirement: z.number().nullable(),
+  companion_stat_block: z.record(z.unknown()).nullable().optional(),
+  psionic_augments: z.unknown().optional(),
+  casting_time: z.string().nullable().optional(),
+  /**
+   * Activation cost/timing when the source labels it explicitly (Execution / Activation / Trigger).
+   * Distinct from casting_time (spell/psionic casting headers).
+   */
+  execution: z.string().nullable().optional(),
+  /**
+   * Every class/subclass named as able to learn this ability when the source lists one or more.
+   * Prefer this over collapsing multiple class names into source_name or prerequisite.
+   */
+  eligible_classes: z.array(z.string()).nullable().optional(),
+  range: z.string().nullable().optional(),
+  components: z.array(z.string()).nullable().optional(),
+  duration: z.string().nullable().optional(),
+  concentration: z.boolean().optional(),
+  isChoice: z.boolean().optional(),
+  choices: ChoiceOptionsSchema.optional(),
+  /**
+   * One-time Specialization sub-choice when `choices` already holds Discipline Talents
+   * (e.g. Psychokinesis Cryokinetic / Electrokinetic / Pyrokinetic with replacement AE tables).
+   */
+  specialization_choices: ChoiceOptionsSchema.nullable().optional(),
+  parent_ability_name: z.string().nullable().optional(),
+  ability_role: z
+    .enum([
+      "discipline",
+      "psionic_power",
+      "talent_pool",
+      "class_talent",
+      "knack",
+      "upgrade",
+      "weapon_mastery",
+      "bomb_formula",
+      "discovery",
+      "alchemist_bomb",
+    ])
+    .optional(),
+  mechanics: z.array(ImportMechanicSchema).optional(),
+})
+
+const UsesAtLevelImportSchema = z.object({
+  level: z.number(),
+  count: z.number(),
+})
+
+const UsesConfigImportSchema = z.object({
+  type: z.enum([
+    "fixed",
+    "proficiency",
+    "ability_modifier",
+    "custom_ability",
+    "at_level",
+    "class_resource",
+    "unlimited",
+    "special",
+  ]),
+  fixedAmount: z.number().optional(),
+  abilityModifier: z.enum(["STR", "DEX", "CON", "INT", "WIS", "CHA"]).optional(),
+  specialDescription: z.string().optional(),
+  atLevelTable: z.array(UsesAtLevelImportSchema).optional(),
+  atLevelMode: z.enum(["tier", "multiply_level"]).optional(),
+  recharges: z
+    .array(
+      z.object({
+        rest: z.enum(["short_rest", "long_rest"]),
+        amount: z.number().nullable().optional(),
+        amountFormula: z
+          .enum([
+            "half_class_level_round_up",
+            "half_class_level_round_down",
+            "ability_modifier",
+            "proficiency_bonus",
+          ])
+          .nullable()
+          .optional(),
+        amountFormulaAbility: z.enum(["STR", "DEX", "CON", "INT", "WIS", "CHA"]).nullable().optional(),
+        amountFormulaBonus: z.number().nullable().optional(),
+        amountFormulaMinimum: z.number().nullable().optional(),
+        maxPerLongRest: z.number().nullable().optional(),
+      }),
+    )
+    .optional(),
+  rechargeOverrides: z
+    .array(
+      z.object({
+        atClassLevel: z.number(),
+        recharges: z.array(
+          z.object({
+            rest: z.enum(["short_rest", "long_rest"]),
+            amount: z.number().nullable().optional(),
+            amountFormula: z
+              .enum([
+                "half_class_level_round_up",
+                "half_class_level_round_down",
+                "ability_modifier",
+                "proficiency_bonus",
+              ])
+              .nullable()
+              .optional(),
+            amountFormulaAbility: z.enum(["STR", "DEX", "CON", "INT", "WIS", "CHA"]).nullable().optional(),
+            amountFormulaBonus: z.number().nullable().optional(),
+            amountFormulaMinimum: z.number().nullable().optional(),
+            maxPerLongRest: z.number().nullable().optional(),
+          }),
+        ),
+      }),
+    )
+    .optional(),
+  restoreBySpellSlot: z
+    .object({
+      minSpellLevel: z.number(),
+      restores: z.number(),
+      pactOnly: z.boolean().optional(),
+    })
+    .optional(),
+  useShareKey: z.string().optional(),
+  classResourceKey: z.string().optional(),
+  classResourceAmount: z.number().optional(),
+  resourceCostWaiver: z.string().nullable().optional(),
+  resourceCostReduction: z.number().nonnegative().optional(),
+  classResourceCostMode: z
+    .enum(["fixed", "up_to_proficiency_bonus", "up_to_ability_modifier", "up_to_available"])
+    .optional(),
+  classResourceCostAbility: z.enum(["STR", "DEX", "CON", "INT", "WIS", "CHA"]).optional(),
+  dieType: z.enum(["d4", "d6", "d8", "d10", "d12", "d20"]).nullable().optional(),
+  dieSidesByLevel: z.array(UsesAtLevelImportSchema).optional(),
+  rechargeOnInitiative: z.union([z.boolean(), z.number()]).optional(),
+  /** At this class level and above, uses are unlimited (LaserLlama Rage at 20). */
+  freeUseAfterLevel: z.number().optional(),
+})
+
+export const ClassResourceImportSchema = z.object({
+  class_name: z.string(),
+  /** When the pool is granted entirely by a subclass feature (not the base class table). */
+  subclass_name: z.string().optional(),
+  resource_key: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+  uses: UsesConfigImportSchema,
+})
+
+/** Compendium language catalog row (standard / rare pools). */
+export const LanguageImportSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  pool: z.enum(["standard", "rare"]).optional(),
+  typical_speakers: z.string().nullable().optional(),
+  script: z.string().nullable().optional(),
+  source: z.string().nullable().optional(),
+  icon: z.string().nullable().optional(),
+  accent_color: z.string().nullable().optional(),
+  card_image_url: z.string().nullable().optional(),
+})
+
+export const ProposedClassResourceImportSchema = ClassResourceImportSchema.extend({
+  proposal_id: z.string(),
+  definition: z.string(),
+})
+
+export const ProposedCustomAbilityImportSchema = AbilityImportSchema.extend({
+  proposal_id: z.string(),
+  definition: z.string(),
+  choices: ChoiceOptionsSchema.optional(),
+})
+
+export const ImportProposalsSchema = z.object({
+  class_resources: z.array(ProposedClassResourceImportSchema).optional(),
+  custom_abilities: z.array(ProposedCustomAbilityImportSchema).optional(),
+})
+
+export const CardArtImportEntrySchema = z.object({
+  content_type: z.enum([
+    "class",
+    "subclass",
+    "species",
+    "background",
+    "spell",
+    "equipment",
+    "ability",
+  ]),
+  name: z.string(),
+  card_image_url: z.string(),
+  /** Disambiguate subclasses that share a display name across classes. */
+  class_name: z.string().nullable().optional(),
+})
+
+/** Internal validation shape for import content (not sent to OpenAI). Use `buildImportContentAiSchema` for AI extraction. */
+export function buildImportContentSchema(options?: { includeAbilities?: boolean }) {
+  const base = {
+    species: z
+      .array(
+        z.object({
+          name: z.string(),
+          source: z.string().nullable().optional(),
+          card_image_url: z.string().nullable().optional(),
+          description: z.string().nullable(),
+          prerequisite_rules: z.array(PrerequisiteRuleSchema).nullable().optional(),
+          creature_type: z.string().nullable().optional(),
+          size_options: z.array(z.enum(["Small", "Medium"])).nullable().optional(),
+          speed: z.number().nullable(),
+          size: z.string().nullable(),
+          traits: z.array(SpeciesTraitSchema),
+        }),
+      )
+      .optional(),
+    classes: z.array(ClassImportSchema).optional(),
+    class_resources: z.array(ClassResourceImportSchema).optional(),
+    subclasses: z.array(SubclassImportSchema).optional(),
+    backgrounds: z.array(BackgroundImportSchema).optional(),
+    spells: z.array(SpellImportSchema).optional(),
+    feats: z.array(FeatImportSchema).optional(),
+    creatures: z.array(CreatureImportSchema).optional(),
+    equipment: z.array(EquipmentImportSchema).optional(),
+    languages: z.array(LanguageImportSchema).optional(),
+    import_proposals: ImportProposalsSchema.optional(),
+    /** Map public image URLs onto existing compendium rows (Images from URL import). */
+    card_art: z.array(CardArtImportEntrySchema).optional(),
+  }
+
+  if (options?.includeAbilities) {
+    return z.object({
+      ...base,
+      abilities: z.array(AbilityImportSchema).optional(),
+    })
+  }
+
+  return z.object(base)
+}
+
+export type ImportContent = z.infer<ReturnType<typeof buildImportContentSchema>> & {
+  abilities?: z.infer<typeof AbilityImportSchema>[]
+}
+
+export type ImportContentWithAbilities = ImportContent & {
+  abilities?: z.infer<typeof AbilityImportSchema>[]
+}
+
+import { COMMON_MODIFIERS_IMPORT_HINT } from "@/lib/import/common-modifiers-import-hints"
+
+export const MECHANICS_IMPORT_HINT = COMMON_MODIFIERS_IMPORT_HINT
+
+export const CARD_BLURB_IMPORT_HINT = `For every class and subclass:
+- Always emit card_blurb as a separate, player-facing summary derived from the flavor description.
+- Keep card_blurb at 120 characters or fewer so it fits in two lines on builder detail heroes.
+- Write card_blurb as a "How it feels to play" sentence: use active, player-facing language and summarize the core gameplay loop.
+- Favor what the player repeatedly does in play (control, protect, bargain, build, transform, etc.), not lore or a list of class features.
+- Put 1–3 original sentences of player-facing flavor in description. Classes use this for "How it feels to play"; subclasses use it for "What this path offers". Write a unique summary — do not copy book prose verbatim.
+- Do NOT put "Becoming a [Class]" / "As a Level 1 Character" / "As a Multiclass Character" checklists, Core Traits tables, or the level progression table in description. Those are not flavor.
+- Do not copy progression instructions, prerequisites, level tables, or importer/editor guidance into card_blurb.
+- card_blurb supplements description and never replaces or truncates it.
+- On classes[] (not subclasses), always emit complexity: "easy" (Low), "medium" (Medium), or "hard" (High). This is builder-facing play difficulty, not CR.
+- Mage Hand Press class defaults (use these unless the user overrides): Alchemist medium, Captain medium, Craftsman hard, Dancer hard, Gunslinger medium, Investigator hard, Martyr medium, Necromancer hard, Vagabond hard, Warden medium, Warmage easy, Witch easy.
+- For other homebrew, judge from concurrent resources, option libraries, and spell-like systems the player juggles (simple martial loops → easy; several pools/choices → medium; crafting, minions, or stacked pickers → hard).`
+
+export const CHOICE_EXTRACTION_HINT = `When content requires a player to choose between fixed options (species lineage/ancestry/legacy, fighting style options listed by name, skill from a list, etc.):
+- Set isChoice: true on the trait or class feature (use null when not a choice)
+- Populate choices with { category, count, options: [{ name, description }] } or null when not applicable
+- Keep rules text in description; list each selectable option in choices.options
+- When the selected option can change on a rest, set choices.swappableOnRest: true and swapRestType to "short" or "long" from the source. Do not leave a rest-swappable adaptation looking like a permanent build choice.
+- Put each option's mechanical rules in that option's description (not only in the parent feature list). Dump Stat wires Common Modifiers per option from option descriptions (resistance, speeds, darkvision, etc.) and strips duplicates from the parent.
+- Split per-option vs shared benefits by where they belong: only what DIFFERS between rows goes in options[].description; a benefit that every option grants identically stays on the parent (description + mechanics[]), which applies on top of whichever option the player picks. Do not copy a shared benefit into all five options, and do not drop it because the feature is a choice.
+- Two-column benefit tables (Plane | Damage Resistance | Cantrip, legacy/lineage tables, patron tables): one option per table row, named exactly as the first column, with that row's resistance and cantrip sentence in the option description. A trailing sentence that applies to all rows ("you can cast this cantrip without material components, and your spellcasting ability for it is Intelligence, Wisdom, or Charisma") belongs on the parent — emit it as a parent spellcasting_ability mechanic (see Common Modifier wiring), not per option.
+- Species lineage/legacy spell ladders (Level 1 cantrip, character level 3 spell, character level 5 spell): put the cantrip and any speed/darkvision/resistance in the option description, keep the Level|Spell HTML table, AND emit one spells_known mechanic per unlock tier on that option (spellNames + unlocksAtClassLevel). Do not leave the 3/5 spells only in the table — Wood Elf Longstrider / Pass without Trace style grants must be explicit mechanics so they show on the sheet like Magic Initiate.
+- Choose-from-spell-lists (Circle of the Land land types, Investigator Antiquarian Thesis subjects Corpus/Mentis/Mortis/Oculus, domain/oath lists with multiple mutually exclusive tables, Psychokinesis-style specializations that each replace an Alternate Effects table): model as isChoice + choices.options where EACH option's description includes its own HTML <table> of spells (class-level columns for subclass lists; Point Cost | Alternate Effects for psi Alternate Effects). Do not mash every subtype's spell table into the parent feature description alone — the importer wires spells_known per option from that option's table. Use swappableOnRest: true (+ swapRestType) only when the source swaps on a rest; for \"whenever you gain a class level you can replace\" theses, set swappableOnRest: false. When the parent says thesis spells are treated as Rituals / have the Ritual tag, keep that sentence on the parent — enrichment stamps castAsRitual on the option grants.
+- Feat milestones that grant another feat (Epic Boon, Fighting Style feat picks, Origin Feat picks): do NOT use isChoice — use grant_feat via description phrasing and/or mechanics[] (see Common Modifier wiring). Never model those milestones as isChoice + choices.
+- The Ability Score Improvement feat itself is NOT a grant_feat — its body is +2 to one score or +1 to two. Prefer empty mechanics[] (hand presets wire asi_pool) or omit grant_feat entirely; never tag ASI as grant_feat. This holds even though 2024 class text says "you gain the Ability Score Improvement feat" — Dump Stat's own detection wires the milestone from the feature name; explicit grant_feat mechanics double-wire it.
+- Half-feats that raise one named score ("Your Wisdom ability score increases by 1" / "Increase your Dexterity score by 1") must keep that sentence verbatim. Dump Stat wires those as a fixed +1, not a player-choice pool. Do not rewrite a single named score as "one ability score of your choice".
+- Emit the class Ability Score Improvement feature ONCE at its first level (usually 4), even though the class table repeats it at 8/12/16 — Dump Stat's feat-milestone system grants the later slots automatically. Do not emit one ASI feature per milestone level.
+- Emit Expertise ONCE at its first level. Class tables repeat the name when you gain more picks (Investigator 9, Bard 9, Rogue 6) — keep that "two more" sentence on the original feature. Do not emit a second Expertise feature for the table reminder.
+- Named PHB Origin/General feats with complex spell/skill picks (Magic Initiate, Resilient, Keen Mind, Observant, Elemental Adept): prefer empty mechanics[] and avoid inventing isChoice shells — Dump Stat has name-matched presets. isChoice is fine for true option lists with no preset (homebrew).
+- If a feat grants a choice from a custom ability catalog that a class or subclass also draws from (a discipline, a class-level talent list, an exploit list, etc.) rather than granting a new feat pick, use isChoice: true with choices.options listing each eligible entry by its exact name (see Name and source matching). This is different from grant_feat milestones — the feat is granting a pick from an ability system, not another feat.`
+
+export const FEAT_CATEGORY_IMPORT_HINT = `For feats, set category when the source labels them:
+- "Origin" for Origin Feats (1st-level background-style feats)
+- "Dark Gift" for Ravenloft Dark Gift feats — NOT Planar Pact. Dark Gifts may be chosen whenever an Origin feat slot is offered (with DM permission). Headers like "Dark Gift Feat (Prerequisite: Ravenloft Campaign)" → category "Dark Gift".
+- "Epic Boon" for Epic Boons (19th+ level boons)
+- "Fighting Style" for fighting style options
+- "Planar Pact" for Planar Pact feats only (mutually exclusive pact feats like Fey Pact, Infernal Pact — "Can't Have Another Planar Pact Feat"). Do NOT use Planar Pact for Planescape Scion / follow-up feats or Ravenloft Dark Gifts.
+- "General" for other feats (default when unclear), including Planescape Scion follow-ups (Agent of Order, etc.). Scion of the Outer Planes itself is Origin (below).
+- Scion of the Outer Planes: category "Origin" with prerequisite_rules: [{ "category": "other", "value": "Planescape Campaign" }] (and prerequisite "Planescape Campaign"). Dump Stat has a preset for this feat, so empty mechanics[] is fine; if you do wire it, follow the Planar Infusion table shape — isChoice with choices { category: "Planar Infusion", count: 1 } and one option per plane (Chaotic Outer Plane / Evil Outer Plane / Good Outer Plane / Lawful Outer Plane / The Outlands) carrying only that plane's damage resistance + cantrip, plus a feat-level spellcasting_ability mechanic for the Intelligence/Wisdom/Charisma choice. Never flatten the table into one resistance, and never repeat the casting-ability choice on every option.
+Do not embed the category name only in description — use the category field.
+When the header says "Planar Pact Feat", set category to "Planar Pact" and put prerequisite text in prerequisite (not only in description).
+When the header says "Dark Gift Feat", set category to "Dark Gift" (never "Planar Pact").
+For well-known PHB feats (Alert, Tough, Magic Initiate, Archery, War Caster, etc.), prefer omitting mechanics[] when unsure — name-matched presets apply on load. Partial wrong mechanics (e.g. vision without visionType blindsight, grant_feat on ASI, empty damage_roll_modifiers) are worse than none.`
+
+export const SUBCLASS_IMPORT_HINT = `For subclasses:
+- Every subclasses[] row must include a concise card_blurb (120 characters or fewer) summarizing that subclass's fantasy and play style.
+- Prefer importing archetypes with the parent class (content type Class + subclasses): put every archetype in subclasses[] in the same JSON as classes[]. Use a Subclasses-only pass only when adding to a class already in the compendium, or when the user explicitly asks for subclasses alone.
+- Set class_name to the exact parent class name as it appears in the source (e.g. "Druid", "Fighter", "Sorcerer", "Psion") — must match classes[].name when importing with the class
+- Third-party subclass names (Psionic Archetype, Circle, Oath, Patron, etc.) still use the subclasses array
+- When extracting a full class chapter, include every archetype/subclass in subclasses[] alongside classes[] — do not leave archetypes for a later pass unless the user asks
+- Include all subclass features with their gain level
+- Spell list features should keep HTML tables in description when present
+- When a feature lets the player choose among several mutually exclusive spell lists (Circle of the Land land types, Investigator Thesis Corpus/Mentis/Mortis/Oculus, similar circle/domain/oath subtype tables): set isChoice: true with choices.options — one option per subtype — and put THAT subtype's HTML spell table in the option description (not only a mashed parent table). Prefer swappableOnRest + swapRestType when the source lets the choice change on a rest; use swappableOnRest: false when the source only allows replacing the choice on class level-up.
+- When a feature invents a new transformation / conditional state (e.g. "while in this form"), declare it once under new_toggles: [{ key: "rage_of_the_gods_form", name: "Rage of the Gods", grantingFeature: "Rage of the Gods" }] — then reference that key via requiresSheetToggle in mechanics[]. Do not invent unmatched toggle keys inside individual features.
+- A state with several mutually exclusive modes needs one gated key per mode, not one cosmetic parent toggle. For Elemental Mind's Primordial Aspect, use the recognized keys primordial_aspect_cold, primordial_aspect_fire, and primordial_aspect_lightning in the corresponding mechanics; do not emit a lone primordial_aspect toggle.
+- Do not model a mutable combat die (such as Unleashed Mind's Rampage Die) as a level-scaled dieSidesByLevel resource: its current size changes during play, not by class level. Preserve the exact feature and trigger wording so the dedicated play-state wiring can recognize it. The sheet already steps the die up after a turn you dealt damage, resets it to d4 after a turn without damage or while Incapacitated, allows one die per damage roll each turn, applies Exhaustion for holding d12 too long, and resets it on a rest — do not add a class_resources row for it.
+- Benefits that only hold while a play-state engine is in a given state must be gated, not granted outright: Uncontrollable Mind is condition_immunity ["Charmed", "Frightened"] with requiresSheetToggle "rampage_die_d8_plus" (a sheet-derived key — do not declare it under new_toggles). Tantrum, Unstoppable Rampage, and Empowered Psionics need no mechanics[]; the sheet drives them from the feature names and descriptions.
+- When the SUBCLASS itself grants spell slots that the base class doesn't have (e.g. Eldritch Knight, Arcane Trickster — the "Spellcasting"/"Spell Slots" feature has its own slot table separate from any full-caster class), set the subclass's own spellcasting field: { ability, caster_progression }. Use caster_progression "third" for a table that starts at level 3 and grants its first 2nd-level slot around level 7 (Eldritch Knight/Arcane Trickster pattern); use "half" only if the table instead starts at level 2 and matches a half-caster's pace. If the table doesn't match either canonical shape, also set explicit_slot_progression: [{ level, slots: [1st,2nd,...] }, ...] read directly from the table. For a custom Pact Magic table use caster_progression "pact", starts_at, and explicit_slot_progression (put the count in the unified slot-level column); do not substitute the Warlock table. An ability-only ritual/cantrip base does not replace this subclass config. Do NOT set this for subclasses that just add spells known/prepared to an already-full-caster base class (e.g. Divine Soul Sorcerer) — that's already covered by the base class's own spellcasting.`
+
+export const CLASS_RESOURCE_IMPORT_HINT = `For class_resources (custom class pools like Psi Points, Rage, Ki, Risk Dice):
+- Extract rows when a class level table lists named resource columns (Psi Points, Psi Limit, Rage, Risk Dice, etc.)
+- Set class_name to the exact parent class name from the source headers/table (e.g. "Psion")
+- When the pool is introduced entirely inside a subclass feature (not on the base class level table), also set subclass_name to that subclass's exact name (e.g. "Path of the Zealot") so the pool is not implied for every member of the parent class
+- resource_key: lowercase snake_case (e.g. "psi_points", "psi_limit", "warrior_of_the_gods_dice")
+- name: display name from the table header (e.g. "Psi Points")
+- When a level-scaling pool has no formal name in the source (referred to only as "the pool" / "your pool"), derive the display name from the granting feature (e.g. "Warrior of the Gods" → "Warrior of the Gods Dice") so repeated extractions converge — do not invent a flavor name
+- uses.type should be "at_level" with atLevelMode "tier" and atLevelTable [{ level, count }, ...] from the class table
+- **Spendable pools** (Rage, Ki, Psi Points, Exploit Dice, Battle Dice, Dances, Arcane Surge, etc.): include recharges as [{ "rest": "short_rest" }, { "rest": "long_rest" }] (object form preferred; bare ["short_rest","long_rest"] strings are accepted but discouraged)
+- **Battle Dice / pools that refill when you roll Initiative:** also set uses.rechargeOnInitiative: true (full pool) or a number for partial restore
+- **Captain Battle Dice:** spendable pool from the Battle Dice column (NdM) with rechargeOnInitiative. Battle Tactics auto-grants Bolster, Born Leader, Morale Boost, Rally, and Staggering Strike via grant_custom_ability — NOT a class_knacks / Maneuvers Known picker (Vagabond has the pick-N table). Subclass [Maneuver] features are extra named options.
+- **Captain Cohort Species:** keep the Humanoid Cohort species-trait list as its own isChoice feature (not merged into the Cohort type picker). Emit the nine species options (Dragonborn, Dwarf, Elf, Gnome, Goliath, Halfling, Human, Orc, Tiefling) and set choices.applyTo to companion / applyToCompanionFeature to Cohort so the traits wire onto the Cohort, not the Captain.
+- **Gunslinger Risk Dice:** short/long rest pool from the Risk Dice column; include dieSidesByLevel (d8/d10/d12). Dire Gambit → feature-gated restore of 1 die on Initiative and on a Critical Hit (resourceRefreshOnInitiative + resourceRefreshOnCriticalHit + classResourceAmount 1). Do not set rechargeOnInitiative on the Risk Dice pool. Keep "expend one Risk Die" on maneuvers. Base Maneuver Options (Bite the Bullet, Blindfire, Dodge Roll, Grazing Shot, Maverick Spirit, Skin of Your Teeth) are auto-known via Risk + grant_custom_ability — NOT a class_knacks picker. Always extract Skin of Your Teeth (PDF places Maneuver Options between Deadeye and Gun Tank). Include Pistolero. Do not contaminate with Captain/Vagabond-only Battle Die maneuvers.
+- **Martyr Spell Uses:** spendable long-rest pool from the Spell Uses column. Hit Point Spellcasting spends current HP from the table (not modeled as normal slots); the sheet deducts that HP on cast.
+- **Martyr Divine Respite:** one class feature at the level it is gained (usually 9). Emit hit_dice_restore (hitDiceRestoreAmount 3, hitDiceRestoreByLevel 13→6 and 17→10) plus uses usesFixed 1 / usesRecharge long_rest. Set sheetDisplay restDialogues (not abilitiesActions or combatActions). Keep the short-rest and scaling sentences on that same feature. Do not emit leftover features at 13/17 that only say the number of Hit Point Dice increases.
+- **Martyr Undying:** Passive when reduced to 0 HP (not a Reaction). Keep \"immediately use your Miraculous Healing (no action required)\" on the same feature. Pair with uses usesFixed 1 / usesRecharge long_rest.
+- **Martyr Improved Sacrificial Strike:** emit as its own Bonus Action that replaces Sacrificial Strike (replace_feature replacedFeatureNames [\"Sacrificial Strike\"], spendHitPoints 10, extra 20 Radiant). Keep the 11 and 17 sentences on that same feature (firstUseNoActionFromLevel 17). Do not emit a leftover 17-only \"first use without a Bonus Action\" row, and do not emit power_rider.
+- **Martyr Max Spell Levels:** special cap (resource_key "max_spell_level") from the Max Spell Levels column — not a spendable pool and not normal caster progression.
+- **Investigator Ritual Level / Finisher / Rushed Incantation / Trinkets:** Ritual Level = special cap; Finisher = special NdM rider with resource_key "finisher" (never "finisher_dice"); Rushed Incantation + Trinkets = spendable short-regain-1 / long-all pools. Finisher / Improved Finisher extra damage is optional — emit power_rider parentPowerNames [\"Attack\", \"Unarmed Strike\"], weaponDamageMenu true, selectable true (Finisher: classResourceKey \"finisher\", defaultSelectedWhenToggle \"below_half_hp\", menuConditionLabel \"Bloodied\"; Improved Finisher: bonusDice \"1d8\"). Do not emit damage_roll_modifiers or on_hit_trigger for those optional dice.
+- **Mage Hand Press Warden Interrupt:** Interrupt column → class_resources.interrupt (short rest regain 1 / long rest all). Do not confuse with KibblesTasty Warden Endurance Dice — if "Warden" already exists in the compendium, keep the source name "Warden" in JSON; the import UI will ask the user what to rename it to (suggestion: "Warden (Mage Hand Press)").
+- **Guardian Tactics:** Block / Challenge / Grasp as a free Bonus Action menu (Dump Stat wires resource_ability_menu); ally/enemy effects stay play-time. Extended Tactics widens ranges to 10 feet.
+- **Necromancer Charnel Touch:** spendable pool equal to 5 × class level — uses must be { type: \"at_level\", atLevelMode: \"multiply_level\", atLevelTable: [{ level: 1, count: 5 }], recharges: [{ rest: \"long_rest\" }] }. Do not use uses.type \"multiply_level\". The feature uses classResourceAmount 5 + classResourceCostMode \"up_to_proficiency_bonus\" and two melee special_attack profiles: (1) damageFromResourceSpend true, spendResourceOnHit true, criticalDamageMultiplier 2, Necrotic damage; (2) from level 2, Healing your Thralls — healFromResourceSpend true, healTarget \"controlled_companion\", unlocksAtClassLevel 2 (no attack roll; restore HP equal to points spent).
+- **Necromancer Spellcasting:** INT full prepared caster — classes[].spellcasting { ability: \"Intelligence\", caster_progression: \"full\", prepared: true } plus progression[] from the Cantrips / Prepared Spells columns (3 cantrips + 4 prepared at 1st; cantrips 4 at 4th / 5 at 10th; prepared scales to 22 at 20th). Do not put spellChoiceGrants on the Spellcasting feature — cantrips and prepared spells come from progression[] (the class spell picker). Populate spell_list from the official Spell / School / Special tables — Dump Stat keeps that list on the class and stamps matching catalog rows on import. Extra always-prepared grants (Animate Dead) stay on their own features. Do not invent a \"table missing level-10 cantrip\" editorial note — the source table shows 5 cantrips at 10th.
+- **Necromancer Thralls / CR Total:** special caps (count + combined CR, fractions like 1/4 allowed), not spendable pools and not class_upgrades pickers. Import thrall creatures[] with the class; Thralls → grant_creature with BOTH creatureNames and creatureChoiceOptions (the latter is only the player-pick subset), choiceCountByLevel matching the Thralls column (1/2/3/4/5/6 at 2/3/7/11/15/19), creatureCombinedCrByLevel matching CR Total (1/4, 1/2, 1, 2, 3, 4 at 2/3/5/9/13/17), creaturePickOnRest short_or_long_rest, and sheetDisplay restDialogues so the rest overlay offers Animate Thralls. Deadnaught is a companion (level-scaled HP).
+- **Necromancer Dead Space:** emit equipment_and_magic_items with itemOptions [\"Bag\",\"Cloak\",\"Backpack\"], choiceCount 1, allowCustom true; uses with usesFixed 12 and no rest recharge (occupancy counter); player_note with notePrompt \"Dead Space notes\"; and inventory_container with capacityMode \"slot_count\", capacityAmount 12, contentKinds [\"corpse\",\"companion\",\"freeform\"], maxCreatureSize \"Medium\", linkHostItem true (linked host appears in Gear with Contents). Preserve Magic-action and Short-Rest relinking sentences. Always set activation.action plus sheetDisplay abilitiesActions (utility Magic action), not combatActions.
+- **Necromancer Thrall Rush:** activation.onInitiative + sheetDisplay combatActions. Do not invent an Action/Bonus Action cost — it fires when Initiative is rolled.
+- **Necromancer Overcharged Thralls:** on_creature_death_trigger with creatureFilter ally (thralls you control, including released). Restore Charnel Touch equal to Necromancer level is play-time; do not emit a spendable uses pool on this feature.
+- **Necromancer Death Knight Extra Attack:** extraAttackCount 1 plus power_rider reminding that one attack can be replaced with an action cantrip. Combat Research already carries Charnel Touch-as-Bonus-Action via power_rider.
+- **Necromancer critical spellcasting:** attack_roll_modifiers must use attackTarget \"spell\" (never \"all\") and criticalHitMinimum 19, improving to 18 at level 14, so weapon attacks do not inherit the spell-only critical range.
+- **Necromancer Improved Thralls:** immunities and other thrall-only benefits belong to attached companions, not the player. Set choices.applyTo to companion and applyToCompanionFeature to Thralls, keep isChoice false so every option auto-applies, and emit condition_immunity (Charmed, Frightened) on the feature. Do not emit player condition_immunity or damage_immunity mechanics.
+- **Necromancer Lichdom:** emit damage_immunity for Necrotic and Poison plus condition_immunity for Exhaustion and Poisoned, and vision Truesight 120. Preserve Undead creature type, turn immunity, and Spirit Jar revival as narrative rules unless a dedicated mechanic exists.
+- **Necromancer subclass Charnel riders:** use power_rider parentPowerNames ["Charnel Touch"] for Charnel Drain/Resilience/Toxin/Voltage/Veil and Lichdom riders that alter Charnel Touch. These are reminders on the Charnel Touch action; do not invent unconditional HP, immunity, or weapon-reach modifiers.
+- **Necromancer subclass resource menus:** Vampiric Transformation, Charnel Aura, Domination Spells, Spell-Stitching, Quick Stitch, and Self-Stitches use resource_ability_menu with classResourceKey "charnel_touch" and structured menuOptions [{ name, description, resourceCost }]. Per-use forms/stitches are NOT build-time isChoice/choices selections.
+- **Necromancer Pharaoh Channel Divinity:** two shared uses; Short Rest restores one and Long Rest restores all; 15 Charnel Touch restores one. Ankh of Radiance and Scarab of Judgement spend the same useShareKey, not independent pools.
+- **Necromancer conditional forms:** Umbral Form must declare new_toggles key "umbral_form_active"; gate its Grappled/Prone immunities and equal-to-walk Climb Speed with requiresSheetToggle. Never borrow another class's same-named Umbral Form resistance preset. Whirlwind of Sand immunities only exist during its movement and must not aggregate as permanent character immunities.
+- **Dancer:** Dances = spendable uses from Dancer 2 (short rest amount: 1 + long rest all; first atLevelTable row must be level 2); Dance Die = die-size special resource (dieSidesByLevel from 2), not a depleting pool. Momentum (Acrobat) = at_level combat tracker (cap 1→3 at 14), subclass_name Acrobat — not a long-rest pool and not type special. Unarmored Defense = 10 + DEX + CHA (wording may be "10 plus your Dexterity and Charisma modifiers"). Grand Finale is an Attack-action rider while Dance is active — not mechanics kind action / activation.action. Deadly D4s is optional 2d4 damage replacement for 1d4/1d6/Unarmed. Dervish Firearms is optional 3d4 only for Firearm weapons that already deal 2d4 — do NOT emit weapon_damage_die_override (that rewrites NdX→Nd4, which is wrong). Dervish Fighting (and similar optional weapon riders) should emit weapon_sheet_badge (badgeLabel, whenDamageDice [1d4, 1d6], includeUnarmed) so matching weapons show a named info badge. Dance Styles: stub feature + choices.optionsSource class_upgrades + resourceKey dance_styles_known; put style bodies only in import_proposals.custom_abilities (ability_role upgrade), not duplicated as choices.options prose.
+- **Craftsman:** Masterwork Bonus = special Class Cap (not spendable). Thunderlords Charge Points = spendable multiply_level pool (long rest) with subclass_name \"Thunderlords' Guild\" (subclass-gated). Do not model "uses equal to Masterwork Bonus" as spending masterwork_bonus — enrichment creates a separate at_level tracker. Masterwork weapon/armor live math uses sheet toggles masterwork_weapon_active / masterwork_armor_active.
+- **Dancer Momentum:** subclass-gated class_resources.momentum with subclass_name "Acrobat" (or the Momentum archetype); uses.type at_level with atLevelTable [{level:3,count:1},{level:14,count:3}] and no recharges (combat tracker). Spend phrases on the Momentum feature.
+- **Warmage:** Base class is INT cantrips only (classes[].spellcasting ability Intelligence, no caster_progression). Tricks / Tricks Known = special choice count + class_knacks; Cantrip Bonus Dice = special rider for Warmage Edge; Arcane Surge = spendable uses (2→3; short regain 1 / long all; Initiative restore 1 at L20). Cantrip spellChoiceGrants must be incremental. House of Bishops → subclass third caster (prepared Wizard list). House of Kings maneuvers are auto-granted — not Tricks picks.
+- **Occultist (KibblesTasty):** WIS full caster with Spells Known (classes[].spellcasting { ability: \"Wisdom\", caster_progression: \"full\", prepared: false }). Occult Rites → occult_rites_known (special) + optionsSource class_knacks; swappableOnRest false (level-up swap only). Emit traditions in top-level subclasses[] (never nest under classes[0].subclasses). Tradition-specific rites stay ability_role knack with source_type subclass / tradition name. Distinct from Mage Hand Press Witch and from Investigator Occultist (pact magic). Do not dump kibbles-spells wholesale when the class already has spells[].
+- **Beastheart (MCDM):** Ferocity → class_resources.ferocity (special companion-owned tracker; builds in combat / spends on ferocity actions & exploits — no class level table). Companion → grant_creature + creatures[] (category companion) with signature attack tag \"Signature Attack\" and ferocity-cost actions. Primal Exploits → primal_exploits_known (special) + optionsSource class_knacks. Infernal/Nature Exploits are subclass isChoice options (not ability_role knack — would pollute Primal Exploits). Companion Bond is a short unlock blurb; bonds live in subclasses[]. WIS is exploit save DC only — do not set classes[].spellcasting.
+- **Warden (KibblesTasty):** Endurance Dice → class_resources.endurance_dice (at_level + dieSidesByLevel; short/long recharge). Also emit endurance_die_size as a special die-size resource (d8→d10→d12). Primal Manifestations → class_resources.primal_manifestations (special; never primal_manifestations_known) + optionsSource class_knacks; swappableOnRest false (level-up swap only). Empowered Endurance → uses.rechargeOnInitiative: 1 on endurance_dice. Warden Bond is a short unlock blurb; bonds live in subclasses[] (Elemental Soul, Beasthide, …). Manifestation library = import_proposals.custom_abilities ability_role knack. Distinct from Mage Hand Press Warden (Interrupt / Survive) — keep source name \"Warden\"; collision UI handles rename.
+- **Inventor (KibblesTasty):** Upgrades column → class_resources.upgrades (special choice count; never a spendable pool) + Specialization Upgrade optionsSource class_upgrades. Each upgrade is ability_role upgrade (subclass source_name for specialization lists; Shield/Tool Proficiency are source_type class). INT half caster with Spells Known — classes[].spellcasting { ability: \"Intelligence\", caster_progression: \"half\", prepared: false }; incremental spellChoiceGrants (3 at 2nd → 12 at 19th). Inventor Specialization is a short unlock blurb; specializations live in subclasses[] (Gadgetsmith, Golemsmith, Infusionsmith, Potionsmith, Thundersmith, Warsmith, Fleshsmith, Cursesmith, Runesmith, Relicsmith). Golemsmith Mechanical Golem → grant_creature + creatures[] companion. Runesmith: class_resources.runes_marked (special subclass-scoped cap 2→5; never a spendable pool) from Runic Marks; base runes stay on Runic Effects; glyph spells may use school labels like \"Evocation (glyph)\". Cursesmith Forbidden Artifact properties are an isChoice on the feature (count grows with PB), not duplicate upgrade rows. Relicsmith Justicar Savant → additional Ordained Path isChoice. Do not dump kibbles-spells wholesale when spells[] already exists; put stub provenance in description (not a non-schema note field).
+- **Alternate Sorcerer (LaserLlama):** Point-pool CHA full known caster (Sorcery Points, not slots). Emit sorcery_points + spell_limit (special) + metamagics_known (special 2→6 at 2/5/9/14/19). Metamagic → optionsSource class_knacks + resourceKey metamagics_known; library rows are ability_role knack with source_name \"Alternate Sorcerer\" (never invent ability_role metamagic; never attach to SRD Sorcerer). Keep Sorcery Point cost sentences verbatim. No \"Subclass Feature\" placeholders — Origins in subclasses[]. Draconic Sorcery needs Dragon Ancestor / Resilience / Spells at 3rd (not a gap stub).
+- **Alternate Barbarian (LaserLlama):** Rage + Exploit Dice + Exploits Known. Emit class_resources.rage (resource_key \"rage\" not \"rages\"; short regain 1 / long all; uses.freeUseAfterLevel: 20 for Unlimited — never a placeholder count of 100), exploit_dice (at_level + dieSidesByLevel), and exploits_known (special choice count). Savage Exploits → optionsSource class_knacks + resourceKey exploits_known + choiceCountByLevel from the Exploits Known column. Shared exploit library rows need ability_role knack + eligible_classes including \"Alternate Barbarian\" (or \"Barbarian\" — fuzzy match covers both). Path ancestry/spirit pickers (Giant Bloodline, Draconic Ancestry, Heart of Chaos, Bestial Spirits) should be isChoice when listed; Mutant Mutations catalogs may stay HTML unless wiring a real picker.
+- **Alternate Ranger (LaserLlama):** WIS half prepared caster. Emit class_resources.quarry (WIS-mod spendable; short regain 1 / long all; restoreBySpellSlot; Tireless → rechargeOverrides at 10 for full short-rest restore), quarry_die (special die size with dieSidesByLevel d4→d12 — never park die sides only in atLevelTable), and knacks_known (special). Knacks → optionsSource class_knacks + resourceKey knacks_known; library rows are ability_role knack with source_name \"Alternate Ranger\" (never bare \"Ranger\"). Name the class \"Alternate Ranger\" to avoid PHB collision. Bounty Hunter Martial Exploits → inline choices.options (NOT a second class_knacks picker — would pollute Knacks); High Degree → subclass-scoped special cap exploit_degree (1/2/3). Fighting Style may be grant_feat Fighting Style even when the style list is missing from the paste.
+- **Alternate Monk (LaserLlama):** Name the class \"Alternate Monk\" (never bare \"Monk\"). Emit class_resources.alternate_monk_ki_points (resource_key must be prefixed — never bare \"ki\" / \"ki_points\" / \"focus_points\"; pool ≈ Monk level + PB + 1 via atLevelTable; short/long recharge), martial_arts_die (special dieSidesByLevel d6→d12 — not a spendable pool), and techniques_known (special). Mystic Techniques → optionsSource class_knacks + resourceKey techniques_known + choiceCountByLevel from the Techniques Known column; technique library rows are ability_role knack with source_name \"Alternate Monk\" + eligible_classes [\"Alternate Monk\"]. Way of the Brawler Savage Exploits → inline choices.options from Brawler-eligible LaserLlama exploits (NOT a second class_knacks picker — would pollute Techniques) + subclass-scoped exploit_dice / exploits_known / exploit_degree. This class uses ASI at 19th (not Epic Boon) — emit ASI features at 4/8/12/16/19 as tabled. Signature Tradition Techniques are grant_custom_ability (do not count against techniques_known).
+- **Alternate Rogue (LaserLlama):** Name the class \"Alternate Rogue\" (never bare \"Rogue\"). Emit exploit_dice (at_level count 2/3/4/5 at 2/5/11/17 + dieSidesByLevel d4→d10) and exploits_known (special 2→8). Devious Exploits → optionsSource class_knacks + resourceKey exploits_known + choiceCountByLevel from the Exploits Known column. Shared exploit library rows need ability_role knack + eligible_classes including \"Alternate Rogue\" (or \"Rogue\" — fuzzy match covers both). Subclass \"X Exploits\" signature tables are grant_custom_ability auto-grants (not knack picks / do not count against exploits_known). Saboteur Alchemical Explosives stay subclass-scoped — never put eligible_classes Alternate Rogue on bomb rows (would pollute Devious Exploits). Level 6 is Uncanny Dodge (Expertise already scales on the L1 feature — do not mash the names).
+- **Alternate Fighter (LaserLlama):** Name the class \"Alternate Fighter\" (never bare \"Fighter\"). Emit exploit_dice (at_level count 2→6 at 2/4/8/12/16 + dieSidesByLevel d6→d12) and exploits_known (special 2→11). Martial Exploits → optionsSource class_knacks + resourceKey exploits_known + choiceCountByLevel. Shared exploit library rows need ability_role knack + eligible_classes including \"Alternate Fighter\" (or \"Fighter\" — fuzzy match covers both). Fighting Style is grant_feat (styles also in feats[] category Fighting Style); Styles Known scales 1/2/3/4 at 1/6/12/18. Subclass \"X Exploits\" signature tables are grant_custom_ability. Runecarver Runes / Sylvan Archer Enchanted Shots / Tinker Schematics are inline isChoice options on the granting feature (NOT eligible_classes Alternate Fighter — would pollute Martial Exploits). Relentless → exploit_dice.uses.rechargeOnInitiative true. This class uses ASI at 19th (not Epic Boon).
+- **Vagabond Battle Dice / Maneuvers:** Battle Dice column → class_resources.battle_dice with dieSidesByLevel + rechargeOnInitiative. Battle Tactics → optionsSource class_knacks + choiceCountByLevel from Maneuvers column (not Gunslinger auto-grant; not choices.resourceKey battle_dice). Class maneuvers are ability_role knack; subclass [Maneuver] features are auto-known — do not emit them as knack picks. Mage Brand Max Slot Level → subclass-scoped special cap (mage_brand_max_slot_level); Spellbrand casting spends Battle Dice (no normal slots).
+- **Witch Hexes / Grand Hexes:** CHA full prepared caster (classes[].spellcasting). Hexes = Hex:… cantrips via spells_known + hexes_known special cap (incremental spellChoiceGrants with unlocksAtClassLevel — not cumulative totals). Grand Hexes → resource_key grand_hexes + feature isChoice options (Abominable Familiar is an option, not an auto-grant). Do not put Hexes in custom_abilities.
+- **Artificer (WotC 2024):** INT half prepared caster. Replicate Magic Item table columns → import_proposals.class_resources: plans_known (special; 4→8 at 2/6/10/14/18) and replicate_magic_items (special cap; 2→6) — never spendable pools, and the feature itself is NOT isChoice (plans resolve against magic items at play time; do not emit an empty choices shell). Tinker's Magic → spells_known Mending + uses INT / long rest. Flash of Genius → uses INT / long rest. Eldritch Cannon (Artillerist), Steel Defender (Battle Smith), and the Homunculus Servant spell's construct → schema v2 creatures[] companion rows (scaling formulas like \"5 × your Artificer level\") + grant_creature on the granting feature/spell. Armor Model → isChoice with Guardian/Infiltrator/Dreadnaught options carrying their own rules text. Keep subclass \"X Spells\" level tables as HTML tables in descriptions. Homunculus Servant is also a spells[] row with its full description.
+- **Counters and caps** (Exploits Known, Psi Limit, Hexes Known, Ritual Level, Max Spell Levels, Tricks Known, Thralls, CR Total, Masterwork Bonus, Finisher): use type "special" with atLevelTable and no recharges — these render as static caps, not depleting pools
+- **Bloodied gates:** use requiresSheetToggle "below_half_hp" (built-in Bloodied when HP ≤ half). **Dance Style riders:** use "while_dancing" for generic styles; when a subclass ability only applies to one named style (Dueling Stance, Inspiring Chant, Pantomime), use a per-style toggle (dance_style_*). **Dance Styles picker:** choices.optionsSource "class_upgrades" + ability_role "upgrade" on base style custom_abilities (resourceKey dance_styles_known). Saves vs Frightened: checkConditionTypes ["Frightened"], not conditionNote.
+- **Weapon damage die rewrite** (rare): mechanics kind weapon_damage_die_override rewrites NdX → Nd(sides) only. Do **not** use it for Dancer Deadly D4s (1d4/1d6/Unarmed → optional 2d4) — keep that as rules text / player_note.
+
+- **Weapon Mastery** table columns do NOT become class_resources — wire the tier table into the Weapon Mastery feature's choices.choiceCountByLevel instead
+- **Weapon Mastery is limited to weapons the class is proficient with.** Do not emit an options list; Dump Stat builds it from weapon_proficiencies. This only works when you copy the Weapon Proficiencies line VERBATIM, including any qualifier — e.g. "Martial weapons that have the Finesse or Light property" (Rogue, Dancer) or "Martial weapons that have the Light property" (Monk). Flattening those to plain "Martial weapons" wrongly offers Greataxes and Longbows as mastery picks. When the mastery feature itself narrows the pool further (Barbarian: "Simple or Martial **Melee** weapons"), keep that wording in the feature description
+- When the table has a separate "Die Size" / "Die Type" column alongside the pool count (e.g. Psionic Energy Dice: d6→d8→d10→d12 as the Number column also grows), set uses.dieSidesByLevel: [{ level, count: <die sides as a number, e.g. 6/8/10/12> }, ...] in addition to atLevelTable — do not drop the die-size progression just because it scales separately from the count
+- Also extract class_resources when rules text clearly defines a level-scaling pool even without a full table
+- **recharges vs usesRecharge:** class_resources rows use uses.recharges: [{ "rest": "long_rest" }] (array of objects, ONLY on class_resources); feature/ability mechanics[] use usesFixed + usesRecharge: "long_rest" (string enum, ONLY inside a uses mechanic). Never put usesRecharge on a class_resources row or recharges[] inside mechanics[]`
+
+export const CUSTOM_CLASS_IMPORT_HINT = `For homebrew/custom classes (e.g. <Designer> <Class Name>, Gunslinger):
+- Use the class name exactly as it appears in the source text's own headers and class table (e.g. "Psion," not an invented designer-prefixed variant) unless the user has explicitly told you a disambiguating prefix is required — do not default to prefixing the credited designer's name onto the class name. If a prefix convention is needed to avoid colliding with another compendium entry, that's a decision for the user to confirm, not something to infer from a byline or credits page.
+- **Known same-name collisions:** Mage Hand Press Warden ≠ KibblesTasty Warden (Endurance Dice / Primal Manifestations). Keep the source header name "Warden" in JSON; Dump Stat's collision UI will ask the user to choose a rename (suggestion: "Warden (Mage Hand Press)" or "Warden (Kibbles Tasty)") when the other already exists — do not invent a prefix unless the user asks.
+- That exact class name is the canonical string other passes must match (spells[].classes, source_name on abilities, subclass class_name) — see Name and source matching.
+- Put the full class in classes[] with hit_die, complexity ("easy" | "medium" | "hard"), armor_proficiencies, weapon_proficiencies, tool_proficiencies (top-level string arrays — NEVER {"armor":[...],"weapons":[...],"tools":[...]}), saving_throws, and all class features by level
+- weapon_proficiencies entries keep the source's qualifier text intact ("Martial weapons that have the Finesse or Light property"), never simplified to "Martial weapons" — attack proficiency AND the Weapon Mastery picker both read this list
+- tool_proficiencies: fixed tools (e.g. "Thieves' Tools", "Herbalism Kit", "Alchemist's Supplies") and/or choice phrasing ("Choose 3 Musical Instruments", "Choose one type of Artisan's Tools or Musical Instrument", "Choose one kind of Artisan's Tools") — Dump Stat turns choice phrases into tool pickers
+- Always emit skill_choices from the Skills: line: { count, options } for "Choose N from …"; when the line grants a fixed skill plus picks (e.g. "Psionics, and choose two from Deception, History, …"), set fixed: ["Psionics"] and put only the choosable skills in options
+- Put each subclass/archetype/path in subclasses[] in the SAME JSON as the class (never omit archetypes from a Classes pass) with class_name set to that same parent class name
+- Archetype unlock features (name like "Psionic Archetype"): short description only — do NOT emit isChoice with stub options naming each archetype; Dump Stat uses subclasses[] for the real pick
+- Psion Secondary Discipline / Third Discipline: isChoice true with choices { category: "Psionic Discipline", count: 1, options: [] }. Prefer the name "Secondary Discipline" (not "Second Discipline")
+- Psion Psionic Talents: isChoice true with choices { category: "Psionic Talent", count: 2, options: [] } — do NOT set optionsSource "class_talents" (that is for General/Class Talents lists). Enrichment sets known_discipline_talents from the feature name
+- Do NOT embed the class level progression table or "Becoming a [Class]" / multiclass checklists in classes[].description — only a short original flavor summary ("How it feels to play"); table data becomes features[] and class_resources[]
+- Extract starting_equipment_groups when an Equipment block lists choice groups (a)/(b)/(c) and fixed items; mirror ONE group { description, options: [{ label, items: [{ name, quantity }] }] } — never a flat [{ label, items }] array; use labels A/B/C
+- **Class-specific / non-SRD weapons:** if starting equipment or class features introduce a weapon that is not a standard SRD item (Revolver, Palisade Gun, etc.), emit a full equipment[] row in the SAME JSON — name, category "Weapon", subcategory, cost, weight, properties.damage, properties.properties (Ammunition / Firearm / Reload / Recoil tags as written), properties.mastery, and the source's property rule text in description when it defines a new property (Firearm, Recoil). Do not only list the name in starting_equipment_groups — Dump Stat flags named starting gear that has no catalog or batch equipment[] row
+- Disciplines, talents, or invocation-like options with point costs should be class/subclass features; note psi/point costs in description
+- Custom spells and feats in spells[] and feats[]; set spell classes to include the custom class name; each spells[] stub needs level, school (use "Unknown" when absent), and concentration (boolean, default false)
+- When a class feature grants named benefits that use different action economies (Bonus Action vs once-per-turn / Passive D20 Test), emit each named benefit as its own features[] row at the same level. Example: Martyr Sacrifice → Sacrificial Strike (Bonus Action) and Sacrificial Skill (Passive). Keep a short parent flavor row only when it has unique text; otherwise omit the combined blob.
+- Situational extra weapon / Unarmed Strike damage (\"you can deal extra…\", Bloodied, first-round +ability, Improved Finisher): emit power_rider with parentPowerNames [\"Attack\", \"Unarmed Strike\"], weaponDamageMenu true, selectable true, plus bonusDice / classResourceKey / ability. The sheet lists those under Damage modifiers on the weapon DMG ··· menu. Do not emit damage_roll_modifiers (always-on) or on_hit_trigger (weapon chip) for those optional dice.`
+
+export const IMPORT_PROPOSALS_HINT = `For import_proposals (user confirmation before creating compendium entries):
+- Identify every class resource pool you find (Psi Points, Psi Limit, Rage, Ki, Sorcery Points, etc.)
+- Put each in import_proposals.class_resources[] with proposal_id (snake_case), class_name, optional subclass_name (when the pool is subclass-only), resource_key, name, uses, and definition
+- When the source never names the pool formally, derive name from the granting feature (see Class resource import rules) so proposal_id / name stay stable across re-imports
+- definition: 1–3 sentences explaining what the pool is, how it is spent, and typical recharge — shown to the user before import
+- Identify custom builder abilities: psionic disciplines, invocation lists, fighting-style pickers, and similar player-chosen option systems
+- Put each in import_proposals.custom_abilities[] with proposal_id, name, definition, description, source_type, source_name, level_requirement, prerequisite (freeform), repeatable (when the knack can be learned multiple times), ability_role: "knack" for class Knack / Trick options (one proposal row per option — do not bundle into a single choices catalog). Always copy "Prerequisite:" / "Prerequisites:" lines into prerequisite (e.g. "Light Cantrip", "Level 5+ Warmage, Force Buckler cantrip", "Level 10+ Warmage, House of Bishops") — Dump Stat enforces these at pick time against known spells, class level, subclass, and other selected options.
+- Do NOT put Primary/Secondary/Third Discipline, Psionic Talents, Class Talents, or Innate Psionics / Innate Psionic Ability shells in custom_abilities[] — those stay as class features. Primary Discipline comes from the Psionic Archetype (subclass) via grant_custom_ability; Secondary/Third Discipline are separate class_disciplines picks. Psionic Talents is a class feature with optionsSource known_discipline_talents (options = talents from all known disciplines). Innate Psionics wires spells_known on the class feature.
+- For knack pools, put a class feature with choices { category: "Knack", count: 1, resourceKey: "knacks_known", optionsSource: "class_knacks", swappableOnRest: true } — individual Knacks are separate custom_abilities rows
+- Maneuver / technique libraries (Battle Master-style: a die pool fuels player-chosen combat options) use the SAME "class_knacks" pipeline as Knacks — set ability_role: "knack" on each maneuver's custom_abilities row and wire the granting feature's choices with optionsSource: "class_knacks" (there is no "class_maneuvers" option — it will resolve to zero picks). Do NOT set choices.resourceKey to the die pool's resource_key: maneuvers-known and the die pool almost always scale on different tables (e.g. 3/5/7/9 maneuvers known vs. 4/5/6 dice). Use choices.choiceCountByLevel with the maneuvers-known tier table instead — resourceKey is only for choice counts that equal a resource pool's own count (e.g. knacks_known)
+- For Inventor-style upgrades, put one custom_abilities proposal per upgrade option (ability_role: "upgrade", repeatable per option). Section headers like "Gadgetsmith Upgrades" / "Unrestricted Upgrades" are NOT ability rows. Wire the class feature with choices { category: "Upgrade", resourceKey: "upgrades", optionsSource: "class_upgrades" }. Subclass-attached upgrade lists (Craftsman Trappers' traps, Dancer Dance Styles) ARE included when the character has that subclass — set source_type "subclass" / source_name to the guild/style subclass and ability_role "upgrade".
+- Investigator subclass Trinkets are the exception: emit one upgrade row per trinket, but do NOT wire the class Trinkets feature as optionsSource "class_upgrades" / resourceKey "trinkets" (that pool is spendable uses, not a pick count). Enrichment auto-grants subclass trinkets via grant_custom_ability.
+- Craftsman mastery-property catalog entries: one custom_abilities row each with ability_role "weapon_mastery"; these feed both class_upgrades-compatible pickers and Weapon Mastery Properties tooltips. Trappers' Guild traps use ability_role "upgrade". Traps feature: choices { category: "Trap", resourceKey: "traps_known", optionsSource: "class_upgrades", options: [] }.
+- Talent pools (three patterns — do not conflate):
+  1) Discipline-gated talents: nested in choices on the discipline package (category e.g. "Discipline Talents", not a colliding bare "Talents" when a class-level pool also exists).
+  2) Class-level talents: separate list at end of class chapter / "Talents Known" column — one custom_abilities row per talent with ability_role: "class_talent"; the importer also builds a "General Psionic Talents" talent_pool package. Wire the class feature with choices.category "Class Talents" or "General Psionic Talents", resourceKey class_talents_known, and optionsSource: "class_talents". Capture level/subclass gates in options[].prerequisite or the row's prerequisite.
+  3) Feat-gated / combo talents: also ability_role: "class_talent" with prerequisite naming the feat and any required disciplines/talents (exact names — see Name and source matching).
+- Specialization on a discipline package: mutually exclusive one-time sub-choice when first gained (often labeled "Specialization"), frequently with each option replacing the default Alternate Effects spell table. Prefer specialization_choices: { category: "Specialization", count: 1, options: [...] } when Discipline Talents already occupy choices; otherwise choices with category "Specialization" is fine. Put a Point Cost | Alternate Effects HTML <table> on each specialization option's description; keep only the default/base table on the parent package description. If you cannot emit structured options, put Specializations as bold-named sections in the package description with replacement tables or prose cost lists ("1—spell; 2—…") — the importer recovers them.
+- For disciplines with nested talents, include EVERY talent from that discipline's list in choices.options. Put each leaf labeled Psionic power as its own custom_abilities proposal with ability_role: "psionic_power" (casting headers + augment lists in description) — do NOT put those powers in spells[] and do not mash power text into the discipline package description.
+- For exploit/maneuver libraries, one custom_abilities proposal per exploit; degree headers (1st-Degree Exploits, …) are NOT ability rows.
+- Populate execution (verbatim Execution/Activation/Trigger line) and eligible_classes (every named learnable class) on exploit-style leaves; keep prerequisite for real prerequisites only (ability scores, skills/tools, level) — see Custom ability library structure.
+- When a section/tier intro states a recharge, cost, level gate, or activation rule for every entry beneath it, copy that rule onto each leaf's own fields (do not leave it only in the section header).
+- Crafted-consumable abilities (bombs, traps, poisons): one custom_abilities row covering craft + consumable rules; usesRecharge "until_item_consumed" when the spent resource is locked until the item is used/destroyed — do not split into equipment[] unless the schema treats player-crafted consumables as inventory.
+- Do NOT also duplicate the same entries in class_resources[] or abilities[] — proposals are reviewed first; omit level tables from class description`

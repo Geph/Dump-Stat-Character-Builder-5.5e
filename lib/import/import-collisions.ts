@@ -1,0 +1,489 @@
+import type { ImportContent } from "@/lib/import/content-schema"
+import { isCardArtOnlyImport } from "@/lib/import/apply-card-art-import"
+import { slugClassPrefix } from "@/lib/import/third-party-resources"
+
+export type ImportCollisionKind =
+  | "class"
+  | "feat"
+  | "species"
+  | "spell"
+  | "background"
+  | "ability"
+  | "language"
+
+export type ImportCollision = {
+  id: string
+  kind: ImportCollisionKind
+  incomingName: string
+  existingName: string
+  existingSource?: string | null
+  suggestedName: string
+  suggestedResourcePrefix?: string
+}
+
+export type ImportRenameMap = Record<string, string>
+
+export type ImportCollisionResolution = "update" | "overwrite" | "rename" | "link" | "skip"
+
+
+export type ImportCollisionResolutionMap = Record<string, ImportCollisionResolution>
+
+const COLLISION_TABLES: { kind: ImportCollisionKind; key: keyof ImportContent }[] = [
+  { kind: "class", key: "classes" },
+  { kind: "feat", key: "feats" },
+  { kind: "species", key: "species" },
+  { kind: "spell", key: "spells" },
+  { kind: "background", key: "backgrounds" },
+  { kind: "ability", key: "abilities" },
+  { kind: "language", key: "languages" },
+]
+
+function collisionId(kind: ImportCollisionKind, name: string): string {
+  return `${kind}:${name.trim().toLowerCase()}`
+}
+
+export function importCollisionId(kind: ImportCollisionKind, name: string): string {
+  return collisionId(kind, name)
+}
+
+function suggestRenamedName(
+  name: string,
+  kind: ImportCollisionKind,
+  existingSource?: string | null,
+): string {
+  const trimmed = name.trim()
+  if (kind === "class") {
+    if (/^fighter$/i.test(trimmed)) return "Alternate Fighter"
+    if (/^psion$/i.test(trimmed)) return "KibblesTasty Psion"
+    if (/^kibblestasty psion$/i.test(trimmed)) return trimmed
+    // Distinct homebrew classes that commonly share a short name (Kibbles vs Mage Hand Press).
+    if (/^warden$/i.test(trimmed)) {
+      const existing = (existingSource ?? "").toLowerCase()
+      if (/mage\s*hand|mhp/.test(existing)) return "Warden (Kibbles Tasty)"
+      if (/kibble/.test(existing)) return "Warden (Mage Hand Press)"
+      return "Warden (Mage Hand Press)"
+    }
+    if (!/\balternate\b/i.test(trimmed) && !/\bhomebrew\b/i.test(trimmed)) {
+      return `${trimmed} (Alternate)`
+    }
+  }
+  if (kind === "feat") {
+    const srdStyles = ["Archery", "Defense", "Great Weapon Fighting", "Two-Weapon Fighting", "Protection"]
+    if (srdStyles.some((style) => style.toLowerCase() === trimmed.toLowerCase())) {
+      return `${trimmed} (Alternate)`
+    }
+  }
+  return `${trimmed} (Imported)`
+}
+
+export function buildImportCollisions(
+  content: ImportContent,
+  existingByKind: Partial<Record<ImportCollisionKind, { name: string; source?: string | null }[]>>,
+): ImportCollision[] {
+  const collisions: ImportCollision[] = []
+  const seen = new Set<string>()
+
+  for (const { kind, key } of COLLISION_TABLES) {
+    const incoming = content[key]
+    if (!Array.isArray(incoming)) continue
+    const existingNames = new Set(
+      (existingByKind[kind] ?? []).map((row) => row.name.trim().toLowerCase()),
+    )
+    const existingByName = new Map(
+      (existingByKind[kind] ?? []).map((row) => [row.name.trim().toLowerCase(), row]),
+    )
+
+    for (const row of incoming) {
+      const name = String((row as { name: string }).name ?? "").trim()
+      if (!name) continue
+      const lower = name.toLowerCase()
+      if (!existingNames.has(lower)) continue
+      const id = collisionId(kind, name)
+      if (seen.has(id)) continue
+      seen.add(id)
+
+      const existing = existingByName.get(lower)
+      const suggestedName = suggestRenamedName(name, kind, existing?.source)
+      collisions.push({
+        id,
+        kind,
+        incomingName: name,
+        existingName: existing?.name ?? name,
+        existingSource: existing?.source ?? null,
+        suggestedName,
+        suggestedResourcePrefix:
+          kind === "class" ? slugClassPrefix(suggestedName) : undefined,
+      })
+    }
+  }
+
+  return collisions
+}
+
+export function defaultRenameMap(collisions: ImportCollision[]): ImportRenameMap {
+  const map: ImportRenameMap = {}
+  for (const collision of collisions) {
+    // Classes: leave blank so the user explicitly chooses the import name
+    // (suggestion is shown as a placeholder / Use suggestion control).
+    if (collision.kind === "class") continue
+    map[collision.id] = collision.suggestedName
+  }
+  return map
+}
+
+/** True when a rename resolution still needs a distinct, non-empty Import-as name. */
+export function isRenameUnresolved(
+  collision: ImportCollision,
+  resolution: ImportCollisionResolution,
+  renameMap: ImportRenameMap,
+): boolean {
+  if (resolution !== "rename") return false
+  // Only classes require an explicit typed name; other kinds keep a prefilled suggestion.
+  if (collision.kind !== "class") return false
+  const next = (renameMap[collision.id] ?? "").trim()
+  if (!next) return true
+  return next.toLowerCase() === collision.incomingName.trim().toLowerCase()
+}
+
+export function unresolvedRenameCollisions(
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+  renameMap: ImportRenameMap,
+): ImportCollision[] {
+  return collisions.filter((collision) =>
+    isRenameUnresolved(
+      collision,
+      resolutionMap[collision.id] ?? defaultResolutionFor(collision),
+      renameMap,
+    ),
+  )
+}
+
+export function collisionRenamesResolved(
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+  renameMap: ImportRenameMap,
+): boolean {
+  return unresolvedRenameCollisions(collisions, resolutionMap, renameMap).length === 0
+}
+
+export function defaultCollisionResolutionMap(
+  collisions: ImportCollision[],
+  content?: ImportContent | null,
+): ImportCollisionResolutionMap {
+  const artOnly = content ? isCardArtOnlyImport(content) : false
+  const map: ImportCollisionResolutionMap = {}
+  for (const collision of collisions) {
+    if (artOnly) {
+      // Card-art import only patches card_image_url on existing rows.
+      map[collision.id] = "update"
+      continue
+    }
+    // Existing spells should be matched/linked, not overwritten by import stubs.
+    map[collision.id] = collision.kind === "spell" ? "link" : "rename"
+  }
+  return map
+}
+
+function effectiveRenameMap(
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+  renameMap: ImportRenameMap,
+): ImportRenameMap {
+  const effective: ImportRenameMap = { ...renameMap }
+  for (const collision of collisions) {
+    const resolution = resolutionMap[collision.id] ?? defaultResolutionFor(collision)
+    if (resolution === "skip") {
+      delete effective[collision.id]
+      continue
+    }
+    if (resolution === "overwrite" || resolution === "update" || resolution === "link") {
+      // Keep the existing name so references resolve to the compendium entry.
+      effective[collision.id] = collision.incomingName
+      continue
+    }
+    const typed = (effective[collision.id] ?? "").trim()
+    if (typed) {
+      effective[collision.id] = typed
+      continue
+    }
+    // Classes must be explicitly renamed in the UI — do not silently apply the suggestion.
+    if (collision.kind === "class") {
+      delete effective[collision.id]
+      continue
+    }
+    effective[collision.id] = collision.suggestedName
+  }
+  return effective
+}
+
+function defaultResolutionFor(collision: ImportCollision): ImportCollisionResolution {
+  return collision.kind === "spell" ? "link" : "rename"
+}
+
+/** Drop spell rows that should link to existing compendium spells (do not upsert). */
+function stripLinkedSpellRows(
+  content: ImportContent,
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+): ImportContent {
+  const linkedNames = new Set(
+    collisions
+      .filter((collision) => {
+        const resolution = resolutionMap[collision.id] ?? defaultResolutionFor(collision)
+        return collision.kind === "spell" && resolution === "link"
+      })
+      .map((collision) => collision.incomingName.trim().toLowerCase()),
+  )
+  if (!linkedNames.size || !content.spells?.length) return content
+  return {
+    ...content,
+    spells: content.spells.filter((spell) => !linkedNames.has(spell.name.trim().toLowerCase())),
+  }
+}
+
+const CONTENT_KEY_BY_KIND: Record<ImportCollisionKind, keyof ImportContent> = {
+  class: "classes",
+  feat: "feats",
+  species: "species",
+  spell: "spells",
+  background: "backgrounds",
+  ability: "abilities",
+  language: "languages",
+}
+
+const MODIFIER_SOURCE_PREFIX_BY_KIND: Partial<Record<ImportCollisionKind, string>> = {
+  class: "Class: ",
+  species: "Species: ",
+  background: "Background: ",
+  feat: "Feat: ",
+  ability: "Ability: ",
+}
+
+/** True when a modifier-review row belongs to a collision the user skipped. */
+export function importModifierMatchesSkippedCollision(
+  sourceLabel: string,
+  collisions: readonly ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+): boolean {
+  for (const collision of collisions) {
+    if (resolutionMap[collision.id] !== "skip") continue
+    const prefix = MODIFIER_SOURCE_PREFIX_BY_KIND[collision.kind]
+    if (!prefix) continue
+    const expected = `${prefix}${collision.incomingName}`
+    if (sourceLabel === expected) return true
+    if (collision.kind === "ability" && sourceLabel.startsWith(`${expected} (`)) return true
+  }
+  return false
+}
+
+/** Drop rows the user chose not to import for a name collision. */
+function stripSkippedCollisionRows(
+  content: ImportContent,
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+): ImportContent {
+  const skippedByKind = new Map<ImportCollisionKind, Set<string>>()
+  for (const collision of collisions) {
+    const resolution = resolutionMap[collision.id] ?? defaultResolutionFor(collision)
+    if (resolution !== "skip") continue
+    const set = skippedByKind.get(collision.kind) ?? new Set<string>()
+    set.add(collision.incomingName.trim().toLowerCase())
+    skippedByKind.set(collision.kind, set)
+  }
+  if (!skippedByKind.size) return content
+
+  let next: ImportContent = { ...content }
+  for (const [kind, names] of skippedByKind) {
+    const key = CONTENT_KEY_BY_KIND[kind]
+    const rows = next[key]
+    if (!Array.isArray(rows) || !rows.length) continue
+    next = {
+      ...next,
+      [key]: rows.filter(
+        (row) => !names.has(String((row as { name?: string }).name ?? "").trim().toLowerCase()),
+      ),
+    }
+  }
+  return next
+}
+
+/** Apply collision resolutions (update / overwrite / rename / link / skip) before persisting. */
+export function applyImportCollisionResolutions(
+  content: ImportContent,
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+  renameMap: ImportRenameMap = {},
+): ImportContent {
+  if (!collisions.length) return content
+  const withoutSkipped = stripSkippedCollisionRows(content, collisions, resolutionMap)
+  const renamed = applyImportRenames(
+    withoutSkipped,
+    effectiveRenameMap(collisions, resolutionMap, renameMap),
+  )
+  return stripLinkedSpellRows(renamed, collisions, resolutionMap)
+}
+
+function renamedName(
+  kind: ImportCollisionKind,
+  name: string,
+  renameMap: ImportRenameMap,
+): string {
+  return renameMap[collisionId(kind, name)] ?? name
+}
+
+/** Apply user-approved renames across import content and rewrite linked references. */
+export function applyImportRenames(content: ImportContent, renameMap: ImportRenameMap): ImportContent {
+  const classRename = new Map<string, string>()
+  for (const row of content.classes ?? []) {
+    const next = renamedName("class", row.name, renameMap)
+    if (next !== row.name) classRename.set(row.name, next)
+  }
+
+  const next: ImportContent = { ...content }
+
+  if (content.classes?.length) {
+    next.classes = content.classes.map((row) => ({
+      ...row,
+      name: renamedName("class", row.name, renameMap),
+    }))
+  }
+
+  if (content.feats?.length) {
+    next.feats = content.feats.map((row) => ({
+      ...row,
+      name: renamedName("feat", row.name, renameMap),
+    }))
+  }
+
+  if (content.species?.length) {
+    next.species = content.species.map((row) => ({
+      ...row,
+      name: renamedName("species", row.name, renameMap),
+    }))
+  }
+
+  if (content.spells?.length) {
+    next.spells = content.spells.map((row) => ({
+      ...row,
+      name: renamedName("spell", row.name, renameMap),
+      classes: row.classes?.map((className) => classRename.get(className) ?? className) ?? row.classes,
+    }))
+  }
+
+  if (content.backgrounds?.length) {
+    next.backgrounds = content.backgrounds.map((row) => ({
+      ...row,
+      name: renamedName("background", row.name, renameMap),
+    }))
+  }
+
+  if (content.languages?.length) {
+    next.languages = content.languages.map((row) => ({
+      ...row,
+      name: renamedName("language", row.name, renameMap),
+    }))
+  }
+
+  if (content.abilities?.length) {
+    next.abilities = content.abilities.map((row) => ({
+      ...row,
+      name: renamedName("ability", row.name, renameMap),
+      source_name: row.source_name
+        ? (classRename.get(row.source_name) ?? renamedName("class", row.source_name, renameMap))
+        : row.source_name,
+    }))
+  }
+
+  if (content.subclasses?.length) {
+    next.subclasses = content.subclasses.map((row) => ({
+      ...row,
+      class_name: classRename.get(row.class_name) ?? renamedName("class", row.class_name, renameMap),
+    }))
+  }
+
+  if (content.class_resources?.length) {
+    next.class_resources = content.class_resources.map((row) => {
+      const className = classRename.get(row.class_name) ?? row.class_name
+      const prefix = slugClassPrefix(className)
+      const resourceKey = row.resource_key.startsWith(`${prefix}_`)
+        ? row.resource_key
+        : `${prefix}_${row.resource_key}`
+      return {
+        ...row,
+        class_name: className,
+        resource_key: resourceKey,
+      }
+    })
+  }
+
+  if (content.import_proposals?.class_resources?.length) {
+    next.import_proposals = {
+      ...content.import_proposals,
+      class_resources: content.import_proposals.class_resources.map((row) => {
+        const className = classRename.get(row.class_name) ?? row.class_name
+        const prefix = slugClassPrefix(className)
+        return {
+          ...row,
+          class_name: className,
+          resource_key: row.resource_key.startsWith(`${prefix}_`)
+            ? row.resource_key
+            : `${prefix}_${row.resource_key}`,
+          proposal_id: row.proposal_id.startsWith(`${prefix}_`)
+            ? row.proposal_id
+            : `${prefix}_${row.proposal_id}`,
+        }
+      }),
+    }
+  }
+
+  if (content.import_proposals?.custom_abilities?.length) {
+    next.import_proposals = {
+      ...next.import_proposals,
+      custom_abilities: content.import_proposals.custom_abilities.map((row) => ({
+        ...row,
+        source_name: row.source_name
+          ? (classRename.get(row.source_name) ?? row.source_name)
+          : row.source_name,
+      })),
+    }
+  }
+
+  return next as unknown as ImportContent
+}
+
+export function importCollisionsNeedResolution(collisions: ImportCollision[]): boolean {
+  return collisions.length > 0
+}
+
+function collisionNamesByResolution(
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+  wanted: ImportCollisionResolution,
+): Partial<Record<ImportCollisionKind, string[]>> {
+  const byKind: Partial<Record<ImportCollisionKind, string[]>> = {}
+  for (const collision of collisions) {
+    const resolution = resolutionMap[collision.id] ?? defaultResolutionFor(collision)
+    if (resolution !== wanted) continue
+    const list = byKind[collision.kind] ?? []
+    list.push(collision.incomingName.trim().toLowerCase())
+    byKind[collision.kind] = list
+  }
+  return byKind
+}
+
+/** Lowercased incoming names the user chose to merge into existing rows. */
+export function collisionUpdateNamesByKind(
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+): Partial<Record<ImportCollisionKind, string[]>> {
+  return collisionNamesByResolution(collisions, resolutionMap, "update")
+}
+
+/** Lowercased incoming names the user chose to replace existing rows. */
+export function collisionOverwriteNamesByKind(
+  collisions: ImportCollision[],
+  resolutionMap: ImportCollisionResolutionMap,
+): Partial<Record<ImportCollisionKind, string[]>> {
+  return collisionNamesByResolution(collisions, resolutionMap, "overwrite")
+}

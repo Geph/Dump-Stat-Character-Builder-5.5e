@@ -1,0 +1,468 @@
+import { describe, expect, it } from "vitest"
+import type { CharacterClassDetail } from "@/lib/character/character-classes"
+import {
+  formatCompanionHeading,
+  formSelectionsFromState,
+  mergeCompanionState,
+  resolveCharacterCompanionsDetailed,
+} from "@/lib/character/resolve-companions"
+import { buildSrdCreatureSeedRows } from "@/lib/compendium/seed-srd-creatures"
+import { sanitizeCaptainFeatures } from "@/lib/compendium/captain-feature-wiring"
+import type { Creature, CustomAbility } from "@/lib/types"
+
+const SEED_CREATURES = buildSrdCreatureSeedRows() as unknown as Creature[]
+
+const CTX = {
+  abilityMods: { strength: 0, dexterity: 0, constitution: 0, intelligence: 1, wisdom: 3, charisma: 0 },
+  proficiencyBonus: 3,
+  spellAttackModifier: 6,
+  spellSaveDc: 14,
+  classLevels: [{ className: "Druid", level: 5 }],
+  ownerMaxHp: 38,
+}
+
+function classDetail(params: {
+  classId: string
+  className: string
+  level: number
+  features: { name: string; level: number; description?: string }[]
+  subclass?: { id: string; name: string; features: { name: string; level: number; description?: string }[] }
+}): CharacterClassDetail {
+  return {
+    row: { class_id: params.classId, level: params.level, subclass_id: params.subclass?.id ?? null },
+    class: {
+      name: params.className,
+      features: params.features.map((f) => ({ description: "", ...f })),
+    },
+    subclass: params.subclass
+      ? { id: params.subclass.id, name: params.subclass.name, features: params.subclass.features.map((f) => ({ description: "", ...f })) }
+      : null,
+  } as unknown as CharacterClassDetail
+}
+
+const druid = (level: number) =>
+  classDetail({
+    classId: "druid",
+    className: "Druid",
+    level,
+    features: [{ name: "Wild Shape", level: 2 }],
+  })
+
+describe("Wild Shape linked to eligible beasts", () => {
+  it("defaults to the four recommended forms and exposes the eligible pool", () => {
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [druid(2)],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+    })
+    const wildShape = formGroups.find((group) => group.kind === "wild_shape")!
+    expect(wildShape.featureName).toBe("Wild Shape")
+    expect(wildShape.maxKnown).toBe(4)
+    expect(wildShape.selected.sort()).toEqual(["Rat", "Riding Horse", "Spider", "Wolf"])
+    expect(wildShape.options.map((o) => o.name)).toContain("Panther")
+    expect(wildShape.options.map((o) => o.name)).not.toContain("Owl")
+
+    const names = companions.map((c) => c.template.name).sort()
+    expect(names).toEqual(["Rat", "Riding Horse", "Spider", "Wolf"])
+    expect(companions.every((c) => c.polymorph)).toBe(true)
+  })
+
+  it("honors player-selected known forms from companion state", () => {
+    const state = [{ key: "druid:none:wild_shape", knownForms: ["Panther", "Wolf"] }]
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [druid(5)],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      formSelections: formSelectionsFromState(state),
+    })
+    expect(companions.map((c) => c.template.name).sort()).toEqual(["Panther", "Wolf"])
+    const wildShape = formGroups.find((group) => group.kind === "wild_shape")!
+    expect(wildShape.maxKnown).toBe(6)
+    // CR 1/2 beasts unlock at level 5.
+    expect(wildShape.options.map((o) => o.name)).toContain("Black Bear")
+  })
+
+  it("falls back to the bundled SRD forms without a creatures catalog", () => {
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [druid(2)],
+      ctx: CTX,
+    })
+    expect(companions.map((c) => c.template.name).sort()).toEqual([
+      "Rat",
+      "Riding Horse",
+      "Spider",
+      "Wolf",
+    ])
+    expect(formGroups).toHaveLength(0)
+  })
+})
+
+describe("Find Familiar form selection", () => {
+  const findFamiliarSpell = {
+    id: "spell-ff",
+    name: "Find Familiar",
+    level: 1,
+    school: "Conjuration",
+    casting_time: "1 hour",
+    range: "10 feet",
+    components: ["V", "S", "M"],
+    material: null,
+    duration: "Instantaneous",
+    concentration: false,
+    ritual: true,
+    description: "",
+    higher_levels: null,
+    classes: ["Wizard"],
+    icon: null,
+    source: "SRD",
+    creator_url: null,
+    created_at: "",
+  }
+
+  it("grants the generic familiar with pickable forms when no form is chosen", () => {
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      knownSpells: [findFamiliarSpell as never],
+    })
+    expect(companions.map((c) => c.template.name)).toContain("Familiar")
+    const familiar = formGroups.find((group) => group.kind === "familiar")!
+    expect(familiar.options.map((o) => o.name)).toContain("Owl")
+    expect(familiar.options.map((o) => o.name)).not.toContain("Imp")
+    expect(familiar.maxKnown).toBe(1)
+  })
+
+  it("resolves the chosen form into the familiar's stat block", () => {
+    const { companions } = resolveCharacterCompanionsDetailed({
+      classDetails: [],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      knownSpells: [findFamiliarSpell as never],
+      formSelections: { "spellcaster:none:find_familiar": ["Owl"] },
+    })
+    const familiar = companions.find((c) => /^Familiar/.test(c.template.name))!
+    expect(familiar.template.name).toBe("Familiar (Owl)")
+    expect(familiar.template.traits.map((t) => t.name)).toContain("Telepathic Link")
+  })
+
+  it("broadens options for a Warlock with Pact of the Chain", () => {
+    const warlock = classDetail({
+      classId: "warlock",
+      className: "Warlock",
+      level: 3,
+      features: [{ name: "Pact of the Chain", level: 3 }],
+    })
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [warlock],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      formSelections: { "warlock:none:pact_of_the_chain": ["Imp"] },
+    })
+    const group = formGroups.find((g) => g.kind === "familiar")!
+    expect(group.featureName).toBe("Pact of the Chain")
+    const optionNames = group.options.map((o) => o.name)
+    for (const name of ["Imp", "Pseudodragon", "Quasit", "Skeleton", "Sphinx of Wonder", "Sprite", "Venomous Snake"]) {
+      expect(optionNames).toContain(name)
+    }
+    const familiar = companions.find((c) => /^Familiar/.test(c.template.name))!
+    expect(familiar.template.name).toBe("Familiar (Imp)")
+  })
+
+  it("suppresses the spell-source familiar when a feature already granted one", () => {
+    const warlock = classDetail({
+      classId: "warlock",
+      className: "Warlock",
+      level: 3,
+      features: [{ name: "Pact of the Chain", level: 3 }],
+    })
+    const { companions } = resolveCharacterCompanionsDetailed({
+      classDetails: [warlock],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      knownSpells: [findFamiliarSpell as never],
+      formSelections: { "warlock:none:pact_of_the_chain": ["Sprite"] },
+    })
+    const familiars = companions.filter((c) => /^Familiar/.test(c.template.name))
+    expect(familiars).toHaveLength(1)
+    expect(familiars[0].template.name).toBe("Familiar (Sprite)")
+  })
+
+  it("resolves Animate Dead / Awaken / Find Steed from known spells", () => {
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      knownSpells: [
+        {
+          ...findFamiliarSpell,
+          id: "spell-steed",
+          name: "Find Steed",
+          companion_creature_names: ["Otherworldly Steed"],
+        } as never,
+        {
+          ...findFamiliarSpell,
+          id: "spell-animate",
+          name: "Animate Dead",
+          linkedModifiers: [
+            {
+              instanceId: "modinst_animate",
+              catalogRefId: "cat_char_grant_creature",
+              characteristics: [
+                {
+                  id: "mod_animate",
+                  type: "grant_creature",
+                  creatureNames: ["Skeleton", "Zombie"],
+                  choiceOptions: ["Skeleton", "Zombie"],
+                  count: 1,
+                },
+              ],
+            },
+          ],
+        } as never,
+      ],
+      formSelections: { "spellcaster:none:animate_dead": ["Skeleton"] },
+    })
+    expect(companions.map((c) => c.template.name)).toContain("Otherworldly Steed")
+    expect(companions.map((c) => c.template.name)).toContain("Skeleton")
+    expect(formGroups.some((g) => g.kind === "choice" && g.featureName === "Animate Dead")).toBe(
+      true,
+    )
+  })
+
+  it("keeps duplicate form picks as separate companions with their own HP", () => {
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [],
+      ctx: CTX,
+      creatures: SEED_CREATURES,
+      knownSpells: [
+        {
+          ...findFamiliarSpell,
+          id: "spell-animate",
+          name: "Animate Dead",
+          linkedModifiers: [
+            {
+              instanceId: "modinst_animate",
+              catalogRefId: "cat_char_grant_creature",
+              characteristics: [
+                {
+                  id: "mod_animate",
+                  type: "grant_creature",
+                  creatureNames: ["Skeleton", "Zombie"],
+                  choiceOptions: ["Skeleton", "Zombie"],
+                  count: 2,
+                },
+              ],
+            },
+          ],
+        } as never,
+      ],
+      formSelections: { "spellcaster:none:animate_dead": ["Skeleton", "Skeleton"] },
+    })
+    const skeletons = companions.filter((c) => c.template.name === "Skeleton")
+    expect(skeletons).toHaveLength(2)
+    expect(skeletons[0]!.key).not.toBe(skeletons[1]!.key)
+    expect(skeletons[0]!.key.endsWith(":skeleton")).toBe(true)
+    expect(skeletons[1]!.key.endsWith(":skeleton:2")).toBe(true)
+    expect(formGroups.find((g) => g.featureName === "Animate Dead")?.selected).toEqual([
+      "Skeleton",
+      "Skeleton",
+    ])
+
+    const merged = mergeCompanionState(companions, [
+      { key: skeletons[0]!.key, currentHp: 4 },
+      { key: skeletons[1]!.key, currentHp: 7 },
+    ])
+    const mergedSkeletons = merged.filter((c) => c.template.name === "Skeleton")
+    expect(mergedSkeletons.map((c) => c.currentHp)).toEqual([4, 7])
+    expect(mergedSkeletons.map((c) => c.displayName)).toEqual(["Skeleton", "Skeleton 2"])
+
+    const renamed = mergeCompanionState(companions, [
+      { key: skeletons[0]!.key, currentHp: 4, customName: "Bones" },
+    ])
+    expect(formatCompanionHeading(renamed[0]!)).toBe("Bones (Skeleton)")
+    expect(formatCompanionHeading(mergedSkeletons[1]!)).toBe("Skeleton 2")
+  })
+})
+
+describe("Captain Cohort choice", () => {
+  const cohortGrant = {
+    instanceId: "modinst_cohort",
+    catalogRefId: "cat_char_grant_creature",
+    characteristics: [
+      {
+        id: "mod_cohort",
+        type: "grant_creature",
+        creatureNames: ["Berserker", "Champion", "Hunter"],
+        choiceOptions: ["Berserker", "Champion", "Hunter"],
+        count: 1,
+      },
+    ],
+  }
+
+  function captain(level: number) {
+    return classDetail({
+      classId: "captain-1",
+      className: "Captain",
+      level,
+      features: [
+        {
+          name: "Cohort",
+          level: 2,
+          description: "You gain a loyal Cohort.",
+        },
+      ],
+    })
+  }
+
+  it("shows only the chosen Cohort and keeps the other types on the picker", () => {
+    const row = captain(2)
+    const feature = (row.class as unknown as { features: Record<string, unknown>[] }).features[0]
+    feature.linkedModifiers = [cohortGrant]
+
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [row],
+      ctx: { ...CTX, classLevels: [{ className: "Captain", level: 2 }] },
+      creatures: [
+        { name: "Berserker", stat_block: { name: "Berserker", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+        { name: "Champion", stat_block: { name: "Champion", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+        { name: "Hunter", stat_block: { name: "Hunter", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+      ] as unknown as Creature[],
+      featureChoicePicks: { "captain-1:L2:Cohort": ["Hunter"] },
+    })
+
+    expect(companions.map((c) => c.template.name)).toEqual(["Hunter"])
+    const group = formGroups.find((entry) => entry.kind === "choice" && entry.featureName === "Cohort")
+    expect(group?.options.map((option) => option.name).sort()).toEqual([
+      "Berserker",
+      "Champion",
+      "Hunter",
+    ])
+    expect(group?.selected).toEqual(["Hunter"])
+  })
+
+  it("does not list every Cohort type before a pick is made", () => {
+    const row = captain(2)
+    const feature = (row.class as unknown as { features: Record<string, unknown>[] }).features[0]
+    feature.linkedModifiers = [cohortGrant]
+
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [row],
+      ctx: { ...CTX, classLevels: [{ className: "Captain", level: 2 }] },
+      creatures: [
+        { name: "Berserker", stat_block: { name: "Berserker", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+        { name: "Champion", stat_block: { name: "Champion", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+      ] as unknown as Creature[],
+    })
+
+    expect(companions).toHaveLength(0)
+    expect(formGroups.some((group) => group.featureName === "Cohort")).toBe(true)
+  })
+
+  it("does not surface an imported Cohort ability before the class feature level", () => {
+    const row = captain(1)
+    const ability = {
+      id: "ability-cohort",
+      name: "Cohort",
+      description: "You gain a loyal Cohort.",
+      attached_to_type: "class",
+      attached_to_id: "C082C8F9-7946-4565-9F06-34D2988986FD",
+      companion_stat_block: {
+        name: "Cohort",
+        ac: { parts: [{ type: "fixed", value: 16 }] },
+        hp: { parts: [{ type: "fixed", value: 20 }] },
+        traits: [],
+        actions: [],
+      },
+    } as unknown as CustomAbility
+    // Persist often stores the class UUID on the ability, not "Captain".
+    const classRow = {
+      ...row,
+      row: { ...row.row, class_id: "C082C8F9-7946-4565-9F06-34D2988986FD" },
+    } as typeof row
+
+    const { companions, formGroups } = resolveCharacterCompanionsDetailed({
+      classDetails: [classRow],
+      customAbilities: [ability],
+      ctx: { ...CTX, classLevels: [{ className: "Captain", level: 1 }] },
+    })
+
+    expect(companions).toHaveLength(0)
+    expect(formGroups.some((group) => group.featureName === "Cohort")).toBe(false)
+  })
+
+  it("applies a picked Cohort Species trait to the Cohort, including nested damage type", () => {
+    const row = captain(2)
+    const features = (row.class as unknown as { features: Record<string, unknown>[] }).features
+    features[0]!.linkedModifiers = [cohortGrant]
+    const species = sanitizeCaptainFeatures([
+      { level: 2, name: "Cohort Species", description: "When you initiate a new Humanoid Cohort, pick a species trait." },
+    ])![0]!
+    features.push(species as unknown as Record<string, unknown>)
+
+    const { companions } = resolveCharacterCompanionsDetailed({
+      classDetails: [row],
+      ctx: { ...CTX, classLevels: [{ className: "Captain", level: 2 }] },
+      creatures: [
+        { name: "Hunter", stat_block: { name: "Hunter", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+      ] as unknown as Creature[],
+      featureChoicePicks: {
+        "captain-1:L2:Cohort": ["Hunter"],
+        "captain-1:L2:Cohort Species": ["Dwarf"],
+      },
+    })
+
+    expect(companions).toHaveLength(1)
+    expect(companions[0]?.template.resistances).toEqual(expect.arrayContaining(["Poison"]))
+    expect(companions[0]?.template.conditionImmunities).toEqual(expect.arrayContaining(["Poisoned"]))
+    expect(companions[0]?.template.traits.some((trait) => /dwarf/i.test(trait.name))).toBe(true)
+
+    const dragonborn = resolveCharacterCompanionsDetailed({
+      classDetails: [row],
+      ctx: { ...CTX, classLevels: [{ className: "Captain", level: 2 }] },
+      creatures: [
+        { name: "Hunter", stat_block: { name: "Hunter", ac: { parts: [] }, hp: { parts: [] }, traits: [], actions: [] } },
+      ] as unknown as Creature[],
+      featureChoicePicks: {
+        "captain-1:L2:Cohort": ["Hunter"],
+        "captain-1:L2:Cohort Species": ["Dragonborn"],
+      },
+      modifierPlayerPicks: {
+        "captain-1:L2:Cohort Species::mod_cohort_dragonborn_resistance::damage_type": ["Fire"],
+      },
+    }).companions[0]
+
+    expect(dragonborn?.template.resistances).toEqual(expect.arrayContaining(["Fire"]))
+    expect(dragonborn?.template.traits.some((trait) => /dragonborn/i.test(trait.name))).toBe(true)
+  })
+})
+
+describe("Faithful Steed on the companion tab", () => {
+  it("resolves the Otherworldly Steed via the grant_creature modifier", () => {
+    const paladin = classDetail({
+      classId: "paladin",
+      className: "Paladin",
+      level: 5,
+      features: [
+        {
+          name: "Faithful Steed",
+          level: 5,
+          // Enrichment attaches companion_creature_names / grant_creature; the
+          // resolve layer reads the names field directly.
+        },
+      ],
+    })
+    const feature = (paladin.class as unknown as { features: Record<string, unknown>[] })
+      .features[0]
+    feature.companion_creature_names = ["Otherworldly Steed"]
+
+    const { companions } = resolveCharacterCompanionsDetailed({
+      classDetails: [paladin],
+      ctx: { ...CTX, classLevels: [{ className: "Paladin", level: 5 }] },
+      creatures: SEED_CREATURES,
+    })
+    const steed = companions.find((c) => c.template.name === "Otherworldly Steed")
+    expect(steed).toBeDefined()
+    expect(steed!.source.featureName).toBe("Faithful Steed")
+  })
+})

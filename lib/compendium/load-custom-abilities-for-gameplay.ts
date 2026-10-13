@@ -1,0 +1,46 @@
+import customAbilityArt from "./custom-ability-art.json"
+import { filterEnabled } from "@/lib/compendium/compendium-enabled"
+import { enrichManipulateMagicAbilities } from "@/lib/compendium/enrich-manipulate-magic"
+import { enrichRowsWithModifierRefs } from "@/lib/compendium/normalize-modifier-refs"
+import { SYSTEM_OPTION_CATALOG_IDS } from "@/lib/compendium/system-option-catalogs"
+import type { DataClient } from "@/lib/db/client"
+import type { CustomAbility } from "@/lib/types"
+import { asCompendiumRow, asCompendiumRows, castCompendiumRow } from "@/lib/data/types"
+
+/**
+ * Custom abilities shown in the builder/sheet, plus system option catalogs
+ * (Metamagic, Eldritch Invocations, Weapon Mastery Properties)
+ * used for feat picks and mastery rules.
+ * Call `ensureModifierCatalog` / `loadModifierCatalog` first so catalogs exist.
+ */
+export async function loadCustomAbilitiesForGameplay(
+  db: DataClient,
+): Promise<CustomAbility[]> {
+  const [builderRes, systemRes] = await Promise.all([
+    db.from("custom_abilities").select("*").eq("show_in_builder", true).order("name"),
+    db.from("custom_abilities").select("*").in("id", [...SYSTEM_OPTION_CATALOG_IDS]),
+  ])
+
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const row of asCompendiumRows(builderRes.data)) {
+    byId.set(row.id as string, {
+      ...row,
+      card_image_url: row.card_image_url || (/kibbles/i.test(String(row.source ?? ""))
+        ? (customAbilityArt as Record<string, string>)[String(row.name)] : null),
+    } as unknown as Record<string, unknown>)
+  }
+  for (const row of asCompendiumRows(systemRes.data)) {
+    byId.set(row.id as string, row as unknown as Record<string, unknown>)
+  }
+
+  return enrichManipulateMagicAbilities(
+    filterEnabled(
+      enrichRowsWithModifierRefs([...byId.values()] as { enabled?: number | boolean | null; show_in_builder?: boolean; id?: string }[]),
+    ).filter((ability) => {
+      if ((SYSTEM_OPTION_CATALOG_IDS as readonly string[]).includes(ability.id as string)) {
+        return true
+      }
+      return ability.show_in_builder !== false
+    }) as CustomAbility[],
+  )
+}

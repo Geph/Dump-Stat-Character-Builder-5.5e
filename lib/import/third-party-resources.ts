@@ -1,0 +1,784 @@
+import type { UsesConfig } from "@/lib/types"
+
+/** Known third-party / homebrew resource patterns — used at import time only, not seeded into SRD defaults. */
+export type ThirdPartyResourcePattern = {
+  resourceKey: string
+  namePattern: RegExp
+  displayName: string
+  definition: string
+  /** Default uses shape when parsed from a level table without explicit AI data */
+  defaultUses?: Partial<UsesConfig>
+  /** Text patterns that spend this resource (for feature linking) */
+  spendPatterns: RegExp[]
+  /**
+   * Propose this resource when its namePattern appears in class prose even if it has no
+   * dedicated level-table column (e.g. Charnel Touch, whose pool is defined by a formula).
+   */
+  proposeFromText?: boolean
+  /** Full uses config emitted when proposed from prose (paired with proposeFromText). */
+  textProposalUses?: UsesConfig
+  /**
+   * Class that owns this key and its mechanics. Set it when the resource name is a common word
+   * that shows up in unrelated classes' prose (e.g. "reagents" appears in Inventor Potionsmith
+   * flavor text but the Inventor has no such pool). Non-owner classes never get this resource
+   * proposed from prose, and an explicit resource of the same name is prefixed with the class
+   * slug so the two don't share a key.
+   */
+  ownerClassPattern?: RegExp
+}
+
+export const THIRD_PARTY_RESOURCE_PATTERNS: ThirdPartyResourcePattern[] = [
+  {
+    resourceKey: "psi_points",
+    namePattern: /psi\s*points?/i,
+    displayName: "Psi Points",
+    definition:
+      "Psionic energy pool spent to activate disciplines, talents, and psi-cost features. Typically recharges on short and long rests.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\b(?:expend|spend|costs?|pay|use)\s+(?:up\s+to\s+)?(\d+)\s+psi\s+points?\b/i,
+      /\b(\d+)\s+psi\s+points?\b[^.]{0,40}\b(?:to|when|per)\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "psi_limit",
+    namePattern: /psi\s*limit/i,
+    displayName: "Psi Limit",
+    definition:
+      "Maximum psi points that can be spent on a single psionic activation at your level (per-activation cap).",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription:
+        "Maximum psi points spendable on a single psionic power or spell (half Psion level, rounded up).",
+      atLevelMode: "tier",
+      atLevelTable: [
+        { level: 1, count: 1 },
+        { level: 3, count: 2 },
+        { level: 5, count: 3 },
+        { level: 7, count: 4 },
+        { level: 9, count: 5 },
+        { level: 11, count: 6 },
+        { level: 13, count: 7 },
+        { level: 15, count: 8 },
+        { level: 17, count: 9 },
+        { level: 19, count: 10 },
+      ],
+    },
+    proposeFromText: true,
+    textProposalUses: {
+      type: "special",
+      specialDescription:
+        "Maximum psi points spendable on a single psionic power or spell (half Psion level, rounded up).",
+      atLevelMode: "tier",
+      atLevelTable: [
+        { level: 1, count: 1 },
+        { level: 3, count: 2 },
+        { level: 5, count: 3 },
+        { level: 7, count: 4 },
+        { level: 9, count: 5 },
+        { level: 11, count: 6 },
+        { level: 13, count: 7 },
+        { level: 15, count: 8 },
+        { level: 17, count: 9 },
+        { level: 19, count: 10 },
+      ],
+    },
+  },
+  {
+    resourceKey: "spell_limit",
+    namePattern: /spell\s*limit/i,
+    displayName: "Spell Limit",
+    definition:
+      "Maximum Sorcery Points spendable on a single spell's base casting cost (excludes Metamagic add-ons).",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "sorcery_points",
+    namePattern: /sorcery\s*points?/i,
+    displayName: "Sorcery Points",
+    definition:
+      "Pool spent to cast leveled spells and fuel Metamagic. Recharges on a long rest for point-pool sorcerers.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\b(?:expend|spend|costs?|pay|use)\s+(?:up\s+to\s+)?(\d+)\s+sorcery\s+points?\b/i,
+      /\b(\d+)\s+sorcery\s+points?\b[^.]{0,40}\b(?:to|when|per)\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "ki_points",
+    namePattern: /\bki\s*points?\b/i,
+    displayName: "Ki Points",
+    definition:
+      "Monk energy pool spent on Techniques and class features. Recharges on a short or long rest (often after meditation).",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\b(?:expend|spend|costs?|pay|use)\s+(?:up\s+to\s+)?(\d+)\s+ki\b/i,
+      /\b(\d+)\s+ki\b[^.]{0,40}\b(?:to|when|per)\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "battle_dice",
+    namePattern: /battle\s*dice/i,
+    displayName: "Battle Dice",
+    definition:
+      "Pool of dice spent on Captain/Vagabond maneuvers and battle tactics. Regain all expended Battle Dice when you roll Initiative or finish a Short or Long Rest.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+      rechargeOnInitiative: true,
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1)\s+battle\s+die\b/i,
+      /\bexpend\s+(?:up\s+to\s+)?(\d+|two|three|four|five)\s+battle\s+dice\b/i,
+      /\bexpend\s+a\s+battle\s+die\b/i,
+      /\bgive\b[^.]{0,80}\bone\s+of\s+your\s+unexpended\s+battle\s+dice\b/i,
+    ],
+  },
+  {
+    resourceKey: "risk_dice",
+    namePattern: /risk\s*dice/i,
+    displayName: "Risk Dice",
+    definition:
+      "Pool of dice spent on Gunslinger maneuvers and deeds. Die size and count scale on the class table; regain all on a Short or Long Rest. Dire Gambit restores 1 die on Initiative (and on a Critical Hit).",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1)\s+risk\s+die\b/i,
+      /\bexpend\s+(?:up\s+to\s+)?(\d+)\s+risk\s+dice\b/i,
+      /\bexpend\s+a\s+risk\s+die\b/i,
+      /\bspend\s+(?:one|an?|1)\s+risk\s+die\b/i,
+    ],
+  },
+  {
+    resourceKey: "spell_uses",
+    namePattern: /^spell\s*uses$/i,
+    displayName: "Spell Uses",
+    definition:
+      "Martyr (and similar) per-day casts of level 1+ spells. Separate from Hit Point Spellcasting damage costs; regain all on a Long Rest.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1)\s+spell\s+use\b/i,
+      /\bexpend\s+one\s+use\s+of\s+your\s+spell\s+uses\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      atLevelTable: [{ level: 1, count: 2 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "max_spell_level",
+    namePattern: /^max(?:imum)?\s*spell\s*levels?$/i,
+    displayName: "Max Spell Levels",
+    definition:
+      "Maximum spell slot level a Martyr can create with Hit Point Spellcasting — a cap from the Max Spell Levels column, not a spendable pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription:
+        "Maximum spell slot level you can create with Hit Point Spellcasting at each Martyr level. This is a cap, not a spendable pool.",
+      atLevelMode: "tier",
+    },
+  },
+  {
+    resourceKey: "interrupt",
+    namePattern: /^interrupts?$/i,
+    displayName: "Interrupt",
+    definition:
+      "Mage Hand Press Warden uses of the Interrupt reaction. Regain 1 use on a Short Rest and all uses on a Long Rest; some subclass riders also restore a use on Initiative.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\buse\s+this\s+reaction\b/i,
+      /\bexpend\s+(?:one|an?|1)\s+interrupt\b/i,
+    ],
+  },
+  {
+    resourceKey: "thralls",
+    namePattern: /^thralls$/i,
+    displayName: "Thralls",
+    definition:
+      "Maximum number of Necromancer thralls under your control — a count cap from the Thralls column, not a spendable pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Maximum thralls under your control at each Necromancer level (see class table).",
+      atLevelMode: "tier",
+    },
+  },
+  {
+    resourceKey: "thrall_cr_total",
+    namePattern: /^(?:cr\s*total|thrall\s*cr(?:\s*total)?)$/i,
+    displayName: "CR Total",
+    definition:
+      "Combined Challenge Rating cap for Necromancer thralls (fractions allowed, e.g. 1/4). A cap, not a spendable pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Combined thrall CR cap at each Necromancer level (see CR Total column).",
+      atLevelMode: "tier",
+    },
+  },
+  {
+    resourceKey: "dances",
+    namePattern: /^dances?$/i,
+    displayName: "Dances",
+    definition:
+      "Uses of the Dancer's Dance (Bonus Action flow state). Typically regain 1 expended use on a Short Rest and all uses on a Long Rest.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1)\s+dance(?:\s+uses?)?\b/i,
+      /\bspend\s+(?:one|an?|1)\s+dance(?:\s+uses?)?\b/i,
+      /\bexpend\s+(\d+)\s+dance(?:\s+uses?)?\b/i,
+      /\bspend\s+(\d+)\s+dance(?:\s+uses?)?\b/i,
+      /\bexpend\s+(\d+)\s+dances?\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      atLevelTable: [{ level: 2, count: 2 }],
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "dance_die",
+    namePattern: /dance\s*die/i,
+    displayName: "Dance Die",
+    definition:
+      "Die size rolled for Graceful Dodge, Dance Styles, and similar Dancer features. Scales on the Dance Die column; not a depleting pool (Dances tracks uses).",
+    spendPatterns: [
+      // Dance Die is a size tracker, not a pool — only treat explicit "expend" as a spend.
+      /\bexpend\s+(?:one|an?|1)\s+dance\s+die\b/i,
+    ],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Dance Die size at each Dancer level (see class table).",
+      atLevelMode: "tier",
+      dieType: "d4",
+    },
+    proposeFromText: true,
+    textProposalUses: {
+      type: "special",
+      specialDescription: "Dance Die size at each Dancer level (see class table).",
+      atLevelMode: "tier",
+      dieType: "d4",
+      atLevelTable: [
+        { level: 2, count: 4 },
+        { level: 5, count: 6 },
+        { level: 11, count: 8 },
+        { level: 17, count: 10 },
+      ],
+    },
+  },
+  {
+    resourceKey: "masterwork_bonus",
+    namePattern: /masterwork\s*bonus/i,
+    displayName: "Masterwork Bonus",
+    definition:
+      "Craftsman Masterwork Bonus (+1/+2/+3/+4 by level). Applied to Masterwork weapons/armor and several subclass use counts — a Class Cap, not a spendable pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Masterwork Bonus at each Craftsman level (see Masterwork Bonus column).",
+      atLevelMode: "tier",
+      atLevelTable: [
+        { level: 1, count: 1 },
+        { level: 5, count: 2 },
+        { level: 13, count: 3 },
+        { level: 17, count: 4 },
+      ],
+    },
+    proposeFromText: true,
+    textProposalUses: {
+      type: "special",
+      specialDescription: "Masterwork Bonus at each Craftsman level (see Masterwork Bonus column).",
+      atLevelMode: "tier",
+      atLevelTable: [
+        { level: 1, count: 1 },
+        { level: 5, count: 2 },
+        { level: 13, count: 3 },
+        { level: 17, count: 4 },
+      ],
+    },
+  },
+  {
+    resourceKey: "traps_known",
+    namePattern: /traps?\s*known/i,
+    displayName: "Traps Known",
+    ownerClassPattern: /craftsman/i,
+    definition:
+      "Trappers' Guild traps chosen from the trap list — a choice count for the Traps feature picker (optionsSource class_upgrades), never a spendable pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Number of Trappers' Guild traps known.",
+      atLevelMode: "tier",
+    },
+  },
+  {
+    resourceKey: "charge_points",
+    namePattern: /charge\s*points?/i,
+    displayName: "Charge Points",
+    definition:
+      "Thunderlords' Guild Power Cell charges. Pool equals Craftsman level; regain all on a Long Rest. Spent for Shock and other Power Cell features.",
+    spendPatterns: [
+      /\bexpend\s+(?:a\s+number\s+of\s+)?charge\s+points?\b/i,
+      /\bexpend\s+(\d+)\s+charge\s+points?\b/i,
+      /\bspend\s+(\d+)\s+charge\s+points?\b/i,
+    ],
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 3, count: 1 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "momentum",
+    namePattern: /^momentum$/i,
+    displayName: "Momentum",
+    definition:
+      "Dancer Momentum tokens (subclass-gated). Gain while Dancing; expend for +Dance Die damage. Cap 3 with Deadly Momentum.",
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1)\s+momentum\b/i,
+      /\bspend\s+(?:one|an?|1)\s+momentum\b/i,
+    ],
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      atLevelTable: [
+        { level: 3, count: 1 },
+        { level: 14, count: 3 },
+      ],
+    },
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      atLevelTable: [
+        { level: 3, count: 1 },
+        { level: 14, count: 3 },
+      ],
+    },
+  },
+  {
+    resourceKey: "cantrip_bonus_dice",
+    namePattern: /cantrip\s*bonus\s*dice/i,
+    displayName: "Cantrip Bonus Dice",
+    definition:
+      "Extra damage dice Warmage Edge adds to a cantrip damage roll from level 5+. A scaling rider count, not a depleting pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Bonus damage dice added by Warmage Edge (see Cantrip Bonus Dice column).",
+      atLevelMode: "tier",
+    },
+  },
+  {
+    resourceKey: "arcane_surge",
+    namePattern: /arcane\s*surge/i,
+    displayName: "Arcane Surge",
+    definition:
+      "Uses of Arcane Surge — once per turn, double a cantrip's damage dice. Regain 1 use on a Short Rest and all uses on a Long Rest.",
+    defaultUses: {
+      type: "fixed",
+      fixedAmount: 2,
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1)\s+arcane\s+surge\b/i,
+      /\buse\s+(?:one|an?|1)\s+arcane\s+surge\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "fixed",
+      fixedAmount: 2,
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "tricks_known",
+    namePattern: /^tricks?(?:\s*known)?$/i,
+    displayName: "Tricks",
+    definition:
+      "Number of Warmage Tricks known — chosen from the Tricks list; a choice count, not a spendable pool.",
+    spendPatterns: [],
+    defaultUses: {
+      type: "special",
+      specialDescription: "Number of Warmage Tricks known at each Warmage level.",
+      atLevelMode: "tier",
+    },
+  },
+  {
+    resourceKey: "exploit_dice",
+    namePattern: /exploit\s*dice/i,
+    displayName: "Exploit Dice",
+    definition:
+      "Pool of Exploit Dice spent to fuel Martial Exploits. Die size and pool count scale on the class level table; recharges on a short or long rest.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|up\s+to\s+(\d+))\s+exploit\s+die\b/i,
+      /\bexpend\s+(?:up\s+to\s+)?(\d+)\s+exploit\s+dice\b/i,
+      /\bexpend\s+exploit\s+dice\b/i,
+      /\bspend\s+(?:one|an?)\s+exploit\s+die\b/i,
+    ],
+  },
+  {
+    resourceKey: "exploit_die_size",
+    namePattern: /exploit\s*die(?!\s*dice)/i,
+    displayName: "Exploit Die",
+    definition:
+      "Legacy table column for exploit die size — merged into Exploit Dice at import (not a separate pool).",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "hexes_known",
+    namePattern: /hexes?\s*known/i,
+    displayName: "Hexes Known",
+    definition: "Number of Hexes the Witch knows — chosen from the Hex list; count scales on the class table.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "grand_hexes",
+    namePattern: /grand\s*hexes?/i,
+    displayName: "Grand Hexes",
+    definition: "Powerful Witch options chosen at level 11+; typically one Grand Hex known at a time.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "hexmaster_uses",
+    namePattern: /hexmaster|insidious spell uses/i,
+    displayName: "Insidious Spell Uses",
+    definition: "Uses of Insidious Spell / Hexmaster — force a failed save on a Hex (Charisma modifier per long rest).",
+    spendPatterns: [
+      /\buse this feature a number of times equal to your \w+ modifier\b/i,
+      /\brestore one use of it by expending a spell slot\b/i,
+    ],
+  },
+  {
+    resourceKey: "remedy_dice",
+    namePattern: /remedy\s*dice/i,
+    displayName: "Remedy Dice",
+    definition:
+      "White Magic Witch pool of dice spent to heal. Pool equals Witch level; CHA modifier caps dice spent per use. Recharges on a Long Rest.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(?:one|an?|1|\d+)\s+remedy\s+dice?\b/i,
+      /\bexpend\s+(?:up\s+to\s+)?(?:your\s+\w+\s+modifier(?:\s+in)?\s+)?remedy\s+dice\b/i,
+      /\bspend\s+(?:one|an?|1|\d+)\s+remedy\s+dice?\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 1 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+  },
+  {
+    resourceKey: "alchemy_points",
+    namePattern: /alchemy\s*points?/i,
+    displayName: "Alchemy Points",
+    definition: "Pool spent to brew potions (typically equal to Witch level); recharges on a long rest.",
+    spendPatterns: [/\bexpend\s+(\d+)\s+alchemy\s+points?\b/i],
+  },
+  {
+    resourceKey: "reagents",
+    namePattern: /\breagents?\b/i,
+    displayName: "Reagents",
+    ownerClassPattern: /alchemist/i,
+    definition:
+      "Alchemist pool spent to throw Bombs, brew potions, and fuel class features. Recharges on a long rest; Reagent Synthesis restores on short rest (INT mod, once per long rest).",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 2 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\b(?:expend|spend|costs?|pay|use)\s+(?:up\s+to\s+)?(\d+)\s+reagents?\b/i,
+      /\b(\d+)\s+reagents?\b[^.]{0,40}\b(?:to|when|per)\b/i,
+    ],
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 2 }],
+      recharges: [
+        {
+          rest: "short_rest",
+          amountFormula: "ability_modifier",
+          amountFormulaAbility: "INT",
+          maxPerLongRest: 1,
+        },
+        { rest: "long_rest" },
+      ],
+    },
+  },
+  {
+    resourceKey: "bomb_formulas_known",
+    namePattern: /bomb\s*formulas?\s*known/i,
+    displayName: "Bomb Formulas Known",
+    ownerClassPattern: /alchemist/i,
+    definition:
+      "Bomb formulas the Alchemist knows — a choice count, never a spendable pool. uses.type MUST be special with the class table's Formulas column as atLevelTable, and the Bomb Formulas feature carries the same tiers in choices.choiceCountByLevel. Swappable on a long rest and on level-up.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "discoveries_known",
+    namePattern: /discoveries?\s*known/i,
+    displayName: "Discoveries Known",
+    ownerClassPattern: /alchemist/i,
+    definition:
+      "Alchemist Discoveries chosen at 5th, 9th, 13th, and 17th level — a choice count, never a spendable pool. Swappable on level-up.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "upgrades",
+    namePattern: /upgrades?/i,
+    displayName: "Upgrades",
+    definition:
+      "Inventor subclass upgrades chosen from your specialization list; count scales on the class level table. uses.shape MUST be type special (choice count) — never a spendable at_level pool with recharges.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "rushed_incantation",
+    namePattern: /rushed\s*incantation/i,
+    displayName: "Rushed Incantation",
+    definition:
+      "Uses of Rushed Incantation — cast a grimoire spell as a Bonus Action. Regain one expended use on a Short Rest and all uses on a Long Rest; the count scales on the class level table.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "trinkets",
+    namePattern: /\btrinkets?\b/i,
+    displayName: "Trinkets",
+    definition:
+      "Uses of supernatural Trinkets granted by your Investigator subclass. Regain one expended use on a Short Rest and all uses on a Long Rest; the count scales on the class level table.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend(?:ing)?\s+(?:a|one|1)\s+use\s+of\s+(?:your\s+)?trinkets\b/i,
+      /\bexpend(?:ing)?\s+(?:a|one|1)?\s*use\s+of\s+your\s+trinkets\b/i,
+    ],
+  },
+  {
+    resourceKey: "ritual_level",
+    namePattern: /ritual\s*level/i,
+    displayName: "Ritual Level",
+    definition:
+      "Maximum spell level you can add to your grimoire and cast as a Ritual at each Investigator level — a cap, not a spendable pool.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "finisher",
+    namePattern: /\bfinisher(?:\s*dice)?\b/i,
+    displayName: "Finisher",
+    definition:
+      "Bonus damage dice dealt by your Finisher (e.g. 1d8 → 3d8). The die count and size scale on the class level table; this is a damage rider on the weapon DMG ··· menu, not a spendable pool. Always use resource_key \"finisher\" (never finisher_dice). Pair the Finisher / Improved Finisher features with power_rider + weaponDamageMenu — not on_hit_trigger.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "charnel_touch",
+    namePattern: /charnel\s*touch/i,
+    displayName: "Charnel Touch",
+    definition:
+      "Pool of Charnel Touch points equal to 5 × your Necromancer level. Spend points (up to 5 × your Proficiency Bonus per use) to channel necrotic energy; the pool replenishes on a Long Rest and can be refilled by Dark Arcana. uses.shape MUST be type at_level + atLevelMode multiply_level + atLevelTable [{level:1,count:5}] — never uses.type multiply_level.",
+    proposeFromText: true,
+    textProposalUses: {
+      type: "at_level",
+      atLevelMode: "multiply_level",
+      atLevelTable: [{ level: 1, count: 5 }],
+      recharges: [{ rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\bexpend\s+(\d+)\s+charnel\s+touch\s+points?\b/i,
+      /\bspend\s+(\d+)\s+charnel\s+touch\s+points?\b/i,
+      /\bexpend(?![^.]{0,40}spell\s+slots?)[^.]{0,40}charnel\s+touch\b/i,
+      /\bcharnel\s+touch\s+points?[^.]{0,40}\bexpend(?!\s+(?:a\s+)?spell\s+slot)/i,
+    ],
+  },
+  {
+    resourceKey: "endurance_die_size",
+    namePattern: /endurance\s*die\s*size/i,
+    displayName: "Endurance Die Size",
+    definition:
+      "Die type (d8, d10, d12) rolled when spending Endurance Dice — scales on the class level table, not a spendable pool.",
+    spendPatterns: [],
+  },
+  {
+    resourceKey: "endurance_dice",
+    namePattern: /endurance\s*dice/i,
+    displayName: "Endurance Dice",
+    definition:
+      "Pool of Endurance Dice rolled to reduce damage taken or boost a saving throw (no action required). The die size scales by level; regain all expended dice when you finish a Short or Long Rest.",
+    defaultUses: {
+      type: "at_level",
+      atLevelMode: "tier",
+      recharges: [{ rest: "short_rest" }, { rest: "long_rest" }],
+    },
+    spendPatterns: [
+      /\broll\s+(?:an?|one|1)\s+endurance\s+die\b/i,
+      /\bexpend\s+(?:an?|one|1)\s+endurance\s+die\b/i,
+      /\broll\s+(?:up\s+to\s+)?(\d+)\s+endurance\s+dice\b/i,
+    ],
+  },
+  {
+    resourceKey: "primal_manifestations",
+    namePattern: /primal\s*manifestations?/i,
+    displayName: "Primal Manifestations",
+    definition:
+      "Number of Primal Manifestations the Warden knows — chosen from the manifestation list; the count scales on the class level table, not a spendable pool.",
+    spendPatterns: [],
+  },
+]
+
+export function matchThirdPartyResourceHeader(header: string): ThirdPartyResourcePattern | null {
+  const normalized = header.trim()
+  for (const pattern of THIRD_PARTY_RESOURCE_PATTERNS) {
+    if (pattern.namePattern.test(normalized)) return pattern
+  }
+  if (/exploits?\s*known/i.test(normalized)) {
+    return {
+      resourceKey: "exploits_known",
+      namePattern: /exploits?\s*known/i,
+      displayName: "Exploits Known",
+      definition:
+        "Number of Martial Exploits (or similar techniques) the character knows — a choice count, not a spendable pool.",
+      spendPatterns: [],
+    }
+  }
+  return null
+}
+
+const SPEND_WORD_NUMBERS: Record<string, number> = { two: 2, three: 3, four: 4, five: 5 }
+
+export function detectThirdPartyResourceSpend(
+  text: string,
+  resourceKey: string,
+): number | null {
+  const pattern = THIRD_PARTY_RESOURCE_PATTERNS.find((entry) => entry.resourceKey === resourceKey)
+  if (!pattern) return null
+  for (const spendPattern of pattern.spendPatterns) {
+    const match = text.match(spendPattern)
+    if (match) {
+      const raw = match[1]?.toLowerCase()
+      const amount = raw ? (SPEND_WORD_NUMBERS[raw] ?? parseInt(raw, 10)) : 1
+      return Number.isFinite(amount) && amount > 0 ? amount : 1
+    }
+  }
+  return null
+}
+
+export function slugClassPrefix(className: string): string {
+  return className
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+}
+
+/** Prefix resource keys for renamed/homebrew classes to avoid colliding with SRD keys. */
+export function prefixedResourceKey(classPrefix: string, baseKey: string): string {
+  if (!classPrefix || baseKey.startsWith(`${classPrefix}_`)) return baseKey
+  return `${classPrefix}_${baseKey}`
+}
+
+/** True when the pattern is scoped to a specific class and `className` is not it. */
+export function isNonOwnerClassForResource(
+  className: string,
+  pattern: Pick<ThirdPartyResourcePattern, "ownerClassPattern">,
+): boolean {
+  if (!pattern.ownerClassPattern) return false
+  return !pattern.ownerClassPattern.test(className)
+}
+
+/**
+ * Keep class-scoped resource keys (e.g. the Alchemist's `reagents`) from being shared by an
+ * unrelated class that happens to use the same word. The owner keeps the bare key; anyone else
+ * gets a class-prefixed one so the two pools stay independent.
+ */
+export function remapClassScopedResourceKey(className: string, resourceKey: string): string {
+  const pattern = THIRD_PARTY_RESOURCE_PATTERNS.find((entry) => entry.resourceKey === resourceKey)
+  if (!pattern || !isNonOwnerClassForResource(className, pattern)) return resourceKey
+  return prefixedResourceKey(slugClassPrefix(className), resourceKey)
+}

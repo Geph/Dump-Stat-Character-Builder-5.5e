@@ -1,0 +1,698 @@
+import { attachClassDetails, classLevelsToRows } from "@/lib/character/character-classes"
+import { buildClassResourceDieSidesMap } from "@/lib/character/resolve-class-resource-die"
+import { collectBuilderModifierRefIds } from "@/lib/compendium/builder-modifier-refs"
+import {
+  type AttackRollModifiersCharacteristic,
+  type BonusDamageRiderEntry,
+  type BonusDamageRidersCharacteristic,
+  type CharacteristicModifier,
+  type DamageRollModifiersCharacteristic,
+  type OnHitTriggerCharacteristic,
+  type RollModifierEntry,
+  type UnarmedStrikeDamageCharacteristic,
+  type WeaponAbilityOverrideCharacteristic,
+  type WeaponReachModifierCharacteristic,
+  type WeaponSheetBadgeCharacteristic,
+} from "@/lib/compendium/characteristic-modifiers"
+import { collectEquipmentMagicCharacteristics } from "@/lib/compendium/equipment-magic-modifiers"
+import {
+  getWeaponMastery,
+  getWeaponPropertyTags,
+  hasWeaponProperty,
+  isUnarmedStrikeWeapon,
+  isWeaponProficient,
+  weaponDamageDiceMatches,
+} from "@/lib/compendium/combat-stats"
+import { isWeaponBoundSpellBuffModifier } from "@/lib/character/weapon-spell-buff"
+import { describeWeaponMastery, weaponMasteryCatalogEntriesFromAbilities } from "@/lib/compendium/weapon-mastery"
+import {
+  extraMasteriesForWeapon,
+  extraWeaponMasterySlotCount,
+  isExtraWeaponMasteryPickKey,
+} from "@/lib/character/weapon-mastery-picks"
+import { formatRollBonusSummary } from "@/lib/compendium/roll-bonus-config"
+import { modifierLimitationsMet } from "@/lib/compendium/modifier-limitations"
+import { migrateFeatureOptionPickers } from "@/lib/compendium/feature-option-choice-migration"
+import { resolveSubclassUnlockLevel } from "@/lib/builder/choices"
+import type { CharacterBuildInputs } from "@/lib/character/types"
+import { readModifierSource } from "@/lib/character/tag-modifier-source"
+import { groupFeatWeaponBadges } from "@/lib/compendium/feat-weapon-badges"
+import type { StatContributionSourceType } from "@/lib/character/stat-contributions"
+import type { Equipment, Feature } from "@/lib/types"
+
+export type WeaponSheetAppliedModifier = {
+  name: string
+  description: string
+  sourceType?: StatContributionSourceType
+  sourceLabel?: string
+  sourceId?: string
+}
+
+export type WeaponSheetExtraMastery = {
+  name: string
+  description: string | null
+}
+
+export type WeaponSheetContext = {
+  masteryName: string | null
+  masteryDescription: string | null
+  masteryActive: boolean
+  extraMasteries: WeaponSheetExtraMastery[]
+  extraMasterySlotCount: number
+  appliedModifiers: WeaponSheetAppliedModifier[]
+}
+
+function normalizeToken(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function weaponMatchesAppliesTo(
+  weapon: Equipment,
+  properties: string[],
+  appliesTo: string | null | undefined,
+): boolean {
+  if (!appliesTo || appliesTo === "all") return true
+  const needle = appliesTo.toLowerCase()
+  if (needle === "unarmed" || needle.includes("unarmed")) {
+    return isUnarmedStrikeWeapon(weapon)
+  }
+  const damageType = weapon.damage_type?.trim().toLowerCase() ?? ""
+  if (damageType && (needle === damageType || needle.includes(damageType))) return true
+  return weaponMatchesModifierTarget(weapon.subcategory ?? "", properties, appliesTo, {
+    unarmed: isUnarmedStrikeWeapon(weapon),
+  })
+}
+
+function weaponMatchesModifierTarget(
+  subcategory: string,
+  properties: string[],
+  target: string,
+  options?: { unarmed?: boolean },
+): boolean {
+  if (!target || target === "all") return true
+  const needle = target.toLowerCase()
+  if (options?.unarmed && (needle === "unarmed" || needle.includes("unarmed"))) return true
+  const sub = subcategory.toLowerCase()
+  const props = properties.join(" ").toLowerCase()
+
+  switch (target) {
+    case "melee":
+      return sub.includes("melee")
+    case "ranged":
+      return sub.includes("ranged")
+    case "simple_melee":
+      return sub.includes("simple") && sub.includes("melee")
+    case "simple_ranged":
+      return sub.includes("simple") && sub.includes("ranged")
+    case "martial_melee":
+      return sub.includes("martial") && sub.includes("melee")
+    case "martial_ranged":
+      return sub.includes("martial") && sub.includes("ranged")
+    case "one_handed_melee":
+      return sub.includes("melee") && !props.includes("two-handed") && !props.includes("two handed")
+    default:
+      return sub.includes(target) || props.includes(target)
+  }
+}
+
+function resolveModifierTarget(entry: RollModifierEntry): string {
+  return entry.target === "custom" ? (entry.customTarget?.toLowerCase() ?? "") : entry.target
+}
+
+function formatSigned(value: number): string {
+  return value >= 0 ? `+${value}` : `${value}`
+}
+
+function entryMatchesWeapon(
+  weapon: Equipment,
+  properties: string[],
+  entry: RollModifierEntry,
+): boolean {
+  // Legacy imports put both weapon eligibility and reminder text in customTarget.
+  // Interpret the known weapon restrictions for display only; do not grant bonuses.
+  const custom = entry.customTarget?.toLowerCase() ?? ""
+  const unarmed = isUnarmedStrikeWeapon(weapon)
+  if (/\bcrossbows?\b/.test(custom) && !/crossbow/i.test(weapon.name)) return false
+  if (entry.target === "custom") {
+    if (/\bcrossbows?\b/.test(custom)) return !unarmed && /crossbow/i.test(weapon.name)
+    if (/^one-handed melee weapon\b/.test(custom)) {
+      return !unarmed && weaponMatchesModifierTarget(weapon.subcategory ?? "", properties, "one_handed_melee")
+    }
+    if (/^two-handed\/versatile melee\b/.test(custom)) {
+      return !unarmed && /melee/i.test(weapon.subcategory ?? "") &&
+        properties.some((p) => /^(two[- ]handed|versatile)\b/i.test(p))
+    }
+    if (/^thrown weapon ranged attacks\b/.test(custom)) return !unarmed && hasWeaponProperty(weapon, "thrown")
+    if (/^light weapon bonus-action attack\b/.test(custom)) return !unarmed && hasWeaponProperty(weapon, "light")
+  }
+  return weaponMatchesModifierTarget(
+    weapon.subcategory ?? "",
+    properties,
+    resolveModifierTarget(entry),
+    { unarmed: isUnarmedStrikeWeapon(weapon) },
+  )
+}
+
+function describeAttackEntry(entry: RollModifierEntry, rollKind: "attack" | "damage" = "attack"): string {
+  const parts: string[] = []
+  if (entry.bonus) parts.push(`${formatSigned(entry.bonus)} to ${rollKind} rolls`)
+  if (entry.customTarget?.trim()) parts.push(entry.customTarget.trim())
+  if (entry.criticalHitMinimum && entry.criticalHitMinimum < 20) {
+    parts.push(`Critical hit on ${entry.criticalHitMinimum}–20`)
+  }
+  if (entry.ignoreHalfCover) parts.push("Ignores half cover on ranged attacks")
+  if (entry.grantAbilityModifierWhenMissing) {
+    parts.push("Adds ability modifier to damage when it would not apply")
+  }
+  if (entry.bonusDiceWhenModifierIncluded) {
+    parts.push(
+      `Extra ${entry.bonusDiceWhenModifierIncluded}${
+        entry.bonusDiceUsesWeaponDamageType ? " of the weapon's type" : ""
+      } when ability modifier already applies`,
+    )
+  }
+  return parts.join(". ")
+}
+
+function describeRiderOption(rider: BonusDamageRiderEntry): string {
+  const costs: string[] = []
+  if (rider.costDice) costs.push(rider.costDice)
+  if (rider.costResourceKey) {
+    costs.push(
+      `${Math.max(1, rider.costResourceAmount ?? 1)} ${rider.costResourceKey.replace(/_/g, " ")}`,
+    )
+  }
+  return costs.length ? `${rider.name} (${costs.join(" + ")})` : rider.name
+}
+
+function appliedModifierSource(mod: CharacteristicModifier): Pick<
+  WeaponSheetAppliedModifier,
+  "sourceType" | "sourceLabel" | "sourceId"
+> {
+  const source = readModifierSource(mod)
+  return {
+    sourceType: source?.sourceType,
+    sourceLabel: source?.label || source?.source,
+    sourceId: source?.sourceId,
+  }
+}
+
+function isFirearmWeapon(weapon: Equipment): boolean {
+  if (hasWeaponProperty(weapon, "firearm")) return true
+  return /firearm/i.test(weapon.subcategory ?? "")
+}
+
+function weaponMatchesSheetBadge(weapon: Equipment, badge: WeaponSheetBadgeCharacteristic): boolean {
+  if (badge.requireFirearm && !isFirearmWeapon(weapon)) return false
+  const isUnarmed = isUnarmedStrikeWeapon(weapon)
+  const isRanged = weapon.subcategory?.toLowerCase().includes("ranged") ?? false
+  const isMelee = weapon.subcategory?.toLowerCase().includes("melee") ?? !isRanged
+  const weaponName = weapon.name.trim().toLowerCase()
+  const scope = badge.appliesTo ?? "all"
+  let matches = false
+  switch (scope) {
+    case "all":
+      matches = true
+      break
+    case "melee":
+      matches = isMelee
+      break
+    case "ranged":
+      matches = isRanged
+      break
+    case "finesse":
+      matches = hasWeaponProperty(weapon, "finesse")
+      break
+    case "specific": {
+      const names = (badge.weaponNames ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean)
+      matches = names.some((name) => name === weaponName)
+      break
+    }
+  }
+  if (!matches) return false
+  if (isUnarmed) return Boolean(badge.includeUnarmed)
+  if (badge.whenDamageDice?.length) return weaponDamageDiceMatches(weapon, badge.whenDamageDice)
+  return true
+}
+
+function weaponMatchesAbilityOverride(
+  weapon: Equipment,
+  override: WeaponAbilityOverrideCharacteristic,
+): boolean {
+  const isRanged = weapon.subcategory?.toLowerCase().includes("ranged") ?? false
+  const isMelee = weapon.subcategory?.toLowerCase().includes("melee") ?? !isRanged
+  const weaponName = weapon.name.trim().toLowerCase()
+  if (override.excludedWeaponProperties?.some((property) => hasWeaponProperty(weapon, property))) return false
+  let matches = false
+  switch (override.scope) {
+    case "all":
+      matches = true
+      break
+    case "melee":
+      matches = isMelee
+      break
+    case "ranged":
+      matches = isRanged
+      break
+    case "finesse":
+      matches = hasWeaponProperty(weapon, "finesse")
+      break
+    case "specific": {
+      const names = (override.weaponNames ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean)
+      matches = names.some((name) => name === weaponName)
+      break
+    }
+  }
+  if (!matches) return false
+  if (override.whenDamageDice?.length) {
+    if (isUnarmedStrikeWeapon(weapon)) return false
+    return weaponDamageDiceMatches(weapon, override.whenDamageDice)
+  }
+  return true
+}
+
+function describeWeaponAbilityOverride(override: WeaponAbilityOverrideCharacteristic): {
+  name: string
+  description: string
+} {
+  const abilityLabels: Record<string, string> = {
+    strength: "Strength",
+    dexterity: "Dexterity",
+    constitution: "Constitution",
+    intelligence: "Intelligence",
+    wisdom: "Wisdom",
+    charisma: "Charisma",
+  }
+  const abilityName = abilityLabels[override.ability] ?? override.ability
+  const applies =
+    override.appliesTo === "attack"
+      ? "attack rolls"
+      : override.appliesTo === "damage"
+        ? "damage rolls"
+        : "attack and damage rolls"
+  if (override.treatAsFinesse) {
+    return {
+      name: override.label?.trim() || "Extra Finesse",
+      description:
+        override.conditionLabel?.trim() ||
+        `Treat as Finesse for ${applies} (use the higher of Strength or Dexterity).`,
+    }
+  }
+  const rawLabel = override.label?.trim() ?? ""
+  const colon = rawLabel.indexOf(":")
+  const name = colon > 0 ? rawLabel.slice(0, colon).trim() : rawLabel || `Use ${abilityName}`
+  const detail =
+    colon > 0
+      ? rawLabel.slice(colon + 1).trim()
+      : override.conditionLabel?.trim() || `Use ${abilityName} for ${applies}.`
+  return { name, description: detail }
+}
+
+function describeUnarmedStrikeDamageBadge(mod: UnarmedStrikeDamageCharacteristic): {
+  name: string
+  description: string
+} {
+  const rawLabel = mod.label?.trim() ?? ""
+  const colon = rawLabel.indexOf(":")
+  const name = colon > 0 ? rawLabel.slice(0, colon).trim() : rawLabel || "Unarmed Strike"
+  const bits: string[] = []
+  if (colon > 0) bits.push(rawLabel.slice(colon + 1).trim())
+  else if (mod.die) bits.push(`${mod.die} damage`)
+  if (mod.emptyHandedDie) bits.push(`${mod.emptyHandedDie} while empty-handed`)
+  if (mod.damageType) bits.push(mod.damageType)
+  if (mod.ability) {
+    const labels: Record<string, string> = {
+      strength: "Strength",
+      dexterity: "Dexterity",
+      constitution: "Constitution",
+      intelligence: "Intelligence",
+      wisdom: "Wisdom",
+      charisma: "Charisma",
+    }
+    bits.push(`uses ${labels[mod.ability] ?? mod.ability}`)
+  }
+  return {
+    name,
+    description: bits.filter(Boolean).join(" · ") || name,
+  }
+}
+
+function collectAppliedModifiers(
+  weapon: Equipment,
+  mods: CharacteristicModifier[],
+  classResourceDieSides: Record<string, number>,
+  activeSheetToggles?: ReadonlySet<string>,
+): WeaponSheetAppliedModifier[] {
+  const properties = getWeaponPropertyTags(weapon)
+  const applied: WeaponSheetAppliedModifier[] = []
+
+  for (const mod of mods) {
+    if (isWeaponBoundSpellBuffModifier(mod)) continue
+    if (
+      activeSheetToggles &&
+      !modifierLimitationsMet(mod, { activeSheetToggles })
+    ) {
+      continue
+    }
+    if (mod.type === "attack_roll_modifiers") {
+      const attackMod = mod as AttackRollModifiersCharacteristic
+      for (const entry of attackMod.entries ?? []) {
+        if (!entryMatchesWeapon(weapon, properties, entry)) continue
+        const description = describeAttackEntry(entry)
+        if (!description && !attackMod.advantageVsTargetAfterMiss && !attackMod.weaponMasteryOverrides?.length) {
+          continue
+        }
+        const extra: string[] = []
+        if (description) extra.push(description)
+        if (attackMod.advantageVsTargetAfterMiss) {
+          extra.push("After missing, gain Advantage on your next attack against that target")
+        }
+        if (attackMod.weaponMasteryOverrides?.length) {
+          extra.push(`Can swap mastery to: ${attackMod.weaponMasteryOverrides.join(", ")}`)
+        }
+        applied.push({
+          name: mod.label ?? "Attack modifier",
+          description: extra.join(". "),
+          ...appliedModifierSource(mod),
+        })
+        break
+      }
+    }
+
+    if (mod.type === "damage_roll_modifiers") {
+      const damageMod = mod as DamageRollModifiersCharacteristic
+      for (const entry of damageMod.entries ?? []) {
+        if (!entryMatchesWeapon(weapon, properties, entry)) continue
+        const description = describeAttackEntry(entry, "damage")
+        if (!description) continue
+        applied.push({
+          name: mod.label ?? "Damage modifier",
+          description,
+          ...appliedModifierSource(mod),
+        })
+        break
+      }
+    }
+
+    if (mod.type === "weapon_reach_modifier") {
+      const reachMod = mod as WeaponReachModifierCharacteristic
+      const filter = reachMod.weaponPropertyFilter
+      const isUnarmed = isUnarmedStrikeWeapon(weapon)
+      const matches = isUnarmed
+        ? Boolean(reachMod.appliesToUnarmedStrike)
+        : filter?.length
+          ? filter.some((property) => properties.some((p) => normalizeToken(p) === normalizeToken(property)))
+          : // No property filter and scoped to Unarmed Strike only (the common case, e.g. Elemental
+            // Attunement) — doesn't apply to carried weapons at all.
+            !reachMod.appliesToUnarmedStrike && (weapon.subcategory ?? "").toLowerCase().includes("melee")
+      if (matches) {
+        applied.push({
+          name: mod.label ?? "Reach modifier",
+          description: `+${reachMod.reachBonusFeet} ft. reach`,
+          ...appliedModifierSource(mod),
+        })
+      }
+    }
+
+    if (mod.type === "on_hit_trigger") {
+      const trigger = mod as OnHitTriggerCharacteristic
+      if (!weaponMatchesAppliesTo(weapon, properties, trigger.appliesTo)) continue
+      const rawLabel = trigger.label?.trim() ?? ""
+      // Finisher dice are optional riders on the weapon DMG ··· menu, not chips.
+      if (/\bfinisher\b/i.test(rawLabel) || /\bfinisher\b/i.test(trigger.id)) continue
+      const bits: string[] = []
+      if (trigger.triggerOn === "crit") bits.push("On a critical hit")
+      else bits.push("On a hit")
+      if (trigger.oncePerTurn) bits.push("once per turn")
+      if (trigger.onlyIfTargetBelowHalfHp) bits.push("Bloodied target")
+      const colon = rawLabel.indexOf(":")
+      let name =
+        colon > 0 ? rawLabel.slice(0, colon).trim() : rawLabel || (trigger.triggerOn === "crit" ? "Critical hit" : "Other on hit effects")
+      if (/^concentration breaker$/i.test(name)) name = "Concentration Break"
+      const detail = colon > 0 ? rawLabel.slice(colon + 1).trim() : ""
+      applied.push({
+        name,
+        description: [detail, ...bits].filter(Boolean).join(" · ") || name,
+        ...appliedModifierSource(mod),
+      })
+    }
+
+    if (mod.type === "bonus_damage_riders") {
+      const riderMod = mod as BonusDamageRidersCharacteristic
+      const appliesTo = riderMod.appliesTo?.toLowerCase() ?? "all"
+      if (
+        appliesTo !== "all" &&
+        !weaponMatchesModifierTarget(weapon.subcategory ?? "", properties, appliesTo, {
+          unarmed: isUnarmedStrikeWeapon(weapon),
+        })
+      ) {
+        continue
+      }
+      if (riderMod.automaticBonus) {
+        applied.push({
+          name: mod.label ?? "On-hit rider",
+          description:
+            formatRollBonusSummary(riderMod.automaticBonus, { classResourceDieSides }) ||
+            "Bonus damage on hit",
+          ...appliedModifierSource(mod),
+        })
+      } else if (riderMod.riders?.length) {
+        applied.push({
+          name: mod.label ?? "On-hit options",
+          description: `Pick on the Combat tab: ${riderMod.riders.map(describeRiderOption).join(", ")}`,
+          ...appliedModifierSource(mod),
+        })
+      }
+    }
+
+    if (mod.type === "weapon_sheet_badge") {
+      const badge = mod as WeaponSheetBadgeCharacteristic
+      if (!weaponMatchesSheetBadge(weapon, badge)) continue
+      const name = badge.label?.trim() || "Weapon rider"
+      applied.push({
+        name,
+        description: badge.description?.trim() || name,
+        ...appliedModifierSource(mod),
+      })
+    }
+
+    if (mod.type === "unarmed_strike_damage") {
+      if (!isUnarmedStrikeWeapon(weapon)) continue
+      const badge = describeUnarmedStrikeDamageBadge(mod as UnarmedStrikeDamageCharacteristic)
+      applied.push({
+        name: badge.name,
+        description: badge.description,
+        ...appliedModifierSource(mod),
+      })
+    }
+
+    if (mod.type === "weapon_ability_override") {
+      const override = mod as WeaponAbilityOverrideCharacteristic
+      if (!weaponMatchesAbilityOverride(weapon, override)) continue
+      const badge = describeWeaponAbilityOverride(override)
+      applied.push({
+        name: badge.name,
+        description: badge.description,
+        ...appliedModifierSource(mod),
+      })
+    }
+
+    if (mod.type === "resource_ability_menu") {
+      const kinds = mod.appliesOnRollKinds ?? []
+      const haystack = [mod.label ?? "", ...(mod.options ?? []).flatMap((option) => [option.name, option.description ?? ""])]
+        .join(" ")
+        .toLowerCase()
+      const looksLikeWeapon =
+        kinds.includes("attack") ||
+        /\b(?:ranged|melee|weapon|unarmed)\b.{0,40}\b(?:attack|damage)\b|\b(?:attack|damage)\b.{0,40}\b(?:ranged|melee|weapon|unarmed)\b|\bweapon attacks?\b/.test(
+          haystack,
+        )
+      if (!looksLikeWeapon) continue
+      const appliesTo = /\branged\b/.test(haystack) && !/\bmelee\b/.test(haystack)
+        ? "ranged"
+        : /\bmelee\b/.test(haystack) && !/\branged\b/.test(haystack)
+          ? "melee"
+          : "all"
+      const option = mod.options?.[0]
+      const badge: WeaponSheetBadgeCharacteristic = {
+        id: `${mod.id}_weapon_badge`,
+        type: "weapon_sheet_badge",
+        label: mod.label?.trim() || option?.name || "Weapon rider",
+        description: option?.description?.trim() || mod.label?.trim() || "Weapon rider",
+        appliesTo,
+        includeUnarmed: /\bunarmed\b/.test(haystack),
+        limitations: mod.limitations,
+      }
+      if (!weaponMatchesSheetBadge(weapon, badge)) continue
+      applied.push({
+        name: badge.label?.trim() || "Weapon rider",
+        description: badge.description?.trim() || badge.label || "Weapon rider",
+        ...appliedModifierSource(mod),
+      })
+    }
+  }
+
+  const seen = new Set<string>()
+  return applied.filter((row) => {
+    // Same effect + source can appear twice when a feature was imported with both AI and
+    // detector attack_roll_modifiers (Critical Shot). Collapse those display duplicates.
+    const key = `${normalizeToken(row.description)}|${normalizeToken(row.sourceLabel ?? "")}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function collectWeaponMasteryPicks(inputs: CharacterBuildInputs): string[] {
+  const picks = new Set<string>()
+  for (const values of Object.values(inputs.modifierPlayerPicks ?? {})) {
+    for (const value of values) picks.add(value)
+  }
+  for (const [key, values] of Object.entries(inputs.featureChoicePicks ?? {})) {
+    if (isExtraWeaponMasteryPickKey(key)) continue
+    for (const value of values) picks.add(value)
+  }
+  return [...picks]
+}
+
+function collectUnlockedFeatures(inputs: CharacterBuildInputs): Feature[] {
+  const features: Feature[] = []
+  for (const entry of inputs.classLevels) {
+    const cls = inputs.classes.find((row) => row.id === entry.classId)
+    for (const feature of cls?.features ?? []) {
+      if (feature.level <= entry.level) features.push(feature)
+    }
+    const subclassId = inputs.subclassByClassId[entry.classId]
+    if (subclassId && entry.level >= resolveSubclassUnlockLevel(cls)) {
+      const subclass = inputs.subclasses.find((row) => row.id === subclassId)
+      for (const feature of subclass?.features ?? []) {
+        if (feature.level <= entry.level) features.push(feature)
+      }
+    }
+  }
+  return features
+}
+
+function pickMatchesWeapon(pick: string, weapon: Equipment): boolean {
+  const needle = normalizeToken(pick)
+  if (!needle) return false
+  if (normalizeToken(weapon.name) === needle) return true
+  if (weapon.subcategory && normalizeToken(weapon.subcategory).includes(needle)) return true
+  if (needle.includes(normalizeToken(weapon.name))) return true
+  return false
+}
+
+function featureGrantsWeaponMastery(feature: Feature): boolean {
+  if (!/^weapon mastery$/i.test(feature.name?.trim() ?? "")) return false
+  const migrated = migrateFeatureOptionPickers(feature)
+  return Boolean(
+    migrated.choices?.choiceCountByLevel?.length ||
+      migrated.choices?.resourceKey === "weapon_mastery" ||
+      migrated.isChoice,
+  )
+}
+
+function characterHasWeaponMasteryFeature(inputs: CharacterBuildInputs): boolean {
+  for (const entry of inputs.classLevels) {
+    const cls = inputs.classes.find((c) => c.id === entry.classId)
+    if (cls?.features?.some((feature) => feature.level <= entry.level && featureGrantsWeaponMastery(feature))) {
+      return true
+    }
+    const subclassId = inputs.subclassByClassId[entry.classId]
+    if (subclassId && entry.level >= resolveSubclassUnlockLevel(cls)) {
+      const subclass = inputs.subclasses.find((s) => s.id === subclassId)
+      if (
+        subclass?.features?.some(
+          (feature) => feature.level <= entry.level && featureGrantsWeaponMastery(feature),
+        )
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+export function buildWeaponSheetContext(
+  weapon: Equipment,
+  inputs: CharacterBuildInputs,
+  weaponProficiencies: string[],
+): WeaponSheetContext {
+  const builderMods = collectBuilderModifierRefIds({
+    catalog: inputs.modifierCatalog,
+    species: inputs.species ?? undefined,
+    speciesTraitPicks: inputs.speciesTraitPicks,
+    background: inputs.background,
+    feats: inputs.feats,
+    selectedFeatIds: inputs.selectedFeatIds,
+    grantedFeatIds: inputs.grantedFeatIds,
+    featSelectionEntries: inputs.featSelectionEntries,
+    featChoicePicks: inputs.featChoicePicks,
+    modifierPlayerPicks: inputs.modifierPlayerPicks,
+    classLevels: inputs.classLevels,
+    classes: inputs.classes,
+    subclasses: inputs.subclasses,
+    subclassByClassId: inputs.subclassByClassId,
+    featureChoicePicks: inputs.featureChoicePicks,
+    customAbilities: inputs.customAbilities,
+  })
+
+  const equipmentMagicMods = collectEquipmentMagicCharacteristics({
+    equipment: inputs.equipment,
+    equippedArmorId: inputs.equippedArmorId,
+    equippedShieldId: inputs.equippedShieldId,
+    equippedWeaponId: inputs.equippedWeaponId,
+    equippedOffHandWeaponId: inputs.equippedOffHandWeaponId,
+    attunedItemIds: inputs.attunedItemIds ?? [],
+    modifierCatalog: inputs.modifierCatalog,
+  })
+
+  // Per-weapon modifiers (attack/damage/reach/riders) are filtered by weapon target
+  // (melee/ranged/subtype/property) below, which the flattened AggregatedCharacteristics
+  // contract can't represent — a single global `criticalHitMinimum`/`bonusDamageRiders` would
+  // incorrectly apply weapon-type-scoped effects to every weapon. Walk the raw mods instead of
+  // calling aggregateCharacteristics() here.
+  const allMods = [...builderMods, ...equipmentMagicMods]
+
+  const classRows = classLevelsToRows(
+    inputs.classLevels,
+    inputs.subclassByClassId,
+    inputs.classAddOrder ?? [],
+  )
+  const classResourceDieSides = buildClassResourceDieSidesMap(
+    attachClassDetails(classRows, inputs.classes, inputs.subclasses),
+  )
+
+  const masteryCatalogEntries = weaponMasteryCatalogEntriesFromAbilities(inputs.customAbilities)
+  const masteryName = getWeaponMastery(weapon)
+  const masteryDescription = masteryName
+    ? describeWeaponMastery(masteryName, masteryCatalogEntries)
+    : null
+  const hasMasteryFeature = characterHasWeaponMasteryFeature(inputs)
+  const proficient = isWeaponProficient(weapon, weaponProficiencies)
+  const masteryPicks = collectWeaponMasteryPicks(inputs)
+  const masteryActive =
+    Boolean(masteryName) &&
+    hasMasteryFeature &&
+    proficient &&
+    (masteryPicks.length === 0 || masteryPicks.some((pick) => pickMatchesWeapon(pick, weapon)))
+  const extraMasterySlotCount = extraWeaponMasterySlotCount(collectUnlockedFeatures(inputs))
+  const extraMasteries = extraMasteriesForWeapon(inputs.featureChoicePicks, weapon.id).map((name) => ({
+    name,
+    description: describeWeaponMastery(name, masteryCatalogEntries),
+  }))
+
+  return {
+    masteryName,
+    masteryDescription,
+    masteryActive,
+    extraMasteries,
+    extraMasterySlotCount,
+    appliedModifiers: groupFeatWeaponBadges(collectAppliedModifiers(
+      weapon,
+      allMods,
+      classResourceDieSides,
+      inputs.activeSheetToggles,
+    ), inputs.feats),
+  }
+}

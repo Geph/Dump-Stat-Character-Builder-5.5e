@@ -1,0 +1,595 @@
+import {
+  parseClassProgressionTable,
+  usesConfigForProgressionColumn,
+} from "@/lib/import/parse-class-progression-table"
+import { enrichPsionicTalentGrantFeatures } from "@/lib/builder/aggregate-psionic-talents"
+import { detectPointPoolSpellcastingFromText } from "@/lib/import/detect-point-pool-spellcasting"
+import { detectSpecialAbilityFromText } from "@/lib/import/detect-special-ability"
+import { detectSpellcastingAbilityFromText } from "@/lib/import/detect-governing-ability"
+import { parseStartingEquipmentFromText } from "@/lib/import/parse-starting-equipment"
+import { resolveClassSkillChoices } from "@/lib/import/parse-class-shell"
+import {
+  enrichClassFeaturesWithPresets,
+  mergeAlternateRangerClassResources,
+  remapKiResourceKey,
+} from "@/lib/import/enrichment-presets"
+import { enrichPointPoolClassResources, remapPointPoolResourceKey } from "@/lib/import/enrich-point-pool-resources"
+import { defaultClassIconForName } from "@/lib/compendium/class-icons-defaults"
+import { wireClassToolProficiencyChoices } from "@/lib/compendium/class-tool-proficiencies"
+import { normalizeFeatureRow } from "@/lib/compendium/normalize-feature-activation"
+import { extractMulticlassSection } from "@/lib/import/parse-multiclass-section"
+import { stripClassProgressionTablesFromText } from "@/lib/import/strip-class-progression-tables"
+import {
+  detectThirdPartyResourceSpend,
+  remapClassScopedResourceKey,
+  THIRD_PARTY_RESOURCE_PATTERNS,
+} from "@/lib/import/third-party-resources"
+import type { Feature, UsesConfig } from "@/lib/types"
+import { enrichImportedWeaponMasteryFromColumn } from "@/lib/compendium/weapon-mastery-choice"
+import { classNamesFuzzyMatch, classNamesMatch } from "@/lib/import/resolve-parent-class"
+import { classResourcePrerequisitesForSubclass } from "@/lib/compendium/class-resource-rows"
+
+function resourceBelongsToClass(resourceClassName: string, className: string): boolean {
+  return (
+    classNamesMatch(resourceClassName, className) ||
+    classNamesFuzzyMatch(resourceClassName, className)
+  )
+}
+
+export type ClassResourceImportRow = {
+  class_name: string
+  subclass_name?: string
+  resource_key: string
+  name: string
+  description?: string | null
+  prerequisite_rules?: import("@/lib/import/content-schema").PrerequisiteRule[] | null
+  uses: UsesConfig
+}
+
+function remapImportedResourceKey(className: string, resourceKey: string): string {
+  return remapClassScopedResourceKey(
+    className,
+    remapKiResourceKey(className, remapPointPoolResourceKey(className, resourceKey)),
+  )
+}
+
+const PSI_COST_RE =
+  /\b(?:expend|spend|costs?|pay|use)\s+(?:up\s+to\s+)?(\d+)\s+psi\s+points?\b/i
+
+const PSI_COST_ALT_RE = /\b(\d+)\s+psi\s+points?\b[^.]{0,40}\b(?:to|when|per)\b/i
+
+export function detectPsiPointCost(text: string): number | null {
+  const primary = text.match(PSI_COST_RE)
+  if (primary) return parseInt(primary[1], 10)
+  const alt = text.match(PSI_COST_ALT_RE)
+  if (alt) return parseInt(alt[1], 10)
+  return null
+}
+
+export function detectExploitDieCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "exploit_dice")
+}
+
+export function detectBattleDieCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "battle_dice")
+}
+
+export function detectRiskDieCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "risk_dice")
+}
+
+export function detectTrinketCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "trinkets")
+}
+
+export function detectEnduranceDieCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "endurance_dice")
+}
+
+export function detectDanceCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "dances")
+}
+
+export function detectDanceDieCost(text: string): number | null {
+  return detectThirdPartyResourceSpend(text, "dance_die")
+}
+
+function linkResourceCostsOnFeatures(
+  features: Feature[],
+  resourceKeys: {
+    psi?: string
+    exploit?: string
+    risk?: string
+    battle?: string
+    trinkets?: string
+    endurance?: string
+    dances?: string
+    danceDie?: string
+  },
+): Feature[] {
+  return features.map((feature) => {
+    const description = feature.description ?? ""
+    let limitedUses = feature.limitedUses
+
+    const psiCost = resourceKeys.psi ? detectPsiPointCost(description) : null
+    if (psiCost != null && resourceKeys.psi) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.psi,
+        classResourceAmount: psiCost,
+      }
+    }
+
+    const exploitCost = resourceKeys.exploit ? detectExploitDieCost(description) : null
+    if (exploitCost != null && resourceKeys.exploit) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.exploit,
+        classResourceAmount: exploitCost,
+      }
+    }
+
+    const battleCost = resourceKeys.battle ? detectBattleDieCost(description) : null
+    if (battleCost != null && resourceKeys.battle) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.battle,
+        classResourceAmount: battleCost,
+      }
+    }
+
+    const riskCost = resourceKeys.risk ? detectRiskDieCost(description) : null
+    if (riskCost != null && resourceKeys.risk) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.risk,
+        classResourceAmount: riskCost,
+      }
+    }
+
+    const trinketCost = resourceKeys.trinkets ? detectTrinketCost(description) : null
+    if (trinketCost != null && resourceKeys.trinkets) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.trinkets,
+        classResourceAmount: trinketCost,
+      }
+    }
+
+    const enduranceCost = resourceKeys.endurance ? detectEnduranceDieCost(description) : null
+    if (enduranceCost != null && resourceKeys.endurance) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.endurance,
+        classResourceAmount: enduranceCost,
+      }
+    }
+
+    const danceCost = resourceKeys.dances ? detectDanceCost(description) : null
+    if (danceCost != null && resourceKeys.dances) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.dances,
+        classResourceAmount: danceCost,
+      }
+    }
+
+    const danceDieCost = resourceKeys.danceDie ? detectDanceDieCost(description) : null
+    if (danceDieCost != null && resourceKeys.danceDie) {
+      limitedUses = {
+        ...(limitedUses ?? {}),
+        type: "class_resource",
+        classResourceKey: resourceKeys.danceDie,
+        classResourceAmount: danceDieCost,
+      }
+    }
+
+    if (!limitedUses || limitedUses === feature.limitedUses) {
+      return normalizeFeatureRow(feature)
+    }
+
+    return normalizeFeatureRow({ ...feature, limitedUses })
+  })
+}
+
+function collectProgressionText(row: Record<string, unknown>): string {
+  const parts: string[] = []
+  if (typeof row.description === "string") parts.push(row.description)
+  const features = row.features
+  if (Array.isArray(features)) {
+    for (const raw of features) {
+      const feature = raw as Feature
+      if (typeof feature.description === "string") parts.push(feature.description)
+    }
+  }
+  return parts.join("\n\n")
+}
+
+function resolveResourceKeysForClass(
+  className: string,
+  explicitResources: ClassResourceImportRow[] | undefined,
+  progressionText: string,
+): { psi?: string; exploit?: string; risk?: string; battle?: string; trinkets?: string; endurance?: string; dances?: string; danceDie?: string } {
+  const keys: {
+    psi?: string
+    exploit?: string
+    risk?: string
+    battle?: string
+    trinkets?: string
+    endurance?: string
+    dances?: string
+    danceDie?: string
+  } = {}
+  const classResources =
+    explicitResources?.filter((r) => resourceBelongsToClass(r.class_name, className)) ?? []
+
+  for (const resource of classResources) {
+    if (/psi\s*points?/i.test(resource.name)) keys.psi = resource.resource_key
+    if (/exploit\s*dice/i.test(resource.name)) keys.exploit = resource.resource_key
+    if (/risk\s*dice/i.test(resource.name)) keys.risk = resource.resource_key
+    if (/battle\s*dice/i.test(resource.name)) keys.battle = resource.resource_key
+    if (/\btrinkets?\b/i.test(resource.name)) keys.trinkets = resource.resource_key
+    if (/endurance\s*dice/i.test(resource.name)) keys.endurance = resource.resource_key
+    if (/^dances?$/i.test(resource.name)) keys.dances = resource.resource_key
+    if (/dance\s*die/i.test(resource.name)) keys.danceDie = resource.resource_key
+  }
+
+  const lower = progressionText.toLowerCase()
+  if (!keys.psi && lower.includes("psi point")) keys.psi = "psi_points"
+  if (!keys.exploit && /\bexploit\s+die\b/.test(lower)) keys.exploit = "exploit_dice"
+  if (!keys.risk && /\brisk\s+dice\b/.test(lower)) keys.risk = "risk_dice"
+  if (!keys.battle && /\bbattle\s+dice\b/.test(lower)) keys.battle = "battle_dice"
+  if (!keys.trinkets && /\btrinkets?\b/.test(lower)) keys.trinkets = "trinkets"
+  if (!keys.endurance && /\bendurance\s+dice\b/.test(lower)) keys.endurance = "endurance_dice"
+  if (!keys.dances && /\bdances?\b/.test(lower)) keys.dances = "dances"
+  if (!keys.danceDie && /\bdance\s+die\b/.test(lower)) keys.danceDie = "dance_die"
+
+  return keys
+}
+
+function tableUsesHasLevels(uses: UsesConfig): boolean {
+  return (uses.atLevelTable?.length ?? 0) > 0
+}
+
+/** Prefer level-table data from a parsed progression column when explicit uses are incomplete. */
+export function mergeUsesFromProgressionTable(
+  explicit: UsesConfig,
+  fromTable: UsesConfig,
+): UsesConfig {
+  if (!tableUsesHasLevels(fromTable)) return explicit
+  const explicitLevels = explicit.atLevelTable?.length ?? 0
+  const tableLevels = fromTable.atLevelTable?.length ?? 0
+  if (tableUsesHasLevels(explicit) && explicitLevels >= tableLevels) return explicit
+
+  return {
+    ...explicit,
+    type: fromTable.type ?? explicit.type,
+    atLevelTable: fromTable.atLevelTable,
+    atLevelMode: fromTable.atLevelMode ?? explicit.atLevelMode,
+    dieType: fromTable.dieType ?? explicit.dieType,
+    dieSidesByLevel: fromTable.dieSidesByLevel ?? explicit.dieSidesByLevel,
+    recharges: explicit.recharges?.length ? explicit.recharges : fromTable.recharges,
+    rechargeOnInitiative:
+      explicit.rechargeOnInitiative != null
+        ? explicit.rechargeOnInitiative
+        : fromTable.rechargeOnInitiative,
+    specialDescription: explicit.specialDescription ?? fromTable.specialDescription,
+  }
+}
+
+/** Parse progression tables from class text before descriptions are stripped. */
+export function mergeTableParsedClassResources(content: {
+  classes?: unknown[]
+  class_resources?: ClassResourceImportRow[]
+}): ClassResourceImportRow[] {
+  const merged = new Map<string, ClassResourceImportRow>()
+
+  for (const row of content.class_resources ?? []) {
+    merged.set(`${row.class_name}::${row.resource_key}`, { ...row })
+  }
+
+  for (const classRow of content.classes ?? []) {
+    const record = classRow as unknown as Record<string, unknown>
+    const className = String(record.name ?? "")
+    if (!className) continue
+
+    const parsed = parseClassProgressionTable(collectProgressionText(record))
+    if (!parsed?.columns.length) continue
+
+    for (const column of parsed.columns) {
+      const resourceKey = remapImportedResourceKey(className, column.resourceKey)
+      const mapKey = `${className}::${resourceKey}`
+      const tableUses = usesConfigForProgressionColumn(column, className)
+      const existing = merged.get(mapKey) ?? merged.get(`${className}::${column.resourceKey}`)
+      if (existing) {
+        merged.delete(`${className}::${column.resourceKey}`)
+        merged.set(mapKey, {
+          ...existing,
+          resource_key: resourceKey,
+          uses: mergeUsesFromProgressionTable(existing.uses, tableUses),
+          description:
+            existing.description ??
+            `${column.resourceName} progression parsed from the ${className} level table.`,
+        })
+      } else {
+        merged.set(mapKey, {
+          class_name: className,
+          resource_key: resourceKey,
+          name: column.resourceName,
+          description: `${column.resourceName} progression parsed from the ${className} level table.`,
+          uses: tableUses,
+        })
+      }
+    }
+  }
+
+  return [...merged.values()].flatMap((row) => {
+    const classRow = (content.classes ?? []).find(
+      (entry) => String((entry as unknown as Record<string, unknown>).name ?? "") === row.class_name,
+    ) as unknown as Record<string, unknown> | undefined
+    const features = Array.isArray(classRow?.features)
+      ? (classRow.features as Feature[])
+      : []
+    const withRanger = mergeAlternateRangerClassResources(row.class_name, features, [row])
+    // A seed may be appended (e.g. Quarry). It must not replace the unrelated
+    // explicit row currently being normalized, dropping every other resource.
+    const mergedRow = withRanger.find((candidate) => candidate.class_name === row.class_name && candidate.resource_key === row.resource_key) ?? row
+    return enrichPointPoolClassResources(
+      mergedRow.class_name,
+      classRow?.spellcasting,
+      features,
+      [mergedRow],
+    )
+  })
+}
+
+/** Build class_resources rows from explicit import data or parsed progression tables. */
+export function buildClassResourceRowsForClass(
+  classRow: Record<string, unknown>,
+  explicitResources: ClassResourceImportRow[] | undefined,
+  source: string,
+  classId: string,
+): Record<string, unknown>[] {
+  const className = String(classRow.name ?? "")
+  const parsed = parseClassProgressionTable(collectProgressionText(classRow))
+  const explicit =
+    explicitResources?.filter((resource) => resourceBelongsToClass(resource.class_name, className)) ??
+    []
+
+  const rows: Record<string, unknown>[] = []
+
+  for (const resource of explicit) {
+    rows.push({
+      class_id: classId,
+      resource_key: remapImportedResourceKey(className, resource.resource_key),
+      name: resource.name,
+      description: resource.description ?? null,
+      prerequisite_rules: classResourcePrerequisitesForSubclass(
+        resource.subclass_name,
+        resource.prerequisite_rules,
+      ),
+      uses: resource.uses,
+      source,
+    })
+  }
+
+  const parsedColumns = parsed?.columns ?? []
+  for (const column of parsedColumns) {
+    if (column.resourceKey === "weapon_mastery") continue
+    const tableUses = usesConfigForProgressionColumn(column, className)
+    const existingRow = rows.find((row) => row.resource_key === column.resourceKey)
+    if (existingRow) {
+      existingRow.uses = mergeUsesFromProgressionTable(
+        existingRow.uses as unknown as unknown as unknown as UsesConfig,
+        tableUses,
+      )
+      continue
+    }
+    rows.push({
+      class_id: classId,
+      resource_key: remapImportedResourceKey(className, column.resourceKey),
+      name: column.resourceName,
+      description: `${column.resourceName} for ${className} (imported from class progression table).`,
+      uses: usesConfigForProgressionColumn(column, className),
+      source,
+    })
+  }
+
+  return rows
+}
+
+function applyImportedWeaponMasteryColumn(
+  features: Feature[],
+  className: string,
+  progressionText: string,
+): Feature[] {
+  const parsed = parseClassProgressionTable(progressionText)
+  const column = parsed?.columns.find((entry) => entry.resourceKey === "weapon_mastery")
+  if (!column?.valuesByLevel.length) return features
+  return enrichImportedWeaponMasteryFromColumn(features, className, column.valuesByLevel)
+}
+
+/** Link resource spends and normalize features on imported class rows. */
+export function enrichImportedClassRow(
+  row: Record<string, unknown>,
+  explicitResources: ClassResourceImportRow[] | undefined,
+): Record<string, unknown> {
+  const className = String(row.name ?? "")
+  const progressionText = collectProgressionText(row)
+  const resourceKeys = resolveResourceKeysForClass(className, explicitResources, progressionText)
+
+  const features = Array.isArray(row.features) ? (row.features as Feature[]) : []
+  const shouldLink =
+    resourceKeys.psi ||
+    resourceKeys.exploit ||
+    resourceKeys.battle ||
+    resourceKeys.trinkets ||
+    resourceKeys.endurance ||
+    resourceKeys.dances ||
+    resourceKeys.danceDie ||
+    explicitResources?.some((resource) => resource.class_name === className)
+
+  const nextFeatures = enrichClassFeaturesWithPresets(
+    enrichPsionicTalentGrantFeatures(
+      shouldLink
+        ? linkResourceCostsOnFeatures(features, resourceKeys)
+        : features.map((feature) => normalizeFeatureRow(feature)),
+    ),
+    className,
+    row.spellcasting,
+  )
+
+  let description = typeof row.description === "string" ? row.description : null
+  let multiclassFields: Record<string, unknown> = {}
+  if (description) {
+    const { classText, multiclass } = extractMulticlassSection(description)
+    const stripped = stripClassProgressionTablesFromText(classText)
+    description = stripped.length > 0 ? stripped : null
+    if (multiclass) {
+      multiclassFields = {
+        multiclass_prerequisites: multiclass.multiclass_prerequisites,
+        multiclass_prerequisite_groups: multiclass.multiclass_prerequisite_groups,
+        multiclass_proficiencies_gained: multiclass.multiclass_proficiencies_gained,
+      }
+    }
+  }
+
+  let spellcasting = row.spellcasting as import("@/lib/types").DndClass["spellcasting"] | null | undefined
+  const featuresText = features.map((feature) => feature.description ?? "").join("\n")
+  const detectedPool = detectPointPoolSpellcastingFromText(className, description, featuresText)
+  if (detectedPool && !spellcasting?.point_pool) {
+    spellcasting = {
+      ...(spellcasting ?? { ability: "Charisma" }),
+      point_pool: detectedPool,
+      progression: spellcasting?.progression,
+    }
+  }
+
+  const specialAbility = detectSpecialAbilityFromText(description, featuresText)
+  const detectedSpellcastingAbility = detectSpellcastingAbilityFromText(description, featuresText)
+  if (detectedSpellcastingAbility) {
+    spellcasting = {
+      ...(spellcasting ?? { ability: detectedSpellcastingAbility }),
+      ability: detectedSpellcastingAbility,
+      progression: spellcasting?.progression,
+    }
+  }
+
+  const parsedProgression = parseClassProgressionTable(progressionText)
+  if (parsedProgression?.spellSlotProgression?.byLevel.length) {
+    const slotProg = parsedProgression.spellSlotProgression
+    spellcasting = {
+      ...(spellcasting ?? { ability: "Wisdom" }),
+      caster_progression: slotProg.casterType,
+      explicit_slot_progression: slotProg.byLevel,
+      progression: spellcasting?.progression,
+    }
+  }
+
+  let starting_equipment_groups = row.starting_equipment_groups as
+    | import("@/lib/types").StartingEquipmentGroup[]
+    | null
+    | undefined
+  let starting_gold = row.starting_gold as number | null | undefined
+  if (!starting_equipment_groups?.length && description) {
+    const parsedEquipment = parseStartingEquipmentFromText(description)
+    if (parsedEquipment.starting_equipment_groups.length) {
+      starting_equipment_groups = parsedEquipment.starting_equipment_groups
+      starting_gold = parsedEquipment.starting_gold ?? starting_gold
+    }
+  }
+
+  const skill_choices = resolveClassSkillChoices(
+    row.skill_choices as
+      | { count: number; options: string[]; fixed?: string[] }
+      | null
+      | undefined,
+    [
+      typeof row.description === "string" ? row.description : null,
+      description,
+      featuresText,
+      progressionText,
+    ],
+  )
+
+  const existingIcon = typeof row.icon === "string" ? row.icon.trim() : ""
+  const icon = existingIcon || defaultClassIconForName(className)
+
+  return wireClassToolProficiencyChoices({
+    ...row,
+    description,
+    features: applyImportedWeaponMasteryColumn(nextFeatures, className, progressionText),
+    spellcasting,
+    special_ability: specialAbility ?? row.special_ability,
+    starting_equipment_groups,
+    starting_gold,
+    ...(icon ? { icon } : {}),
+    ...(skill_choices ? { skill_choices } : {}),
+    ...multiclassFields,
+  })
+}
+
+export function enrichSubclassFeaturesWithPsiCosts(
+  features: Feature[],
+  resourceKey = "psi_points",
+): Feature[] {
+  return linkResourceCostsOnFeatures(features, { psi: resourceKey })
+}
+
+export function enrichSubclassFeaturesWithExploitCosts(
+  features: Feature[],
+  resourceKey = "exploit_dice",
+): Feature[] {
+  return linkResourceCostsOnFeatures(features, { exploit: resourceKey })
+}
+
+export function resolvePsiResourceKeyForClass(
+  className: string,
+  explicitResources: ClassResourceImportRow[] | undefined,
+): string | null {
+  const match = explicitResources?.find(
+    (resource) =>
+      resourceBelongsToClass(resource.class_name, className) &&
+      /psi\s*points?/i.test(resource.name),
+  )
+  if (match) return match.resource_key
+  return null
+}
+
+export function resolveExploitResourceKeyForClass(
+  className: string,
+  explicitResources: ClassResourceImportRow[] | undefined,
+): string | null {
+  const match = explicitResources?.find(
+    (resource) =>
+      resourceBelongsToClass(resource.class_name, className) &&
+      /exploit\s*dice/i.test(resource.name),
+  )
+  if (match) return match.resource_key
+  return null
+}
+
+/** Resource keys referenced in class text that may need import proposals. */
+export function detectThirdPartyResourcesInText(text: string): string[] {
+  const found: string[] = []
+  for (const pattern of THIRD_PARTY_RESOURCE_PATTERNS) {
+    if (pattern.namePattern.test(text) || pattern.spendPatterns.some((re) => re.test(text))) {
+      found.push(pattern.resourceKey)
+    }
+  }
+  return found
+}
+
+export function enrichImportedClassList(
+  rows: Record<string, unknown>[],
+  explicitResources: ClassResourceImportRow[] | undefined,
+): Record<string, unknown>[] {
+  return rows.map((row) => enrichImportedClassRow(row, explicitResources))
+}

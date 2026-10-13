@@ -1,0 +1,307 @@
+import {
+  mergeEquipmentHoldings,
+  type EquipmentQuantities,
+} from "@/lib/character/equipment-quantities"
+import { normalizeStartingEquipmentGroups } from "@/lib/compendium/normalize-class-data"
+import type { DndClass, Equipment } from "@/lib/types"
+
+export type StartingEquipmentGroup = {
+  description: string
+  options: {
+    label: string
+    items: { name: string; quantity: number }[]
+  }[]
+}
+
+export function getStartingEquipmentGroups(
+  dndClass: DndClass | null | undefined,
+): StartingEquipmentGroup[] {
+  const groups = (dndClass as DndClass & { starting_equipment_groups?: StartingEquipmentGroup[] })
+    ?.starting_equipment_groups
+  return normalizeStartingEquipmentGroups(groups)
+}
+
+function isGoldPiecesItemName(name: string): boolean {
+  const normalized = name.trim().toLowerCase()
+  return (
+    normalized === "gold pieces" ||
+    normalized === "gold piece" ||
+    normalized === "gp" ||
+    normalized === "gold" ||
+    /^\d+\s*gp$/.test(normalized)
+  )
+}
+
+/** "(B) 75 GP" / "4d4 × 10 GP" — gold alternative with no gear list. */
+function isGoldOnlyOptionLabel(label: string): boolean {
+  const stripped = label
+    .trim()
+    .replace(/^(?:option\s+)?\(?[A-Za-z]\)?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!stripped) return false
+  return /^\d+\s*gp$/i.test(stripped) || /^\d+d\d+\s*[×x]\s*\d+\s*gp$/i.test(stripped)
+}
+
+export function isGoldOnlyOption(
+  option: {
+    label?: string
+    items?: { name: string; quantity: number }[]
+    goldDice?: string | null
+  },
+  _startingGold = 0,
+): boolean {
+  if (option.goldDice?.trim()) return true
+  if (isGoldOnlyOptionLabel(option.label ?? "")) return true
+  const items = option.items ?? []
+  if (!items.length) return false
+  return items.every((item) => isGoldPiecesItemName(item.name))
+}
+
+/** "Martial Weapon" / "any simple weapon" style category lines. */
+export function equipmentCategoryKind(name: string): "martial" | "simple" | null {
+  const normalized = name.trim().toLowerCase().replace(/\s+/g, " ")
+  if (/^(any\s+)?martial\s+weapons?$/.test(normalized)) return "martial"
+  if (/^(any\s+)?simple\s+weapons?$/.test(normalized)) return "simple"
+  return null
+}
+
+function isMartialWeapon(item: Equipment): boolean {
+  return /weapon/i.test(item.category ?? "") && /martial/i.test(String(item.subcategory ?? ""))
+}
+
+function isSimpleWeapon(item: Equipment): boolean {
+  return /weapon/i.test(item.category ?? "") && /simple/i.test(String(item.subcategory ?? ""))
+}
+
+export function equipmentForCategory(
+  kind: "martial" | "simple",
+  equipment: Equipment[],
+): Equipment[] {
+  return equipment
+    .filter((row) => (kind === "martial" ? isMartialWeapon(row) : isSimpleWeapon(row)))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export function packageOptionLetter(label: string, index: number): string {
+  const trimmed = label.trim()
+  const match = trimmed.match(/^(?:option\s+)?\(?([A-Za-z])\)?\b/i)
+  if (match) return match[1]!.toUpperCase()
+  return String.fromCharCode(65 + index)
+}
+
+/** Short picker title — "Option (A)" — without repeating the gear list from the label. */
+export function formatPackageOptionTitle(label: string, index: number): string {
+  return `Option (${packageOptionLetter(label, index)})`
+}
+
+/**
+ * Collapse a run of single martial/simple weapon package options into one
+ * category choice (e.g. many "Option C" swords → one "Martial Weapon" pick).
+ * Single named weapons (Quarterstaff, Dagger) are left as-is.
+ */
+export function collapseWeaponCategoryPackageOptions(
+  options: { label: string; items: { name: string; quantity: number }[] }[],
+  equipment: Equipment[],
+): { label: string; items: { name: string; quantity: number }[] }[] {
+  if (!options.length) return options
+  const martialNames = new Set(equipmentForCategory("martial", equipment).map((row) => row.name.toLowerCase()))
+  const simpleNames = new Set(equipmentForCategory("simple", equipment).map((row) => row.name.toLowerCase()))
+
+  const result: { label: string; items: { name: string; quantity: number }[] }[] = []
+  let index = 0
+  while (index < options.length) {
+    const option = options[index]!
+    const items = option.items ?? []
+    const single = items.length === 1 ? items[0]!.name.trim() : ""
+    const kind =
+      equipmentCategoryKind(single) ??
+      (martialNames.has(single.toLowerCase())
+        ? "martial"
+        : simpleNames.has(single.toLowerCase())
+          ? "simple"
+          : null)
+
+    if (!kind || items.length !== 1) {
+      result.push(option)
+      index += 1
+      continue
+    }
+
+    const letter = packageOptionLetter(option.label, index)
+    let end = index + 1
+    while (end < options.length) {
+      const next = options[end]!
+      const nextItems = next.items ?? []
+      if (nextItems.length !== 1) break
+      if (packageOptionLetter(next.label, end) !== letter) break
+      const nextName = nextItems[0]!.name.trim()
+      const nextKind =
+        equipmentCategoryKind(nextName) ??
+        (martialNames.has(nextName.toLowerCase())
+          ? "martial"
+          : simpleNames.has(nextName.toLowerCase())
+            ? "simple"
+            : null)
+      if (nextKind !== kind) break
+      end += 1
+    }
+
+    if (end - index === 1) {
+      // Keep a lone named weapon or an already-canonical category line.
+      result.push(option)
+    } else {
+      result.push({
+        label: letter,
+        items: [
+          {
+            name: kind === "martial" ? "Martial Weapon" : "Simple Weapon",
+            quantity: items[0]?.quantity ?? 1,
+          },
+        ],
+      })
+    }
+    index = end
+  }
+  return result
+}
+
+/** True when proficiency list includes martial weapons (any qualifier). */
+export function hasMartialWeaponProficiency(
+  proficiencies: string[] | null | undefined,
+): boolean {
+  return (proficiencies ?? []).some((entry) => /martial/i.test(entry))
+}
+
+/** Package option that is only a martial-weapon category pick. */
+export function packageOptionRequiresMartialProficiency(option: {
+  items?: { name: string; quantity: number }[]
+}): boolean {
+  const items = option.items ?? []
+  if (!items.length) return false
+  return items.every((item) => {
+    if (item.name.toLowerCase() === "gold pieces") return true
+    return equipmentCategoryKind(item.name) === "martial"
+  }) && items.some((item) => equipmentCategoryKind(item.name) === "martial")
+}
+
+/** Hide martial-only starting options unless the character has martial proficiency. */
+export function filterStartingEquipmentOptionsByWeaponProficiency<
+  T extends { items?: { name: string; quantity: number }[] },
+>(options: T[], weaponProficiencies: string[] | null | undefined): T[] {
+  if (hasMartialWeaponProficiency(weaponProficiencies)) return options
+  return options.filter((option) => !packageOptionRequiresMartialProficiency(option))
+}
+
+export function findEquipmentByName(name: string, equipment: Equipment[]): Equipment | undefined {
+  const normalized = name.toLowerCase().replace(/['']/g, "'").trim()
+  const exact = equipment.find((e) => e.name.toLowerCase() === normalized)
+  if (exact) return exact
+
+  const singular = normalized.replace(/ies$/, "y").replace(/s$/, "")
+  if (singular !== normalized) {
+    const bySingular = equipment.find((e) => e.name.toLowerCase() === singular)
+    if (bySingular) return bySingular
+  }
+
+  const parenMatch = name.match(/^(.+?)\s*\((.+)\)$/)
+  if (parenMatch) {
+    const variant = equipment.find((e) =>
+      e.name.toLowerCase().includes(parenMatch[2].toLowerCase()),
+    )
+    if (variant) return variant
+    const base = equipment.find((e) =>
+      e.name.toLowerCase().includes(parenMatch[1].toLowerCase()),
+    )
+    if (base) return base
+  }
+
+  const possessive = normalized.replace(/'s\b/g, "")
+  return equipment.find((e) => {
+    const en = e.name.toLowerCase()
+    return en === possessive || en.includes(normalized) || normalized.includes(en)
+  })
+}
+
+export function resolvePackageEquipment(
+  items: { name: string; quantity: number }[],
+  equipment: Equipment[],
+  categoryPicks: Record<string, string> = {},
+  pickKeyPrefix = "",
+): { ids: string[]; quantities: EquipmentQuantities } {
+  const holdings: { ids: string[]; quantities: EquipmentQuantities }[] = []
+  items.forEach((item, index) => {
+    if (item.name.toLowerCase() === "gold pieces") return
+    const quantity = item.quantity > 0 ? item.quantity : 1
+    const category = equipmentCategoryKind(item.name)
+    if (category) {
+      const pickedId = categoryPicks[`${pickKeyPrefix}${index}`]
+      if (pickedId) holdings.push({ ids: [pickedId], quantities: { [pickedId]: quantity } })
+      return
+    }
+    const match = findEquipmentByName(item.name, equipment)
+    if (match) holdings.push({ ids: [match.id], quantities: { [match.id]: quantity } })
+  })
+  return mergeEquipmentHoldings(...holdings)
+}
+
+export function resolvePackageEquipmentIds(
+  items: { name: string; quantity: number }[],
+  equipment: Equipment[],
+  categoryPicks: Record<string, string> = {},
+  pickKeyPrefix = "",
+): string[] {
+  return resolvePackageEquipment(items, equipment, categoryPicks, pickKeyPrefix).ids
+}
+
+function goldQuantityFromItem(item: { name: string; quantity: number }): number {
+  const namedAmount = item.name.trim().match(/^(\d+)\s*gp$/i)
+  if (namedAmount) return parseInt(namedAmount[1], 10)
+  return isGoldPiecesItemName(item.name) ? item.quantity : 0
+}
+
+/** Sum GP bundled in a starting equipment package (excluding resolved item rows). */
+export function sumPackageGoldPieces(
+  items: { name: string; quantity: number }[] | undefined,
+): number {
+  if (!items?.length) return 0
+  return items.reduce((sum, item) => sum + goldQuantityFromItem(item), 0)
+}
+
+export function computeStartingCharacterGold(options: {
+  inGoldShoppingMode: boolean
+  goldRemaining: number
+  classOption: { items: { name: string; quantity: number }[] } | null
+  backgroundOption: { items: { name: string; quantity: number }[] } | null
+}): number {
+  if (options.inGoldShoppingMode) return Math.max(0, options.goldRemaining)
+  return (
+    sumPackageGoldPieces(options.classOption?.items) +
+    sumPackageGoldPieces(options.backgroundOption?.items)
+  )
+}
+
+export function getEquipmentCostGp(item: Equipment): number {
+  if (!item.cost) return 0
+  const unit = item.cost.unit?.toLowerCase() ?? "gp"
+  if (unit === "cp") return item.cost.amount / 100
+  if (unit === "sp") return item.cost.amount / 10
+  if (unit === "ep") return item.cost.amount / 2
+  if (unit === "pp") return item.cost.amount * 10
+  return item.cost.amount
+}
+
+export function sumEquipmentGoldCost(ids: string[], equipment: Equipment[]): number {
+  let total = 0
+  for (const id of ids) {
+    const item = equipment.find((e) => e.id === id)
+    if (item) total += getEquipmentCostGp(item)
+  }
+  return total
+}
+
+export function formatEquipmentCost(item: Equipment): string | null {
+  if (!item.cost) return null
+  return `${item.cost.amount} ${item.cost.unit?.toUpperCase() ?? "GP"}`
+}
+

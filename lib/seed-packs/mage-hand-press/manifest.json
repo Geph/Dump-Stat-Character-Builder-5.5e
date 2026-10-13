@@ -1,0 +1,28 @@
+{
+  "id": "mage-hand-press",
+  "label": "Mage Hand Press",
+  "source": "Mage Hand Press",
+  "version": "2026-09-05",
+  "files": [
+    "magehandpress-alchemist-class.json",
+    "magehandpress-captain-class.json",
+    "magehandpress-craftsman-class.json",
+    "magehandpress-dancer-class.json",
+    "magehandpress-gunslinger-class.json",
+    "magehandpress-investigator-class.json",
+    "magehandpress-martyr-class.json",
+    "magehandpress-necromancer-class.json",
+    "magehandpress-vagabond-class.json",
+    "magehandpress-warden-class.json",
+    "magehandpress-warmage-class.json",
+    "magehandpress-witch-class.json",
+    "magehandpress-masteries-custom.json",
+    "magehandpress-weapons.json",
+    "magehandpress-spells.json"
+  ],
+  "notes": [
+    "Subclasses filtered to the free allowlist only.",
+    "Dancer class file was not present in Drive import-json at build time.",
+    "Necromancer: free subclass \"Cyberghoul\" not found in source JSON"
+  ]
+}

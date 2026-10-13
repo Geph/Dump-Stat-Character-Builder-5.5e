@@ -1,0 +1,263 @@
+import { enrichSrdClassList } from "@/lib/compendium/enrich-srd-classes"
+import { enrichSrdSubclassList } from "@/lib/compendium/enrich-srd-subclasses"
+import { enrichSrdFeatList } from "@/lib/compendium/enrich-srd-feats"
+import { enrichSrdSpeciesList } from "@/lib/compendium/enrich-srd-species"
+import { enrichSrdToolList } from "@/lib/compendium/enrich-srd-tools"
+import { normalizeBackgroundRows } from "@/lib/compendium/normalize-backgrounds"
+import { buildSrdClassResourceRows } from "@/lib/compendium/seed-class-resources"
+import { ensureModifierCatalog } from "@/lib/compendium/ensure-modifier-catalog"
+import { createClient } from "@/lib/db/client"
+import { enrichSrdSpellList, enrichSpellRowWithBundledCardImage } from "@/lib/compendium/enrich-srd-spells"
+import { seedSrdEquipment } from "@/lib/compendium/seed-srd-equipment"
+import { buildSrdCreatureSeedRows } from "@/lib/compendium/seed-srd-creatures"
+import { getSrdSeedData, getSrdSeedTotals } from "@/lib/srd/load-seed"
+import { LEGACY_SRD_SOURCES, withSrdCreatorUrlList } from "@/lib/srd/source"
+import { asCompendiumRow, asCompendiumRows, castCompendiumRow } from "@/lib/data/types"
+import {
+  deleteIndexedDbRow,
+  getAllFromStore,
+  isIndexedDbEmpty,
+  putRows,
+  upsertByName,
+} from "./indexed-db-store"
+import { shouldAssignBundledCardArt } from "@/lib/site-settings/app-presentation-mode"
+import { isSrdContentRemoved, setSrdContentRemoved } from "@/lib/site-settings/srd-content"
+import {
+  collectClassSpellLists,
+  stampClassSpellListsOntoSpellRows,
+} from "@/lib/import/class-spell-lists"
+
+async function restampSpellClassesFromStoredLists() {
+  const classRows = await getAllFromStore("classes")
+  const lists = collectClassSpellLists(classRows)
+  if (!lists.length) return
+  const spells = await getAllFromStore("spells")
+  const { changed } = stampClassSpellListsOntoSpellRows(spells, lists)
+  if (changed.length) await upsertByName("spells", changed)
+}
+
+export type LocalSeedResult = {
+  total: number
+  breakdown: Record<string, number>
+  srdVersion: string
+}
+
+const SRD_VERSION_STORAGE_KEY = "dump-stat-srd-version"
+const SPELL_CARD_ART_VERSION_STORAGE_KEY = "dump-stat-spell-card-art-version"
+const BUNDLED_SPELL_CARD_ART_VERSION = "10"
+
+export { isIndexedDbEmpty, getIndexedDbRowCounts } from "./indexed-db-store"
+
+function readStoredSrdVersion(): string | null {
+  if (typeof localStorage === "undefined") return null
+  return localStorage.getItem(SRD_VERSION_STORAGE_KEY)
+}
+
+function writeStoredSrdVersion(version: string): void {
+  if (typeof localStorage === "undefined") return
+  localStorage.setItem(SRD_VERSION_STORAGE_KEY, version)
+}
+
+function readStoredSpellCardArtVersion(): string | null {
+  if (typeof localStorage === "undefined") return null
+  return localStorage.getItem(SPELL_CARD_ART_VERSION_STORAGE_KEY)
+}
+
+function writeStoredSpellCardArtVersion(version: string): void {
+  if (typeof localStorage === "undefined") return
+  localStorage.setItem(SPELL_CARD_ART_VERSION_STORAGE_KEY, version)
+}
+
+async function ensureBundledSpellCardArt(): Promise<void> {
+  if (!shouldAssignBundledCardArt()) return
+  const versionFresh = readStoredSpellCardArtVersion() === BUNDLED_SPELL_CARD_ART_VERSION
+  if (!versionFresh) {
+    const { spells } = getSrdSeedData()
+    await upsertByName(
+      "spells",
+      enrichSrdSpellList(withSrdCreatorUrlList(spells as unknown as Record<string, unknown>[])),
+    )
+  }
+  // Name-match art onto every stored spell (MHP / Kibbles / custom), not only the SRD seed list.
+  // Local-only portraits stay gated by available-card-art (PNG present on this install).
+  // Always fill missing URLs so clearing + re-seeding a pack still picks up local masters
+  // even when the art-version key was already current.
+  const existing = await getAllFromStore("spells")
+  const stamped = existing.map((row) =>
+    enrichSpellRowWithBundledCardImage(row as Record<string, unknown>),
+  )
+  const changed = stamped.filter((row, index) => {
+    const prev = existing[index] as Record<string, unknown>
+    return (row.card_image_url ?? null) !== (prev.card_image_url ?? null)
+  })
+  if (changed.length) await putRows("spells", changed)
+  writeStoredSpellCardArtVersion(BUNDLED_SPELL_CARD_ART_VERSION)
+}
+
+async function seedClassResources(classIdMap: Map<string, string>): Promise<void> {
+  const existing = await getAllFromStore("class_resources")
+  const srdSources = new Set([...LEGACY_SRD_SOURCES, "SRD"])
+  for (const row of existing) {
+    if (srdSources.has(row.source as string)) {
+      await deleteIndexedDbRow("class_resources", row.id as string)
+    }
+  }
+
+  const rows = buildSrdClassResourceRows(classIdMap).map((row) => ({
+    ...row,
+    id: crypto.randomUUID(),
+    created_at: new Date().toISOString(),
+  }))
+  await putRows("class_resources", rows)
+}
+
+async function ensureBundledSrdFresh(): Promise<void> {
+  const { manifest, species, classes, backgrounds, feats, subclasses, spells, languages, tools } = getSrdSeedData()
+  if (readStoredSrdVersion() === manifest.version) return
+  await upsertByName("species", enrichSrdSpeciesList(withSrdCreatorUrlList(species)))
+  await upsertByName("classes", enrichSrdClassList(withSrdCreatorUrlList(classes as unknown as Record<string, unknown>[])))
+  await upsertByName("backgrounds", normalizeBackgroundRows(withSrdCreatorUrlList(backgrounds) as { name: string; ability_bonuses?: unknown; feat_granted?: string | null; source?: string | null }[]))
+  await upsertByName("feats", enrichSrdFeatList(withSrdCreatorUrlList(feats as unknown as Record<string, unknown>[])))
+  await upsertByName("languages", withSrdCreatorUrlList(languages as unknown as Record<string, unknown>[]))
+  await upsertByName("tools", enrichSrdToolList(withSrdCreatorUrlList(tools as unknown as Record<string, unknown>[])))
+  await upsertByName("creatures", buildSrdCreatureSeedRows())
+  await upsertByName(
+    "spells",
+    enrichSrdSpellList(withSrdCreatorUrlList(spells as unknown as Record<string, unknown>[])),
+  )
+  await restampSpellClassesFromStoredLists()
+  await seedSrdEquipment({
+    upsertByName: upsertByName as unknown as (table: "equipment", rows: Record<string, unknown>[]) => Promise<void>,
+    listEquipmentByName: async () => {
+      const rows = await getAllFromStore("equipment")
+      return rows.map((row) => ({ name: row.name as string, id: row.id as string }))
+    },
+  })
+  const classRows = await getAllFromStore("classes")
+  const classIdMap = new Map(classRows.map((c) => [c.name as string, c.id as string]))
+  await seedClassResources(classIdMap)
+
+  const spellCatalog = (await getAllFromStore("spells")).map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    source: (row.source as string | null | undefined) ?? null,
+  }))
+  const subclassesWithIds = enrichSrdSubclassList(
+    subclasses
+      .map((sc) => ({
+        name: sc.name,
+        description: sc.description,
+        features: sc.features,
+        source: sc.source,
+        class_id: classIdMap.get(sc.class_name) ?? null,
+      }))
+      .filter((sc) => sc.class_id !== null) as unknown as Record<string, unknown>[],
+    new Map([...classIdMap.entries()].map(([name, id]) => [id, name])),
+    spellCatalog,
+  )
+  for (const source of LEGACY_SRD_SOURCES) {
+    const existing = await getAllFromStore("subclasses")
+    for (const row of existing) {
+      if (row.source === source) {
+        await deleteIndexedDbRow("subclasses", row.id as string)
+      }
+    }
+  }
+  await putRows(
+    "subclasses",
+    subclassesWithIds.map((row) => ({
+      ...row,
+      id: crypto.randomUUID(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })),
+  )
+
+  writeStoredSrdVersion(manifest.version)
+  writeStoredSpellCardArtVersion(BUNDLED_SPELL_CARD_ART_VERSION)
+}
+
+export async function seedLocalSrd(): Promise<LocalSeedResult> {
+  const { classes, subclasses, species, backgrounds, spells, feats, tools, manifest } =
+    getSrdSeedData()
+
+  await upsertByName("classes", enrichSrdClassList(withSrdCreatorUrlList(classes as unknown as Record<string, unknown>[])))
+  const classRows = await getAllFromStore("classes")
+  const classIdMap = new Map(classRows.map((c) => [c.name as string, c.id as string]))
+
+  await upsertByName(
+    "spells",
+    enrichSrdSpellList(withSrdCreatorUrlList(spells as unknown as Record<string, unknown>[])),
+  )
+  await restampSpellClassesFromStoredLists()
+  const spellCatalog = (await getAllFromStore("spells")).map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    source: (row.source as string | null | undefined) ?? null,
+  }))
+
+  const subclassesWithIds = enrichSrdSubclassList(
+    subclasses
+      .map((sc) => ({
+        name: sc.name,
+        description: sc.description,
+        features: sc.features,
+        source: sc.source,
+        class_id: classIdMap.get(sc.class_name) ?? null,
+      }))
+      .filter((sc) => sc.class_id !== null) as unknown as Record<string, unknown>[],
+    new Map([...classIdMap.entries()].map(([name, id]) => [id, name])),
+    spellCatalog,
+  )
+  for (const source of LEGACY_SRD_SOURCES) {
+    const existing = await getAllFromStore("subclasses")
+    for (const row of existing) {
+      if (row.source === source) {
+        await deleteIndexedDbRow("subclasses", row.id as string)
+      }
+    }
+  }
+  await putRows("subclasses", subclassesWithIds.map((row) => ({
+    ...row,
+    id: crypto.randomUUID(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  })))
+
+  await seedClassResources(classIdMap)
+
+  await upsertByName("species", enrichSrdSpeciesList(withSrdCreatorUrlList(species)))
+  await upsertByName("backgrounds", normalizeBackgroundRows(withSrdCreatorUrlList(backgrounds) as { name: string; ability_bonuses?: unknown; feat_granted?: string | null; source?: string | null }[]))
+  await upsertByName("feats", enrichSrdFeatList(withSrdCreatorUrlList(feats as unknown as Record<string, unknown>[])))
+  await upsertByName("tools", enrichSrdToolList(withSrdCreatorUrlList(tools as unknown as Record<string, unknown>[])))
+  await upsertByName("creatures", buildSrdCreatureSeedRows())
+  await seedSrdEquipment({
+    upsertByName: upsertByName as unknown as (table: "equipment", rows: Record<string, unknown>[]) => Promise<void>,
+    listEquipmentByName: async () => {
+      const rows = await getAllFromStore("equipment")
+      return rows.map((row) => ({ name: row.name as string, id: row.id as string }))
+    },
+  })
+
+  await ensureModifierCatalog(createClient())
+
+  const { total, breakdown } = getSrdSeedTotals()
+  writeStoredSrdVersion(manifest.version)
+  writeStoredSpellCardArtVersion(BUNDLED_SPELL_CARD_ART_VERSION)
+  setSrdContentRemoved(false)
+  return { total, breakdown, srdVersion: manifest.version }
+}
+
+export async function ensureLocalSrdSeed(): Promise<LocalSeedResult | null> {
+  await ensureModifierCatalog(createClient())
+  if (isSrdContentRemoved()) return null
+
+  const empty = await isIndexedDbEmpty()
+  if (empty) {
+    return seedLocalSrd()
+  }
+
+  await ensureBundledSrdFresh()
+  await ensureBundledSpellCardArt()
+  return null
+}

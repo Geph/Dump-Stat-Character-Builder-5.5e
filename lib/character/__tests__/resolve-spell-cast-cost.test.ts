@@ -1,0 +1,314 @@
+import { describe, expect, it } from "vitest"
+import {
+  metamagicOptionsForCharacter,
+  metamagicOptionsFromFeats,
+  mortalMetamagicOptionsFromFeatures,
+  resolveSpellCastCost,
+} from "@/lib/character/resolve-spell-cast-cost"
+import { buildCatalogFeatPickId } from "@/lib/builder/catalog-feat-options"
+import {
+  buildDefaultMetamagicOptions,
+  METAMAGIC_OPTIONS_CATALOG_ID,
+} from "@/lib/compendium/system-option-catalogs"
+import { DEFAULT_ALTERNATE_SORCERER_COST_BY_LEVEL } from "@/lib/character/point-pool-spellcasting"
+import type { DndClass, Feat } from "@/lib/types"
+
+const ctx = { proficiencyBonus: 3, abilityModifiers: {} as Record<string, number> }
+
+const alternateSorcererClass: Pick<DndClass, "class_resources"> = {
+  class_resources: [
+    {
+      id: "alternate_sorcerer_spell_limit",
+      name: "Spell Limit",
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        atLevelTable: [
+          { level: 1, count: 2 },
+          { level: 5, count: 4 },
+          { level: 11, count: 6 },
+        ],
+      },
+    },
+  ],
+}
+
+const pointPoolSpellcasting: DndClass["spellcasting"] = {
+  ability: "Charisma",
+  point_pool: {
+    resource_key: "alternate_sorcerer_sorcery_points",
+    cost_by_level: DEFAULT_ALTERNATE_SORCERER_COST_BY_LEVEL,
+    base_cost_cap_resource_key: "alternate_sorcerer_spell_limit",
+    metamagic_cost_cap: "proficiency_bonus",
+    replaces_spell_slots: true,
+  },
+}
+
+describe("metamagicOptionsFromFeats", () => {
+  it("parses sorcery point costs from Metamagic feat descriptions", () => {
+    const feats: Feat[] = [
+      {
+        id: "mm_twinned",
+        name: "Twinned Spell",
+        category: "Metamagic",
+        description: "When you cast a spell, you can spend 1 sorcery point to twin it.",
+      } as unknown as Feat,
+    ]
+    expect(metamagicOptionsFromFeats(feats)).toEqual([
+      { id: "mm_twinned", name: "Twinned Spell", cost: 1, effectHint: "twinned" },
+    ])
+  })
+})
+
+describe("metamagicOptionsForCharacter", () => {
+  it("includes Metamagic catalog picks from feat_ids", () => {
+    const pickId = buildCatalogFeatPickId(METAMAGIC_OPTIONS_CATALOG_ID, "cat_metamagic_7")
+    const options = metamagicOptionsForCharacter({
+      featIds: [pickId],
+      feats: [],
+      customAbilities: [
+        {
+          id: METAMAGIC_OPTIONS_CATALOG_ID,
+          name: "Metamagic Options",
+          modifier_catalog: buildDefaultMetamagicOptions(),
+        } as import("@/lib/types").CustomAbility,
+      ],
+      spellLevel: 3,
+    })
+    expect(options.some((row) => row.name === "Twinned Spell" && row.cost === 3)).toBe(true)
+    const heightenedId = buildCatalogFeatPickId(METAMAGIC_OPTIONS_CATALOG_ID, "cat_metamagic_8")
+    const quickenedId = buildCatalogFeatPickId(METAMAGIC_OPTIONS_CATALOG_ID, "cat_metamagic_9")
+    const extra = metamagicOptionsForCharacter({
+      featIds: [heightenedId, quickenedId],
+      feats: [],
+      customAbilities: [
+        {
+          id: METAMAGIC_OPTIONS_CATALOG_ID,
+          name: "Metamagic Options",
+          modifier_catalog: buildDefaultMetamagicOptions(),
+        } as import("@/lib/types").CustomAbility,
+      ],
+      spellLevel: 3,
+    })
+    expect(extra.some((row) => row.name === "Heightened Spell" && row.cost === 2)).toBe(true)
+    expect(extra.some((row) => row.name === "Quickened Spell" && row.cost === 2)).toBe(true)
+  })
+
+  it("does not treat Manipulate Magic itself as a Metamagic option", () => {
+    const options = metamagicOptionsForCharacter({
+      featIds: [],
+      feats: [],
+      customAbilities: [
+        {
+          id: "rite",
+          name: "Manipulate Magic",
+          ability_role: "knack",
+          description:
+            "<p>You learn one Metamagic option of your choice from the Sorcerer class. You can use this Metamagic option once, regaining the ability to use it again after completing a long rest.</p>",
+        } as import("@/lib/types").CustomAbility,
+      ],
+      selectedCustomAbilityNames: ["Manipulate Magic"],
+    })
+    expect(options.some((row) => row.name === "Manipulate Magic")).toBe(false)
+  })
+
+  it("zeros sorcery-point cost for Manipulate Magic catalog picks", () => {
+    const pickId = buildCatalogFeatPickId(METAMAGIC_OPTIONS_CATALOG_ID, "cat_metamagic_0")
+    const options = metamagicOptionsForCharacter({
+      featIds: [pickId],
+      feats: [],
+      customAbilities: [
+        {
+          id: METAMAGIC_OPTIONS_CATALOG_ID,
+          name: "Metamagic Options",
+          modifier_catalog: buildDefaultMetamagicOptions(),
+        } as import("@/lib/types").CustomAbility,
+      ],
+      manipulateMagicPickIds: [pickId],
+      spellLevel: 1,
+    })
+    const option = options.find((row) => row.id === pickId)
+    expect(option?.costSource).toBe("manipulate_magic")
+    expect(option?.cost).toBe(0)
+  })
+})
+
+describe("resolveSpellCastCost", () => {
+  it("returns slot mode when no point pool is configured", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 3,
+      spellcasting: { ability: "Charisma" },
+      classRow: alternateSorcererClass,
+      classLevel: 5,
+      availablePoints: 10,
+      selectedMetamagic: [],
+      ctx,
+    })
+    expect(result.mode).toBe("slots")
+    expect(result.canCast).toBe(true)
+  })
+
+  it("tracks metamagic sorcery point spend in slot mode", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 3,
+      spellcasting: { ability: "Charisma" },
+      classRow: alternateSorcererClass,
+      classLevel: 5,
+      availablePoints: 2,
+      selectedMetamagic: [{ id: "a", name: "Empowered", cost: 1 }],
+      ctx,
+    })
+    expect(result.mode).toBe("slots")
+    expect(result.metamagicCost).toBe(1)
+    expect(result.totalCost).toBe(1)
+    expect(result.canCast).toBe(true)
+  })
+
+  it("enforces Spell Limit and Proficiency Bonus caps independently", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 2,
+      spellcasting: pointPoolSpellcasting,
+      classRow: alternateSorcererClass,
+      classLevel: 11,
+      availablePoints: 20,
+      selectedMetamagic: [{ id: "a", name: "A", cost: 2 }, { id: "b", name: "B", cost: 2 }],
+      ctx,
+    })
+    expect(result.baseCost).toBe(3)
+    expect(result.metamagicCost).toBe(4)
+    expect(result.canCast).toBe(false)
+    expect(result.blockReason).toBe("metamagic_over_proficiency_cap")
+  })
+
+  it("blocks when base cost exceeds Spell Limit even with enough points", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 5,
+      spellcasting: pointPoolSpellcasting,
+      classRow: alternateSorcererClass,
+      classLevel: 3,
+      availablePoints: 20,
+      selectedMetamagic: [],
+      ctx,
+    })
+    expect(result.baseCost).toBe(7)
+    expect(result.canCast).toBe(false)
+    expect(result.blockReason).toBe("base_over_spell_limit")
+  })
+
+  it("routes high-level spells through Innate Arcanum", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 7,
+      spellcasting: pointPoolSpellcasting,
+      classRow: alternateSorcererClass,
+      classLevel: 13,
+      availablePoints: 20,
+      selectedMetamagic: [],
+      ctx,
+      arcanumAvailable: false,
+    })
+    expect(result.castKind).toBe("arcanum")
+    expect(result.totalCost).toBe(0)
+    expect(result.canCast).toBe(false)
+  })
+
+  it("uses per-spell resource costs (Psion Alternate Effects) over slots", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 3,
+      spellcasting: { ability: "Intelligence" },
+      classRow: { class_resources: null },
+      classLevel: 5,
+      availablePoints: 10,
+      selectedMetamagic: [],
+      ctx,
+      spellResourceCost: { resourceKey: "psi_points", amount: 3 },
+      resourceSpendCap: 4,
+    })
+    expect(result.mode).toBe("resource")
+    expect(result.baseCost).toBe(3)
+    expect(result.totalCost).toBe(3)
+    expect(result.resourceKey).toBe("psi_points")
+    expect(result.resourceDisplayName).toBe("Psi Points")
+    expect(result.canCast).toBe(true)
+  })
+
+  it("blocks resource casts when cost exceeds the spend cap (Psi Limit)", () => {
+    const result = resolveSpellCastCost({
+      spellLevel: 5,
+      spellcasting: null,
+      classRow: { class_resources: null },
+      classLevel: 5,
+      availablePoints: 20,
+      selectedMetamagic: [],
+      ctx,
+      spellResourceCost: { resourceKey: "psi_points", amount: 5 },
+      resourceSpendCap: 4,
+    })
+    expect(result.mode).toBe("resource")
+    expect(result.canCast).toBe(false)
+    expect(result.blockReason).toBe("base_over_spell_limit")
+  })
+
+  it("reads Mortal Metamagic Hit Dice options and gates casts on remaining HD", () => {
+    const options = mortalMetamagicOptionsFromFeatures([
+      {
+        name: "Mortal Metamagic",
+        linkedModifiers: [
+          {
+            characteristics: [
+              {
+                type: "resource_ability_menu",
+                options: [
+                  { name: "Empowered Spell", hitDiceCost: 1 },
+                  { name: "Quickened Spell", hitDiceCost: 2 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ])
+    expect(options).toEqual([
+      {
+        id: "mortal_metamagic:Empowered Spell",
+        name: "Empowered Spell",
+        cost: 0,
+        hitDiceCost: 1,
+        effectHint: "empowered_reroll",
+      },
+      {
+        id: "mortal_metamagic:Quickened Spell",
+        name: "Quickened Spell",
+        cost: 0,
+        hitDiceCost: 2,
+        effectHint: "quicken",
+      },
+    ])
+
+    const blocked = resolveSpellCastCost({
+      spellLevel: 1,
+      spellcasting: null,
+      classRow: { class_resources: null },
+      classLevel: 5,
+      availablePoints: 0,
+      selectedMetamagic: [options[1]!],
+      ctx,
+      availableHitDice: 1,
+    })
+    expect(blocked.canCast).toBe(false)
+    expect(blocked.blockReason).toBe("insufficient_hit_dice")
+    expect(blocked.hitDiceCost).toBe(2)
+
+    const ok = resolveSpellCastCost({
+      spellLevel: 1,
+      spellcasting: null,
+      classRow: { class_resources: null },
+      classLevel: 5,
+      availablePoints: 0,
+      selectedMetamagic: [options[0]!],
+      ctx,
+      availableHitDice: 1,
+    })
+    expect(ok.canCast).toBe(true)
+    expect(ok.hitDiceCost).toBe(1)
+  })
+})

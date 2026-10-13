@@ -1,0 +1,208 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { describe, expect, it } from "vitest"
+import {
+  enrichImportedClassList,
+  mergeTableParsedClassResources,
+  detectTrinketCost,
+} from "@/lib/import/enrich-import-classes"
+import { enrichImportContentModifiers } from "@/lib/import/enrich-import-modifiers"
+import { collectImportModifierReview } from "@/lib/import/import-modifier-previews"
+import { normalizeAiImportContent } from "@/lib/import/import-content-ai-schema"
+import { parseClassProgressionTable } from "@/lib/import/parse-class-progression-table"
+import type { ImportContent } from "@/lib/import/content-schema"
+import type { Feature } from "@/lib/types"
+import { sanitizeInvestigatorImportContent } from "@/lib/import/enrichment-presets/packs/investigator"
+
+const FIXTURE_PATH = join(__dirname, "fixtures", "investigator-class.json")
+
+function loadInvestigatorFixture(): ImportContent {
+  return normalizeAiImportContent(JSON.parse(readFileSync(FIXTURE_PATH, "utf8")))
+}
+
+function wired(content: ImportContent, featureName: string, sourceLabel: string): boolean {
+  const review = collectImportModifierReview(enrichImportContentModifiers(content))
+  return review.some(
+    (row) =>
+      row.featureName === featureName &&
+      row.sourceLabel === sourceLabel &&
+      row.status === "wired",
+  )
+}
+
+describe("Investigator class import wiring", () => {
+  it("parses Ritual Level, Rushed Incantation, Finisher, and Trinkets columns", () => {
+    const content = loadInvestigatorFixture()
+    const tableText = content.classes?.[0]?.description ?? ""
+    const parsed = parseClassProgressionTable(tableText)
+    expect(parsed).not.toBeNull()
+    const keys = parsed!.columns.map((col) => col.resourceKey)
+    expect(keys).toContain("rushed_incantation")
+    expect(keys).toContain("trinkets")
+    expect(keys).toContain("ritual_level")
+    expect(keys).toContain("finisher")
+  })
+
+  it("reads scaling values for Rushed Incantation and Trinkets pools", () => {
+    const content = loadInvestigatorFixture()
+    const parsed = parseClassProgressionTable(content.classes?.[0]?.description ?? "")!
+    const rushed = parsed.columns.find((col) => col.resourceKey === "rushed_incantation")
+    const trinkets = parsed.columns.find((col) => col.resourceKey === "trinkets")
+    expect(rushed?.valuesByLevel).toEqual(
+      expect.arrayContaining([
+        { level: 2, count: 3 },
+        { level: 9, count: 7 },
+        { level: 20, count: 10 },
+      ]),
+    )
+    expect(trinkets?.valuesByLevel).toEqual(
+      expect.arrayContaining([
+        { level: 3, count: 2 },
+        { level: 9, count: 4 },
+        { level: 20, count: 6 },
+      ]),
+    )
+  })
+
+  it("reads the Ritual Level cap and the Finisher die progression", () => {
+    const content = loadInvestigatorFixture()
+    const parsed = parseClassProgressionTable(content.classes?.[0]?.description ?? "")!
+    const ritual = parsed.columns.find((col) => col.resourceKey === "ritual_level")
+    const finisher = parsed.columns.find((col) => col.resourceKey === "finisher")
+    expect(ritual?.valuesByLevel).toEqual(
+      expect.arrayContaining([
+        { level: 1, count: 1 },
+        { level: 3, count: 2 },
+        { level: 11, count: 6 },
+      ]),
+    )
+    expect(finisher?.valuesByLevel).toEqual(
+      expect.arrayContaining([
+        { level: 2, count: 1 },
+        { level: 11, count: 2 },
+        { level: 17, count: 3 },
+      ]),
+    )
+    const latestDie = (finisher?.dieSidesByLevel ?? []).sort((a, b) => a.level - b.level).at(-1)
+    expect(latestDie?.count).toBe(8)
+  })
+
+  it("builds class resource rows with correct recharge and special shapes", () => {
+    const content = loadInvestigatorFixture()
+    const resources = mergeTableParsedClassResources(content)
+
+    const rushed = resources.find(
+      (r) => r.class_name === "Investigator" && r.resource_key === "rushed_incantation",
+    )
+    expect(rushed?.uses.type).toBe("at_level")
+    expect(rushed?.uses.recharges).toEqual(
+      expect.arrayContaining([{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }]),
+    )
+
+    const trinkets = resources.find(
+      (r) => r.class_name === "Investigator" && r.resource_key === "trinkets",
+    )
+    expect(trinkets?.uses.recharges).toEqual(
+      expect.arrayContaining([{ rest: "short_rest", amount: 1 }, { rest: "long_rest" }]),
+    )
+
+    const ritual = resources.find(
+      (r) => r.class_name === "Investigator" && r.resource_key === "ritual_level",
+    )
+    expect(ritual?.uses.type).toBe("special")
+
+    const finisher = resources.find(
+      (r) => r.class_name === "Investigator" && r.resource_key === "finisher",
+    )
+    expect(finisher?.uses.type).toBe("special")
+    expect(finisher?.uses.dieType).toBe("d8")
+  })
+
+  it("links Holy Trinkets to named buttons that share the Trinkets pool", () => {
+    const content = enrichImportContentModifiers(loadInvestigatorFixture())
+    const holy = content.classes?.[0]?.features?.find((f) => f.name === "Holy Trinkets") as
+      | (Feature & { limitedUses?: unknown })
+      | undefined
+    expect(holy?.limitedUses).toBeUndefined()
+    const abilities = content.import_proposals?.custom_abilities ?? []
+    const amulet = abilities.find((a) => a.name === "Amulet of Warding")
+    expect(amulet).toBeTruthy()
+    expect((amulet as { uses?: { classResourceKey?: string } } | undefined)?.uses?.classResourceKey).toBe(
+      "trinkets",
+    )
+    expect((content.equipment ?? []).map((e) => e.name)).toEqual(
+      expect.arrayContaining(["Amulet of Warding", "Restorative Ankh", "Rune of Banishment"]),
+    )
+  })
+
+  it("detects trinket spend phrasing", () => {
+    expect(detectTrinketCost("expending a use of your Trinkets to do so")).toBe(1)
+    expect(detectTrinketCost("you can read a book")).toBeNull()
+  })
+
+  it("wires common Investigator class features with shared modifiers", () => {
+    const content = loadInvestigatorFixture()
+    expect(wired(content, "Weapon Mastery", "Class: Investigator")).toBe(true)
+    expect(wired(content, "Expertise", "Class: Investigator")).toBe(true)
+    expect(wired(content, "Ability Score Improvement", "Class: Investigator")).toBe(true)
+    expect(wired(content, "Epic Boon", "Class: Investigator")).toBe(true)
+  })
+})
+
+describe("Investigator Ritualist spell list", () => {
+  it("pins Ritualist choices to the Investigator class list", () => {
+    const seed = JSON.parse(
+      readFileSync(
+        join(__dirname, "../../seed-packs/mage-hand-press/magehandpress-investigator-class.json"),
+        "utf8",
+      ),
+    ) as ImportContent
+    const stripped = {
+      ...seed,
+      classes: seed.classes?.map((cls) => ({
+        ...cls,
+        features: (cls.features ?? []).map((feature) => {
+          if (feature.name !== "Ritualist") return feature
+          const linkedModifiers = (feature.linkedModifiers ?? []).map((mod) => ({
+            ...mod,
+            characteristics: (mod.characteristics ?? []).map((char) =>
+              char.type === "spells_known"
+                ? { ...char, spellListClassOptions: undefined }
+                : char,
+            ),
+          }))
+          return { ...feature, linkedModifiers }
+        }),
+      })),
+    }
+    const next = sanitizeInvestigatorImportContent(stripped)
+    const ritualist = next.classes?.[0]?.features?.find((feature) => feature.name === "Ritualist")
+    const known = ritualist?.linkedModifiers
+      ?.flatMap((mod) => mod.characteristics ?? [])
+      .find((char) => char.type === "spells_known")
+    expect(known && "spellListClassOptions" in known ? known.spellListClassOptions : []).toEqual([
+      "Investigator",
+    ])
+    const grants =
+      known && "choiceGrants" in known && Array.isArray(known.choiceGrants) ? known.choiceGrants : []
+    expect(grants[0]).toEqual({ level: 1, count: 4 })
+    expect(grants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          count: 2,
+          unlocksAtClassLevel: 2,
+          upToLevel: true,
+          level: 1,
+        }),
+        expect.objectContaining({
+          count: 2,
+          unlocksAtClassLevel: 3,
+          upToLevel: true,
+          level: 2,
+        }),
+      ]),
+    )
+    expect(grants).toHaveLength(20)
+    expect(next.classes?.[0]?.spell_list).toEqual(expect.arrayContaining(["Alarm", "Detect Magic", "Identify"]))
+  })
+})

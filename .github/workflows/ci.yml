@@ -1,0 +1,43 @@
+# Self-hosted VPS app — CI only (no Vercel deploy).
+name: CI
+
+on:
+  push:
+    branches: [main, Cursor]
+  pull_request:
+    branches: [main, Cursor]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:compact
+      - run: pnpm core:check
+      - run: pnpm check:mysql
+      - run: pnpm lint
+      - run: pnpm exec tsc --noEmit
+      - run: node node_modules/vitest/vitest.mjs run
+      - run: pnpm dlx tsx scripts/audit-srd-class-features.ts
+      - run: pnpm dlx tsx scripts/audit-modifier-wiring-registry.ts
+      - run: pnpm dlx tsx scripts/audit-modifier-catalog.ts
+
+  static-export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:static
+        env:
+          NEXT_PUBLIC_BASE_PATH: /Dump-Stat-Character-Builder-5.5e

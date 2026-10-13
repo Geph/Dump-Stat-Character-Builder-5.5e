@@ -1,0 +1,600 @@
+import fs from "node:fs"
+import path from "node:path"
+import { describe, expect, it } from "vitest"
+import { enrichSrdSubclassRow } from "@/lib/compendium/enrich-srd-subclasses"
+import {
+  defaultSubclassCardImageUrl,
+  applyBundledSubclassCardImage,
+  listSubclassCardImageRelativePaths,
+  rewriteLegacyFlatSubclassCardImageUrl,
+  SRD_SUBCLASS_CARD_IMAGES_BY_NAME,
+  SUBCLASS_CARD_IMAGES_BY_CLASS_AND_NAME,
+} from "@/lib/compendium/subclass-card-images-defaults"
+import { isBundledPublicCardArtPath } from "../../../scripts/bundled-card-art.mjs"
+
+function expectDefaultSubclassCardImage(
+  subclassName: string,
+  className: string,
+  pattern: RegExp | null,
+) {
+  const url = defaultSubclassCardImageUrl(subclassName, className)
+  if (pattern == null) {
+    expect(url).toBeNull()
+    return
+  }
+  if (url == null) {
+    // Defaults map still knows the path; CI/GitHub clones omit non-bundled art files.
+    expect(
+      Object.values(SUBCLASS_CARD_IMAGES_BY_CLASS_AND_NAME).some((candidate) =>
+        pattern.test(candidate),
+      ),
+    ).toBe(true)
+    return
+  }
+  expect(url).toMatch(pattern)
+}
+
+describe("subclass card images", () => {
+  it.each([
+    ["Alternate Ranger", "Beast Master", "alternate-ranger/beast-master.png"],
+    ["Alternate Ranger", "Deep Stalker", "alternate-ranger/deep-stalker.png"],
+    ["Alternate Ranger", "Drake Guard", "alternate-ranger/drake-guard.png"],
+    ["Alternate Ranger", "Fey Wanderer", "alternate-ranger/fey-wanderer.png"],
+    ["Alternate Ranger", "Hunter", "alternate-ranger/hunter.png"],
+    ["Alternate Ranger", "Monster Slayer", "alternate-ranger/monster-slayer.png"],
+    ["Alternate Ranger", "Planar Warden", "alternate-ranger/planar-warden.png"],
+    ["Alternate Ranger", "Spellbreaker", "alternate-ranger/spellbreaker.png"],
+    ["Alternate Ranger", "Swarm Keeper", "alternate-ranger/swarm-keeper.png"],
+    ["Alternate Ranger", "Bounty Hunter", "alternate-ranger/bounty-hunter.png"],
+    ["Alternate Ranger", "Buccaneer", "alternate-ranger/buccaneer.png"],
+    ["Alternate Ranger", "Elder Haunt", "alternate-ranger/elder-haunt.png"],
+    ["Alternate Ranger", "Grim Warden", "alternate-ranger/grim-warden.png"],
+    ["Alternate Ranger", "Nomad", "alternate-ranger/nomad.png"],
+    ["Alternate Ranger", "Shifter", "alternate-ranger/shifter.png"],
+    ["Alternate Ranger", "Stargazer", "alternate-ranger/stargazer.png"],
+    ["Alternate Ranger", "Trapper", "alternate-ranger/trapper.png"],
+    ["Alternate Ranger", "Wastelander", "alternate-ranger/wastelander.png"],
+    ["Alternate Ranger", "Winter Wight", "alternate-ranger/winter-wight.png"],
+    ["Alternate Ranger", "Wrangler", "alternate-ranger/wrangler.png"],
+    ["Alternate Monk", "Way of the Astral Warrior", "alternate-monk/way-of-the-astral-warrior.png"],
+    ["Alternate Monk", "Way of the Drunken Fist", "alternate-monk/way-of-the-drunken-fist.png"],
+    ["Alternate Monk", "Way of Harmony", "alternate-monk/way-of-harmony.png"],
+    ["Alternate Monk", "Way of the Open Hand", "alternate-monk/way-of-the-open-hand.png"],
+    ["Alternate Monk", "Way of Radiance", "alternate-monk/way-of-radiance.png"],
+    ["Alternate Monk", "Way of the Sacred Inks", "alternate-monk/way-of-the-sacred-inks.png"],
+    ["Alternate Monk", "Way of the Reaper", "alternate-monk/way-of-the-reaper.png"],
+    ["Alternate Monk", "Way of the Rising Dragon", "alternate-monk/way-of-the-rising-dragon.png"],
+    ["Alternate Monk", "Way of the Shadow Arts", "alternate-monk/way-of-the-shadow-arts.png"],
+    ["Alternate Monk", "Way of Shining Steel", "alternate-monk/way-of-shining-steel.png"],
+    ["Alternate Monk", "Way of the Wu Jen", "alternate-monk/way-of-the-wu-jen.png"],
+    ["Alternate Monk", "Way of the Boulder", "alternate-monk/way-of-the-boulder.png"],
+    ["Alternate Monk", "Way of the Brawler", "alternate-monk/way-of-the-brawler.png"],
+    ["Alternate Monk", "Way of Ferocity", "alternate-monk/way-of-ferocity.png"],
+    ["Alternate Monk", "Way of the Flowing River", "alternate-monk/way-of-the-flowing-river.png"],
+    ["Alternate Monk", "Way of the Hurricane", "alternate-monk/way-of-the-hurricane.png"],
+    ["Alternate Monk", "Way of the Vigilante", "alternate-monk/way-of-the-vigilante.png"],
+    ["Alternate Monk", "Way of the Void", "alternate-monk/way-of-the-void.png"],
+  ])("assigns original art for %s / %s", (className, name, relative) => {
+    expect(defaultSubclassCardImageUrl(name, className)).toContain(relative)
+    expect(isBundledPublicCardArtPath("public/images/compendium/subclasses/" + relative)).toBe(true)
+    expect(fs.existsSync(path.join(process.cwd(), "public/images/compendium/subclasses", relative))).toBe(true)
+  })
+  it("does not borrow SRD Champion art for Alternate Fighter or retain that stale default", () => {
+    expect(defaultSubclassCardImageUrl("Champion", "Alternate Fighter", { requireAvailable: false })).toContain("/alternate-fighter/champion.png")
+    const stale = { name: "Champion", card_image_url: "/images/compendium/subclasses/fighter/champion.png" }
+    expect(applyBundledSubclassCardImage(stale, "Alternate Fighter").card_image_url).toContain("/alternate-fighter/champion.png")
+    expect(applyBundledSubclassCardImage({ ...stale, card_image_url: "https://example.com/my-champion.png" }, "Alternate Fighter").card_image_url).toBe("https://example.com/my-champion.png")
+    expect(defaultSubclassCardImageUrl("Champion", "Fighter", { requireAvailable: false })).toContain("/fighter/champion.png")
+  })
+  it("stores art under parent-class subdirectories", () => {
+    expectDefaultSubclassCardImage("Champion", "Fighter", /\/images\/compendium\/subclasses\/fighter\/champion\.png$/)
+    expectDefaultSubclassCardImage("Knowing Mind", "Psion", /\/images\/compendium\/subclasses\/psion\/knowing-mind\.png$/)
+    expectDefaultSubclassCardImage("Gadgetsmith", "Inventor", /\/images\/compendium\/subclasses\/inventor\/gadgetsmith\.png$/)
+    expectDefaultSubclassCardImage("Hedge Mage", "Occultist", /\/images\/compendium\/subclasses\/occultist\/hedge-mage\.png$/)
+    expectDefaultSubclassCardImage("Oracle", "Occultist", /\/images\/compendium\/subclasses\/occultist\/oracle\.png$/)
+    expectDefaultSubclassCardImage("Elemental Soul", "Warden", /\/images\/compendium\/subclasses\/warden\/elemental-soul\.png$/)
+    expectDefaultSubclassCardImage("Dreadwing", "Warden", /\/images\/compendium\/subclasses\/warden\/dreadwing\.png$/)
+    expectDefaultSubclassCardImage("Dread Wing", "Warden", /\/images\/compendium\/subclasses\/warden\/dreadwing\.png$/)
+    expectDefaultSubclassCardImage("Timetwister", "Warden", /\/images\/compendium\/subclasses\/warden\/timetwister\.png$/)
+    expectDefaultSubclassCardImage(
+      "Elemental Soul",
+      "Warden (Kibbles Tasty)",
+      /\/images\/compendium\/subclasses\/warden\/elemental-soul\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Dreadwing",
+      "Warden (Kibbles Tasty)",
+      /\/images\/compendium\/subclasses\/warden\/dreadwing\.png$/,
+    )
+    expectDefaultSubclassCardImage("Elemental Soul", "Warden (Mage Hand Press)", null)
+    expectDefaultSubclassCardImage(
+      "Hedge Mage",
+      "KibblesTasty Occultist",
+      /\/images\/compendium\/subclasses\/occultist\/hedge-mage\.png$/,
+    )
+    expectDefaultSubclassCardImage("Evoker", "Wizard", /\/images\/compendium\/subclasses\/wizard\/evoker\.png$/)
+    expectDefaultSubclassCardImage("Alchemist", "Artificer", /\/images\/compendium\/subclasses\/artificer\/alchemist\.png$/)
+    expectDefaultSubclassCardImage(
+      "Cartographer",
+      "Artificer",
+      /\/images\/compendium\/subclasses\/artificer\/cartographer\.png$/,
+    )
+    expectDefaultSubclassCardImage("Shadow Sorcery", "Sorcerer", /sorcerer\/shadow-sorcery\.png$/)
+    expectDefaultSubclassCardImage("Undead Patron", "Warlock", /warlock\/undead-patron\.png$/)
+    expectDefaultSubclassCardImage("Spellfire Sorcery", "Sorcerer", /sorcerer\/spellfire-sorcery\.png$/)
+    expectDefaultSubclassCardImage("Bladesinging", "Wizard", /wizard\/bladesinging\.png$/)
+    expectDefaultSubclassCardImage("Archfey Patron", "Warlock", /warlock\/archfey-patron\.png$/)
+    expectDefaultSubclassCardImage("Abjurer", "Wizard", /wizard\/abjurer\.png$/)
+    expectDefaultSubclassCardImage("Vestige Patron", "Warlock", /warlock\/vestige-patron\.png$/)
+  })
+
+  it("maps dropped PHB subclass sources by class and name", () => {
+    expectDefaultSubclassCardImage(
+      "College of Dance",
+      "Bard",
+      /\/images\/compendium\/subclasses\/bard\/college-of-dance\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "College of Spirits",
+      "Bard",
+      /\/images\/compendium\/subclasses\/bard\/college-of-spirits\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Light Domain",
+      "Cleric",
+      /\/images\/compendium\/subclasses\/cleric\/light-domain\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Trickery Domain",
+      "Cleric",
+      /\/images\/compendium\/subclasses\/cleric\/trickery-domain\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Circle of the Moon",
+      "Druid",
+      /\/images\/compendium\/subclasses\/druid\/circle-of-the-moon\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Battle Master",
+      "Fighter",
+      /\/images\/compendium\/subclasses\/fighter\/battle-master\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Psi Warrior",
+      "Fighter",
+      /\/images\/compendium\/subclasses\/fighter\/psi-warrior\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Warrior of Mercy",
+      "Monk",
+      /\/images\/compendium\/subclasses\/monk\/warrior-of-mercy\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Banneret",
+      "Fighter",
+      /\/images\/compendium\/subclasses\/fighter\/banneret\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Mystic Arts",
+      "Monk",
+      /\/images\/compendium\/subclasses\/monk\/mystic-arts\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Knowledge Domain",
+      "Cleric",
+      /\/images\/compendium\/subclasses\/cleric\/knowledge-domain\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Eldritch Knight",
+      "Fighter",
+      /\/images\/compendium\/subclasses\/fighter\/eldritch-knight\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Arcane Archer",
+      "Fighter",
+      /\/images\/compendium\/subclasses\/fighter\/arcane-archer\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Oath of Vengeance",
+      "Paladin",
+      /\/images\/compendium\/subclasses\/paladin\/oath-of-vengeance\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Oath of the Noble Genies",
+      "Paladin",
+      /\/images\/compendium\/subclasses\/paladin\/oath-of-the-noble-genies\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Beast Master",
+      "Ranger",
+      /\/images\/compendium\/subclasses\/ranger\/beast-master\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Winter Walker",
+      "Ranger",
+      /\/images\/compendium\/subclasses\/ranger\/winter-walker\.png$/,
+    )
+    expectDefaultSubclassCardImage("Warden", "Ranger", /\/images\/compendium\/subclasses\/ranger\/warden\.png$/)
+    expectDefaultSubclassCardImage("Warden", "Warden (Kibbles Tasty)", null)
+    expectDefaultSubclassCardImage(
+      "Soulknife",
+      "Rogue",
+      /\/images\/compendium\/subclasses\/rogue\/soulknife\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Scion of the Three",
+      "Rogue",
+      /\/images\/compendium\/subclasses\/rogue\/scion-of-the-three\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Cursesmith",
+      "Inventor",
+      /\/images\/compendium\/subclasses\/inventor\/cursesmith\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Relicsmith",
+      "Inventor",
+      /\/images\/compendium\/subclasses\/inventor\/relicsmith\.png$/,
+    )
+    expectDefaultSubclassCardImage("Witch", "Occultist", /\/images\/compendium\/subclasses\/occultist\/witch\.png$/)
+    expectDefaultSubclassCardImage(
+      "Voidwatcher",
+      "Occultist",
+      /\/images\/compendium\/subclasses\/occultist\/voidwatcher\.png$/,
+    )
+    expectDefaultSubclassCardImage("Shaman", "Occultist", /\/images\/compendium\/subclasses\/occultist\/shaman\.png$/)
+    expectDefaultSubclassCardImage(
+      "Spiritualist",
+      "Occultist",
+      /\/images\/compendium\/subclasses\/occultist\/spiritualist\.png$/,
+    )
+  })
+
+  it("scopes Reanimator to Artificer and Necromancer separately", () => {
+    expectDefaultSubclassCardImage(
+      "Reanimator",
+      "Artificer",
+      /\/images\/compendium\/subclasses\/artificer\/reanimator\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Reanimator",
+      "Necromancer",
+      /\/images\/compendium\/subclasses\/necromancer\/reanimator\.png$/,
+    )
+    expectDefaultSubclassCardImage("Phantom", "Rogue", /\/images\/compendium\/subclasses\/rogue\/phantom\.png$/)
+    expectDefaultSubclassCardImage(
+      "Undead Patron",
+      "Warlock",
+      /\/images\/compendium\/subclasses\/warlock\/undead-patron\.png$/,
+    )
+  })
+
+  it("ships an optimized image file for every bundled subclass", () => {
+    const imagesDir = path.join(process.cwd(), "public/images/compendium/subclasses")
+    for (const rel of listSubclassCardImageRelativePaths()) {
+      const repoRel = `public/images/compendium/subclasses/${rel}`
+      if (!isBundledPublicCardArtPath(repoRel)) continue
+      expect(fs.existsSync(path.join(imagesDir, rel)), `missing bundled art: ${rel}`).toBe(true)
+    }
+  })
+
+  it("wires every dropped scripts/subclass-card-sources slug into defaults", async () => {
+    const sourcesDir = path.join(process.cwd(), "scripts/subclass-card-sources")
+    if (!fs.existsSync(sourcesDir)) return
+    const { parseSubclassSourceBasename } = await import("../../../scripts/card-source-layout.mjs")
+
+    const sourceSlugs: string[] = []
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name.startsWith(".")) continue
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          walk(full)
+          continue
+        }
+        if (!/\.(png|jpe?g|webp)$/i.test(entry.name)) continue
+        const parsed = parseSubclassSourceBasename(entry.name.replace(/\.[^.]+$/, ""))
+        if (parsed) sourceSlugs.push(`${parsed.classSlug}/${parsed.itemSlug}`)
+      }
+    }
+    walk(sourcesDir)
+    sourceSlugs.sort()
+    if (sourceSlugs.length === 0) return
+
+    const mappedSlugs = new Set(
+      Object.values(SUBCLASS_CARD_IMAGES_BY_CLASS_AND_NAME).map((url) => {
+        const marker = "/images/compendium/subclasses/"
+        const idx = url.indexOf(marker)
+        return url.slice(idx + marker.length).replace(/\.png$/, "")
+      }),
+    )
+    expect([...sourceSlugs].filter((slug) => !mappedSlugs.has(slug))).toEqual([])
+  })
+
+  it("enriches subclass rows with default card art when unset", () => {
+    const row = enrichSrdSubclassRow(
+      {
+        name: "Path of the Berserker",
+        source: "D&D 5.5e SRD",
+        features: [],
+      },
+      "Barbarian",
+    )
+    expect(row.card_image_url).toBe(
+      defaultSubclassCardImageUrl("Path of the Berserker", "Barbarian"),
+    )
+  })
+
+  it("maps Mage Hand Press Alchemist art, including Slime Rancher → Ooze Rancher", () => {
+    expectDefaultSubclassCardImage(
+      "Amorist",
+      "Alchemist",
+      /\/images\/compendium\/subclasses\/alchemist\/amorist\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Ooze Rancher",
+      "Alchemist",
+      /\/images\/compendium\/subclasses\/alchemist\/ooze-rancher\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Slime Rancher",
+      "Alchemist",
+      /\/images\/compendium\/subclasses\/alchemist\/ooze-rancher\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Mad Bomber",
+      "Alchemist",
+      /\/images\/compendium\/subclasses\/alchemist\/mad-bomber\.png$/,
+    )
+    expect(
+      isBundledPublicCardArtPath("public/images/compendium/subclasses/alchemist/mad-bomber.png"),
+    ).toBe(true)
+    expect(
+      isBundledPublicCardArtPath("public/images/compendium/subclasses/alchemist/ooze-rancher.png"),
+    ).toBe(false)
+  })
+
+  it("maps Mage Hand Press Dancer art (free Acrobat ships; paid stay local)", () => {
+    expectDefaultSubclassCardImage(
+      "Acrobat",
+      "Dancer",
+      /\/images\/compendium\/subclasses\/dancer\/acrobat\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Fire Dancer",
+      "Dancer",
+      /\/images\/compendium\/subclasses\/dancer\/fire-dancer\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Moonwalker",
+      "Dancer",
+      /\/images\/compendium\/subclasses\/dancer\/moonwalker\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Mime",
+      "Dancer",
+      /\/images\/compendium\/subclasses\/dancer\/mime\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Shadow Dancer",
+      "Dancer",
+      /\/images\/compendium\/subclasses\/dancer\/shadow-dancer\.png$/,
+    )
+    expect(
+      isBundledPublicCardArtPath("public/images/compendium/subclasses/dancer/acrobat.png"),
+    ).toBe(true)
+    expect(
+      isBundledPublicCardArtPath("public/images/compendium/subclasses/dancer/fire-dancer.png"),
+    ).toBe(false)
+  })
+
+  it("maps Mage Hand Press Necromancer, Warden, Captain, Warmage, and Witch art", () => {
+    expectDefaultSubclassCardImage(
+      "Death Knight",
+      "Necromancer",
+      /\/images\/compendium\/subclasses\/necromancer\/death-knight\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Plague Lord",
+      "Necromancer",
+      /\/images\/compendium\/subclasses\/necromancer\/plague-lord\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Verdant Protector",
+      "Warden",
+      /\/images\/compendium\/subclasses\/warden\/verdant-protector\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Grey Watchman",
+      "Warden (Mage Hand Press)",
+      /\/images\/compendium\/subclasses\/warden\/grey-watchman\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Lion Banner",
+      "Captain",
+      /\/images\/compendium\/subclasses\/captain\/lion-banner\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Jolly Roger",
+      "Captain",
+      /\/images\/compendium\/subclasses\/captain\/jolly-roger\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "House of Darts",
+      "Warmage",
+      /\/images\/compendium\/subclasses\/warmage\/house-of-darts\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "House of Kings",
+      "Warmage",
+      /\/images\/compendium\/subclasses\/warmage\/house-of-kings\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Black Magic",
+      "Witch",
+      /\/images\/compendium\/subclasses\/witch\/black-magic\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Technicolor Magic",
+      "Witch",
+      /\/images\/compendium\/subclasses\/witch\/technicolor-magic\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Armigers' Guild",
+      "Craftsman",
+      /\/images\/compendium\/subclasses\/craftsman\/armigers-guild\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Bladeworkers' Guild",
+      "Craftsman",
+      /\/images\/compendium\/subclasses\/craftsman\/bladeworkers-guild\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Rōnin",
+      "Vagabond",
+      /\/images\/compendium\/subclasses\/vagabond\/ronin\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Experiment X",
+      "Vagabond",
+      /\/images\/compendium\/subclasses\/vagabond\/experiment-x\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Trick Shot",
+      "Gunslinger",
+      /\/images\/compendium\/subclasses\/gunslinger\/trick-shot\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Gun-Ko Master",
+      "Gunslinger",
+      /\/images\/compendium\/subclasses\/gunslinger\/gun-ko-master\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "White Hat",
+      "Gunslinger",
+      /\/images\/compendium\/subclasses\/gunslinger\/white-hat\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Spellslinger",
+      "Gunslinger",
+      /\/images\/compendium\/subclasses\/gunslinger\/spellslinger\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Antiquarian",
+      "Investigator",
+      /\/images\/compendium\/subclasses\/investigator\/antiquarian\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Burden of the End",
+      "Martyr",
+      /\/images\/compendium\/subclasses\/martyr\/burden-of-the-end\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "Burden of Tyranny",
+      "Martyr",
+      /\/images\/compendium\/subclasses\/martyr\/burden-of-tyranny\.png$/,
+    )
+    expectDefaultSubclassCardImage(
+      "House of Bishops",
+      "Warmage",
+      /\/images\/compendium\/subclasses\/warmage\/house-of-bishops\.png$/,
+    )
+    expect(
+      isBundledPublicCardArtPath("public/images/compendium/subclasses/necromancer/death-knight.png"),
+    ).toBe(true)
+    expect(
+      isBundledPublicCardArtPath("public/images/compendium/subclasses/warmage/house-of-darts.png"),
+    ).toBe(false)
+  })
+
+  it("applies named card art on non-SRD imports (Inventor / Psion / Occultist / Warden)", () => {
+    const gadgetsmith = enrichSrdSubclassRow(
+      { name: "Gadgetsmith", source: "KibblesTasty Inventor", features: [] },
+      "Inventor",
+    )
+    const knowing = enrichSrdSubclassRow(
+      { name: "Knowing Mind", source: "KibblesTasty Psion", features: [] },
+      "Psion",
+    )
+    expect(gadgetsmith.card_image_url).toBe(defaultSubclassCardImageUrl("Gadgetsmith", "Inventor"))
+    expect(knowing.card_image_url).toBe(defaultSubclassCardImageUrl("Knowing Mind", "Psion"))
+    const hedgeMage = enrichSrdSubclassRow(
+      { name: "Hedge Mage", source: "KibblesTasty Occultist", features: [] },
+      "Occultist",
+    )
+    const dreadwing = enrichSrdSubclassRow(
+      { name: "Dreadwing", source: "KibblesTasty Warden", features: [] },
+      "Warden (Kibbles Tasty)",
+    )
+    expect(hedgeMage.card_image_url).toBe(defaultSubclassCardImageUrl("Hedge Mage", "Occultist"))
+    expect(dreadwing.card_image_url).toBe(defaultSubclassCardImageUrl("Dreadwing", "Warden"))
+  })
+
+  it("does not assign Artificer Reanimator art to Necromancer Reanimator", () => {
+    const row = enrichSrdSubclassRow(
+      { name: "Reanimator", source: "Mage Hand Press", features: [] },
+      "Necromancer",
+    )
+    if (typeof row.card_image_url === "string") {
+      expect(row.card_image_url).not.toMatch(/\/artificer\/reanimator\.png$/)
+      expect(row.card_image_url).toMatch(/\/necromancer\/reanimator\.png$/)
+    } else {
+      expectDefaultSubclassCardImage(
+        "Reanimator",
+        "Necromancer",
+        /\/images\/compendium\/subclasses\/necromancer\/reanimator\.png$/,
+      )
+    }
+  })
+
+  it("preserves custom card art when already set", () => {
+    const custom = "/custom/berserker.png"
+    const row = enrichSrdSubclassRow(
+      {
+        name: "Path of the Berserker",
+        source: "D&D 5.5e SRD",
+        features: [],
+        card_image_url: custom,
+      },
+      "Barbarian",
+    )
+    expect(row.card_image_url).toBe(custom)
+  })
+
+  it("rewrites legacy flat subclass card paths to class folders", () => {
+    expect(
+      rewriteLegacyFlatSubclassCardImageUrl(
+        "/images/compendium/subclasses/college-of-lore.png",
+        "College of Lore",
+        "Bard",
+      ),
+    ).toMatch(/\/images\/compendium\/subclasses\/bard\/college-of-lore\.png$/)
+    expect(
+      rewriteLegacyFlatSubclassCardImageUrl(
+        "/images/compendium/subclasses/college-of-lore.png",
+        "College of Lore",
+      ),
+    ).toMatch(/\/bard\/college-of-lore\.png$/)
+    expect(
+      rewriteLegacyFlatSubclassCardImageUrl(
+        "/images/compendium/subclasses/bard/college-of-lore.png",
+        "College of Lore",
+        "Bard",
+      ),
+    ).toMatch(/\/bard\/college-of-lore\.png$/)
+    expect(
+      rewriteLegacyFlatSubclassCardImageUrl(
+        "/images/compendium/subclasses/cleric/light.png",
+        "Light Domain",
+        "Cleric",
+      ),
+    ).toMatch(/\/cleric\/light-domain\.png$/)
+    expect(
+      rewriteLegacyFlatSubclassCardImageUrl(
+        "/images/compendium/subclasses/druid/moon.png",
+        "Circle of the Moon",
+        "Druid",
+      ),
+    ).toMatch(/\/druid\/circle-of-the-moon\.png$/)
+  })
+})

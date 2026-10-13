@@ -1,0 +1,212 @@
+import type { RechargeRule, RestType, UsesConfig } from "@/lib/types"
+import {
+  rechargeFieldsFromRestoreAmount,
+  resolveRestoreAmount,
+  restoreAmountFromRechargeRule,
+  type ResolveRestoreAmountContext,
+  type RestoreAmountConfig,
+} from "@/lib/compendium/restore-amount-config"
+import {
+  formatRealTimeRechargeRule,
+  isRealTimeRechargeRule,
+  isRestRechargeRule,
+} from "@/lib/character/real-time-recharge"
+
+const REST_LABELS: Record<RestType, string> = {
+  short_rest: "short rest",
+  long_rest: "long rest",
+  initiative: "initiative",
+}
+
+export function getRechargeRules(uses: UsesConfig): RechargeRule[] {
+  if (uses.recharges?.length) return uses.recharges
+  if (uses.recharge) return [{ rest: uses.recharge }]
+  return []
+}
+
+export function getRestRechargeRules(uses: UsesConfig): Extract<RechargeRule, { rest: RestType }>[] {
+  return getRechargeRules(uses).filter(isRestRechargeRule)
+}
+
+export function getRealTimeRechargeRules(uses: UsesConfig): RechargeRule[] {
+  return getRechargeRules(uses).filter(isRealTimeRechargeRule)
+}
+
+/** Effective recharge rules after applying level-based overrides (e.g. Tireless). */
+export function getEffectiveRechargeRules(uses: UsesConfig, classLevel: number): RechargeRule[] {
+  const base = getRechargeRules(uses)
+  const overrides = uses.rechargeOverrides ?? []
+  if (!overrides.length) return base
+  let effective = base
+  for (const override of [...overrides].sort((a, b) => a.atClassLevel - b.atClassLevel)) {
+    if (classLevel >= override.atClassLevel) {
+      effective = override.recharges
+    }
+  }
+  return effective
+}
+
+export function normalizeUsesConfig(uses: UsesConfig): UsesConfig {
+  const recharges = getRechargeRules(uses)
+  if (!recharges.length) {
+    const { recharge: _legacy, ...rest } = uses
+    return rest
+  }
+  return {
+    ...uses,
+    recharges,
+    recharge: undefined,
+  }
+}
+
+function formatRechargeRule(rule: RechargeRule): string {
+  if (isRealTimeRechargeRule(rule)) {
+    return formatRealTimeRechargeRule(rule)
+  }
+  const label = REST_LABELS[rule.rest]
+  if (rule.amount == null || rule.amount <= 0) return label
+  return `${rule.amount} on ${label}`
+}
+
+export function formatUsesRecharges(uses: UsesConfig): string {
+  const rules = getRechargeRules(uses)
+  const parts: string[] = []
+
+  if (uses.rechargeOnInitiative != null && uses.rechargeOnInitiative !== false) {
+    if (uses.rechargeOnInitiative === true) {
+      parts.push("initiative (full pool)")
+    } else {
+      parts.push(`${uses.rechargeOnInitiative} on initiative`)
+    }
+  }
+
+  if (!rules.length) return parts.length ? parts.join(", ") : "rest"
+
+  const restRules = rules.filter(isRestRechargeRule)
+  const timedRules = rules.filter(isRealTimeRechargeRule)
+
+  const allFullPool = restRules.every((rule) => rule.amount == null || rule.amount <= 0)
+  if (restRules.length === 2 && allFullPool && !timedRules.length) {
+    parts.push("short or long rest")
+  } else {
+    parts.push(...rules.map(formatRechargeRule))
+  }
+
+  return parts.join(", ")
+}
+
+export function isRestRechargeEnabled(uses: UsesConfig, rest: RestType): boolean {
+  return getRestRechargeRules(uses).some((rule) => rule.rest === rest)
+}
+
+export function getRechargeAmount(uses: UsesConfig, rest: RestType): number | null {
+  const rule = getRestRechargeRules(uses).find((entry) => entry.rest === rest)
+  if (!rule) return null
+  return resolveRechargeRuleAmount(rule, null)
+}
+
+/** Resolve how many uses a recharge rule restores (null = full pool). */
+export function resolveRechargeRuleAmount(
+  rule: RechargeRule,
+  classLevel: number | null,
+  abilityModifiers?: Partial<Record<string, number>> | null,
+  extras?: Pick<ResolveRestoreAmountContext, "proficiencyBonus">,
+): number | null {
+  if (isRealTimeRechargeRule(rule)) return null
+  if (rule.amountFormula === "half_class_level_round_up" && classLevel != null) {
+    return Math.max(1, Math.ceil(classLevel / 2))
+  }
+  if (rule.amountFormula === "half_class_level_round_down" && classLevel != null) {
+    return Math.max(0, Math.floor(classLevel / 2))
+  }
+  const restore = restoreAmountFromRechargeRule(rule)
+  if (restore !== "full") {
+    if (restore.mode === "fixed") {
+      return restore.amount != null && restore.amount > 0 ? restore.amount : null
+    }
+    if (
+      restore.mode === "ability_modifier" &&
+      !abilityModifiers &&
+      extras?.proficiencyBonus == null
+    ) {
+      return null
+    }
+    return resolveRestoreAmount(restore, {
+      proficiencyBonus: extras?.proficiencyBonus,
+      abilityModifiers,
+    })
+  }
+  if (rule.amount == null || rule.amount <= 0) return null
+  return rule.amount
+}
+
+export function setRestRecharge(
+  uses: UsesConfig,
+  rest: RestType,
+  enabled: boolean,
+  amount?: number | null,
+): UsesConfig {
+  const current = getRechargeRules(uses).filter(isRestRechargeRule).filter((rule) => rule.rest !== rest)
+  const next = enabled
+    ? [
+        ...current,
+        {
+          rest,
+          amount: amount == null || amount <= 0 ? undefined : amount,
+        },
+      ]
+    : current
+
+  const sorted: RechargeRule[] = []
+  if (next.some((rule) => rule.rest === "short_rest")) {
+    sorted.push(next.find((rule) => rule.rest === "short_rest")!)
+  }
+  if (next.some((rule) => rule.rest === "long_rest")) {
+    sorted.push(next.find((rule) => rule.rest === "long_rest")!)
+  }
+
+  const normalized = normalizeUsesConfig({ ...uses, recharges: sorted.length ? sorted : undefined })
+  return normalized
+}
+
+export function getRechargeAmountOnInitiative(uses: UsesConfig): number | null {
+  const value = uses.rechargeOnInitiative
+  if (value == null || value === false) return null
+  if (value === true) return null
+  return value > 0 ? value : null
+}
+
+export function hasInitiativeRecharge(uses: UsesConfig): boolean {
+  return uses.rechargeOnInitiative != null && uses.rechargeOnInitiative !== false
+}
+
+export function updateRestRechargeAmount(
+  uses: UsesConfig,
+  rest: RestType,
+  amount: number | null,
+): UsesConfig {
+  return updateRestRechargeRestore(
+    uses,
+    rest,
+    amount == null || amount <= 0 ? "full" : { mode: "fixed", amount },
+  )
+}
+
+export function updateRestRechargeRestore(
+  uses: UsesConfig,
+  rest: RestType,
+  value: RestoreAmountConfig | "full",
+): UsesConfig {
+  const fields = rechargeFieldsFromRestoreAmount(value)
+  const rules = getRechargeRules(uses)
+    .filter(isRestRechargeRule)
+    .map((rule) =>
+      rule.rest === rest
+        ? {
+            ...rule,
+            ...fields,
+          }
+        : rule,
+    )
+  return normalizeUsesConfig({ ...uses, recharges: rules.length ? rules : undefined })
+}

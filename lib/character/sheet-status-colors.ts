@@ -1,0 +1,197 @@
+import type { StatContributionSourceType } from "@/lib/character/stat-contributions"
+import type { AppThemeId } from "@/lib/themes/app-themes"
+import type { AbilityScoreKey } from "@/lib/compendium/characteristic-modifiers"
+
+/** Row backgrounds for proficient saves, skills, and similar sheet tiles. */
+export const SHEET_STATUS_ROW = {
+  saveProficient:
+    "bg-primary/30 text-foreground font-semibold border border-primary/45",
+  skillProficient:
+    "bg-lime/12 text-foreground font-medium border border-lime/20",
+  skillCustom:
+    "bg-violet/12 text-foreground font-medium border border-violet/20",
+  muted: "bg-muted/85 text-muted-foreground border border-border/70",
+} as const
+
+export const SHEET_STATUS_BADGE = {
+  expertise:
+    "text-[9px] font-semibold uppercase px-1 py-0.5 rounded bg-orange/15 text-orange border border-orange/25",
+  customSkill:
+    "text-[9px] font-semibold uppercase px-1 py-0.5 rounded bg-violet/15 text-violet border border-violet/25",
+} as const
+
+/** Character sheet header chips (species, background, etc.). */
+export const SHEET_BANNER_BADGE = {
+  class:
+    "px-2 py-0.5 rounded-full text-xs font-medium bg-background/85 text-foreground border border-primary/35",
+  species:
+    "px-2 py-0.5 rounded-full text-xs font-medium bg-background/85 text-foreground border border-lime/35",
+  size: "px-2 py-0.5 rounded-full text-xs font-medium bg-background/85 text-foreground border border-border/50",
+  background:
+    "px-2 py-0.5 rounded-full text-xs font-medium bg-background/85 text-foreground border border-secondary/40",
+} as const
+
+/** Solid fill so chips read on banner art; inner info / clear buttons follow the chip text color. */
+const BANNER_CHIP_BASE =
+  "inline-flex items-center gap-0.5 rounded-md border px-1.5 py-1 text-[10px] font-semibold shadow-sm [&_button]:text-current [&_button]:opacity-85 [&_button:hover]:text-current [&_button:hover]:opacity-100"
+
+/** Status chips in the banner lower row (bloodied, conditions, etc.). */
+export const SHEET_BANNER_CHIP = {
+  bloodied: `${BANNER_CHIP_BASE} border-amber-700/70 bg-amber-600/95 text-white`,
+  exhaustion: `${BANNER_CHIP_BASE} border-amber-800/70 bg-amber-700/95 text-white`,
+  condition: `${BANNER_CHIP_BASE} border-destructive/80 bg-destructive/95 text-destructive-foreground`,
+  concentration: `${BANNER_CHIP_BASE} border-purple-800/70 bg-purple-600/95 text-white`,
+} as const
+
+/** Banner toolbar buttons — solid enough to read on banner art without a box wash. */
+export const SHEET_BANNER_BUTTON = {
+  icon: "border-border/60 bg-background/85 hover:border-primary hover:text-foreground",
+  conditionsDefault:
+    "border-destructive/70 bg-destructive/90 text-destructive-foreground hover:border-destructive/80 hover:bg-destructive/95",
+  conditionsActive:
+    "border-destructive/80 bg-destructive/95 text-destructive-foreground hover:bg-destructive",
+  inspirationActive: "border-amber-500/45 bg-background/85 text-amber-700 dark:text-amber-300",
+  inspirationIdle:
+    "border-border/60 bg-background/85 text-muted-foreground hover:border-amber-500/30 hover:text-amber-600",
+  manualRoll:
+    "border-cyan/45 bg-background/85 text-cyan hover:border-cyan/65 hover:bg-cyan/18",
+  durationReminders:
+    "border-border/60 bg-background/85 text-muted-foreground hover:border-primary hover:text-foreground",
+  durationRemindersActive:
+    "border-primary/45 bg-background/85 text-primary hover:border-primary/65 hover:bg-primary/18",
+  toggleActive: "border-destructive/35 bg-background/85 text-destructive",
+  toggleIdle: "border-border/60 bg-background/85 text-muted-foreground hover:bg-muted/35",
+  rest: "border-border/60 bg-background/85 hover:bg-muted/35 hover:text-foreground",
+  select: "border-border/60 bg-background/85",
+} as const
+
+/** Panel fill — opacity = 100% minus transparency percentage. */
+export const SHEET_PANEL = {
+  /** 35% transparent */
+  faint: "bg-card/65",
+  /** 20% transparent */
+  medium: "bg-card/80",
+  /** 10% transparent */
+  solid: "bg-card/90",
+} as const
+
+/** Abilities tab panel backgrounds. */
+export const SHEET_ABILITIES_PANEL = {
+  skills: "bg-card/75",
+  proficiencies: "bg-card/85",
+  abilityScores: SHEET_PANEL.medium,
+  actions: SHEET_PANEL.solid,
+} as const
+
+/** Combat tab panel backgrounds. */
+export const SHEET_COMBAT_PANEL = {
+  combatStats: SHEET_PANEL.faint,
+  initiative: SHEET_PANEL.faint,
+  savingThrows: SHEET_PANEL.medium,
+  spells: SHEET_PANEL.medium,
+  spellcastingResources: SHEET_PANEL.solid,
+  actions: SHEET_PANEL.solid,
+} as const
+
+export const SHEET_EQUIPMENT_PANEL = SHEET_PANEL.solid
+export const SHEET_FEATURES_PANEL = SHEET_PANEL.medium
+export const SHEET_DETAILS_PANEL = SHEET_PANEL.faint
+
+/** Sheet section tab buttons — 10% transparent. */
+export const SHEET_TAB_BUTTON = {
+  active: "bg-primary/90 text-primary-foreground",
+  idle: "bg-card/90 text-muted-foreground hover:bg-muted/90",
+} as const
+
+/** Character sheet `<main>` — consistent width on md+ across every tab. */
+export const SHEET_MAIN_CLASS =
+  "w-full min-w-0 max-w-5xl xl:max-w-7xl mx-auto px-4 py-4 overflow-x-clip"
+
+/** Tab panel wrapper — keeps grid/flex children from widening the main column. */
+export const SHEET_TAB_CONTENT_CLASS = "w-full min-w-0"
+
+const ASTRAL_ABILITY_SCORE_COLORS: Record<AbilityScoreKey, string> = {
+  strength: "bg-red-500",
+  dexterity: "bg-green-500",
+  constitution: "bg-orange-500",
+  intelligence: "bg-blue-500",
+  wisdom: "bg-purple-500",
+  charisma: "bg-pink-500",
+}
+
+export function abilityScoreBoxClass(theme: AppThemeId, ability: AbilityScoreKey): string {
+  const base = "w-10 h-10 rounded-lg flex items-center justify-center mx-auto"
+  if (theme === "astral") {
+    return `${base} ${ASTRAL_ABILITY_SCORE_COLORS[ability]}`
+  }
+  return `${base} bg-secondary`
+}
+
+export function abilityScoreValueClass(theme: AppThemeId): string {
+  return theme === "astral"
+    ? "text-sm font-black text-white"
+    : "text-sm font-black text-secondary-foreground"
+}
+
+/** Beyond-style ability tile: label → large modifier frame → score pill. */
+export function abilityScoreTileClass(theme: AppThemeId): string {
+  return theme === "astral"
+    ? "relative flex flex-col items-center rounded-xl border border-white/15 bg-gradient-to-b from-white/10 to-card/70 px-1.5 pb-2 pt-2 shadow-sm"
+    : "relative flex flex-col items-center rounded-xl border border-border/80 bg-gradient-to-b from-muted/55 to-card/90 px-1.5 pb-2 pt-2 shadow-sm"
+}
+
+export function abilityScoreModifierFrameClass(theme: AppThemeId): string {
+  return theme === "astral"
+    ? "mt-1.5 flex h-12 w-12 items-center justify-center rounded-md border-2 border-white/40 bg-black/25"
+    : "mt-1.5 flex h-12 w-12 items-center justify-center rounded-md border-2 border-primary/45 bg-background/90"
+}
+
+export function abilityScorePillClass(theme: AppThemeId, ability: AbilityScoreKey): string {
+  const base =
+    "relative z-[1] min-w-[2rem] rounded-full border px-2.5 py-0.5 text-center text-xs font-black tabular-nums"
+  if (theme === "astral") {
+    return `${base} border-white/25 text-white ${ASTRAL_ABILITY_SCORE_COLORS[ability]}`
+  }
+  return `${base} border-border bg-muted text-foreground`
+}
+
+/** Action cards on the combat / abilities tabs. */
+export const SHEET_ACTION_CARD = {
+  default: "border-border/70 bg-muted/25",
+  classResource: "border-cyan/35 bg-cyan/10",
+  classResourceHover: "hover:border-cyan/55 hover:bg-cyan/15",
+  defaultHover: "hover:border-primary/50 hover:bg-muted/40",
+} as const
+
+export const SHEET_ACTION_USAGE_DOT = {
+  default: {
+    spent: "border-primary bg-primary",
+    available: "border-border bg-background hover:border-primary/50",
+  },
+  classResource: {
+    spent: "border-cyan bg-cyan",
+    available: "border-cyan/40 bg-background hover:border-cyan/60",
+  },
+} as const
+
+export const SHEET_DEATH_SAVE_BOX =
+  "rounded-lg border border-border/80 bg-muted/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+
+const WEAPON_MODIFIER_BADGE_BY_SOURCE: Record<StatContributionSourceType | "default", string> = {
+  class: "border-orange/35 bg-orange/12 text-foreground",
+  feat: "border-lemon/35 bg-lemon/12 text-foreground",
+  species: "border-lime/35 bg-lime/12 text-foreground",
+  feature: "border-violet/35 bg-violet/12 text-foreground",
+  background: "border-secondary/40 bg-secondary/10 text-foreground",
+  item: "border-cyan/35 bg-cyan/10 text-foreground",
+  ability: "border-accent/30 bg-accent/10 text-foreground",
+  base: "border-border bg-muted/60 text-foreground",
+  default: "border-primary/30 bg-primary/10 text-foreground",
+}
+
+export function weaponModifierBadgeClass(
+  sourceType: StatContributionSourceType | undefined,
+): string {
+  const tone = sourceType ?? "default"
+  return WEAPON_MODIFIER_BADGE_BY_SOURCE[tone] ?? WEAPON_MODIFIER_BADGE_BY_SOURCE.default
+}

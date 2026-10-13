@@ -1,0 +1,64 @@
+import { describe, expect, it } from "vitest"
+import {
+  getAllSeedToolNames,
+  getMusicalInstrumentNames,
+  getStandardProficiencyToolNames,
+  getToolDescription,
+  groupToolOptionsForPicker,
+  toolNamesForPool,
+} from "@/lib/compendium/tool-options"
+import { enrichClassFeatureWithModifierPresets } from "@/lib/compendium/enrich-srd-class-features"
+
+describe("SRD tools compendium seed", () => {
+  it("includes 41 bundled tool entries", () => {
+    expect(getAllSeedToolNames()).toHaveLength(41)
+  })
+
+  it("keeps the 27 PHB proficiency-level tool names", () => {
+    expect(getStandardProficiencyToolNames()).toHaveLength(27)
+    expect(getStandardProficiencyToolNames()).toContain("Musical Instrument")
+    expect(getStandardProficiencyToolNames()).toContain("Gaming Set")
+  })
+
+  it("filters musical instrument pool for Bard picks", () => {
+    const pool = toolNamesForPool("musical", getAllSeedToolNames())
+    expect(pool).toContain("Lute")
+    expect(pool).toContain("Musical Instrument")
+    expect(pool).not.toContain("Thieves' Tools")
+    expect(getMusicalInstrumentNames().every((name) => pool.includes(name))).toBe(true)
+  })
+
+  it("groups musical instruments under one accordion section", () => {
+    const pool = toolNamesForPool("musical", getAllSeedToolNames())
+    const groups = groupToolOptionsForPicker(pool, "musical")
+    expect(groups.length).toBeGreaterThanOrEqual(1)
+    expect(groups.some((group) => group.label.includes("Musical"))).toBe(true)
+    expect(groups.flatMap((group) => group.names)).toContain("Lute")
+  })
+
+  it("builds SRD Ability/Utilize/Craft descriptions for artisan tools", () => {
+    const text = getToolDescription("Carpenter's Tools")
+    expect(text).toMatch(/Strength/)
+    expect(text).toMatch(/Utilize/)
+    expect(text).toMatch(/Seal or pry open/)
+    expect(text).toMatch(/Craft/)
+    expect(getToolDescription("Not A Real Tool")).toBeNull()
+  })
+})
+
+describe("class tool choice wiring", () => {
+  it("Bardic Inspiration uses musical tool pool", () => {
+    const feature = enrichClassFeatureWithModifierPresets("Bard", {
+      level: 1,
+      name: "Bardic Inspiration",
+      description: "Grant inspiration and learn instruments.",
+    })
+    const toolMod = feature.linkedModifiers?.flatMap((inst) => inst.characteristics ?? []).find(
+      (mod) => mod.type === "tool_proficiencies" && (mod.choiceCount ?? 0) > 0,
+    ) as import("@/lib/compendium/characteristic-modifiers").ListCharacteristic | undefined
+    expect(toolMod?.toolChoicePool).toBe("musical")
+    expect(toolMod?.choiceCount).toBe(3)
+    const pool = toolNamesForPool("musical", getAllSeedToolNames())
+    expect(pool).toContain("Lute")
+  })
+})

@@ -1,0 +1,168 @@
+import type { Background, Character, CharacterDraft, DndClass, Spell } from "@/lib/types"
+import type { BuilderDraftSnapshot } from "@/lib/builder/draft-storage"
+import { BUILDER_STEP_IDS } from "@/lib/builder/builder-constants"
+import {
+  normalizeCharacterClassRows,
+  rowsToClassAddOrder,
+  rowsToClassLevels,
+  rowsToSubclassMap,
+} from "@/lib/character/character-classes"
+import { normalizeBuilderPicks, normalizeModifierPlayerPicks } from "@/lib/builder/builder-picks"
+import {
+  inferClassSkillPicks,
+  inferSpellPicksByClassId,
+} from "@/lib/builder/infer-builder-picks"
+import { getBuilderLayout, layoutToCardViewMode } from "@/lib/site-settings/builder-layout"
+import { mergeAlchemistDiscoveryPicks } from "@/lib/compendium/alchemist-feature-wiring"
+import { pruneMissingClassSelections } from "@/lib/builder/prune-missing-class-picks"
+import { normalizeSpeciesTraitPicksForSpecies } from "@/lib/builder/species-trait-picks"
+
+export function characterToDraft(character: Character): CharacterDraft {
+  return {
+    name: character.name,
+    level: character.level,
+    class_id: character.class_id,
+    subclass_id: character.subclass_id,
+    species_id: character.species_id,
+    background_id: character.background_id,
+    size: character.size ?? null,
+    strength: character.strength,
+    dexterity: character.dexterity,
+    constitution: character.constitution,
+    intelligence: character.intelligence,
+    wisdom: character.wisdom,
+    charisma: character.charisma,
+    alignment: character.alignment ?? undefined,
+    personality_traits: character.personality_traits ?? "",
+    ideals: character.ideals ?? "",
+    bonds: character.bonds ?? "",
+    flaws: character.flaws ?? "",
+    backstory: character.backstory ?? "",
+    appearance: character.appearance ?? undefined,
+    portrait_url: character.portrait_url,
+    banner_url: character.banner_url ?? null,
+    asi_allocations: character.asi_allocations ?? undefined,
+    skill_proficiencies: character.skill_proficiencies ?? [],
+    tool_proficiencies: character.tool_proficiencies ?? [],
+    weapon_proficiencies: character.weapon_proficiencies ?? [],
+    armor_proficiencies: character.armor_proficiencies ?? [],
+    languages: character.languages ?? ["Common"],
+    equipment_ids: character.equipment_ids ?? [],
+    equipment_quantities: character.equipment_quantities ?? {},
+    gold: character.gold ?? 0,
+    spell_ids: character.spell_ids ?? [],
+    feat_ids: character.feat_ids ?? [],
+  }
+}
+
+export function characterToBuilderState(
+  character: Character,
+  options: {
+    dndClass?: DndClass | null
+    background?: Background | null
+    species?: import("@/lib/types").Species | null
+    allClasses?: DndClass[]
+    allSubclasses?: import("@/lib/types").Subclass[]
+    spells?: Spell[]
+  } = {},
+): Omit<BuilderDraftSnapshot, "version" | "savedAt"> {
+  const classRows = normalizeCharacterClassRows(character)
+  const classLevels = classRows.length
+    ? rowsToClassLevels(classRows)
+    : character.class_id
+      ? [{ classId: character.class_id, level: character.level }]
+      : []
+
+  const subclassByClassId = classRows.length
+    ? rowsToSubclassMap(classRows)
+    : character.class_id && character.subclass_id
+      ? { [character.class_id]: character.subclass_id }
+      : {}
+
+  const builderPicks = normalizeBuilderPicks(character.builder_picks)
+  const allClasses = options.allClasses ?? (options.dndClass ? [options.dndClass] : [])
+
+  const classSkillPicks =
+    builderPicks.class_skill_picks ??
+    inferClassSkillPicks(character, allClasses, options.background)
+
+  const classToolPicks = builderPicks.class_tool_picks ?? {}
+
+  const spellPicksByClassId =
+    builderPicks.spell_picks_by_class_id ??
+    inferSpellPicksByClassId(character, allClasses, options.spells ?? [])
+
+  const speciesTraitPicks = normalizeSpeciesTraitPicksForSpecies(
+    builderPicks.species_trait_picks ?? {},
+    options.species ?? null,
+  )
+  const featureChoicePicks = mergeAlchemistDiscoveryPicks(
+    (character.feature_choice_picks as Record<string, string[]>) ?? {},
+  )
+  const classAddOrder =
+    character.class_add_order ??
+    (classRows.length ? rowsToClassAddOrder(classRows) : classLevels.map((entry) => entry.classId))
+  const pruned =
+    allClasses.length > 0
+      ? pruneMissingClassSelections({
+          knownClassIds: allClasses.map((cls) => cls.id),
+          classLevels,
+          classAddOrder,
+          primaryClassId: character.class_id,
+          subclassByClassId,
+          classSkillPicks,
+          classToolPicks,
+          featureChoicePicks,
+          spellPicksByClassId,
+          extraSkillProficiencies: character.skill_proficiencies ?? [],
+        })
+      : null
+
+  const draft = characterToDraft(character)
+  if (pruned?.changed) {
+    draft.class_id = pruned.primaryClassId
+    draft.subclass_id = pruned.primaryClassId
+      ? (pruned.subclassByClassId[pruned.primaryClassId] ?? null)
+      : null
+    draft.skill_proficiencies = pruned.extraSkillProficiencies
+  }
+
+  return {
+    currentStep: 1,
+    maxStepReached: BUILDER_STEP_IDS.DETAILS,
+    character: draft,
+    abilityMethod: "pointbuy",
+    pointsRemaining: 27,
+    classSearch: "",
+    speciesSearch: "",
+    backgroundSearch: "",
+    spellSearch: "",
+    equipmentSearch: "",
+    previewTab: "summary",
+    mobilePanel: "steps",
+    equippedArmorId: character.equipped_armor_id ?? null,
+    equippedShieldId: character.equipped_shield_id ?? null,
+    equippedWeaponId: character.equipped_weapon_id ?? null,
+    classLevels: pruned?.classLevels ?? classLevels,
+    subclassByClassId: pruned?.subclassByClassId ?? subclassByClassId,
+    classSkillPicks: pruned?.classSkillPicks ?? classSkillPicks,
+    classToolPicks: pruned?.classToolPicks ?? classToolPicks,
+    featureChoicePicks: pruned?.featureChoicePicks ?? featureChoicePicks,
+    featChoicePicks: (character.feat_choice_picks as Record<string, string[]>) ?? {},
+    modifierPlayerPicks: normalizeModifierPlayerPicks(character.modifier_player_picks),
+    primaryClassId: pruned?.primaryClassId ?? character.class_id,
+    classAddOrder: pruned?.classAddOrder ?? classAddOrder,
+    speciesTraitPicks,
+    startingEquipmentOptionIndex: builderPicks.starting_equipment_option_index ?? null,
+    backgroundStartingEquipmentOptionIndex:
+      builderPicks.background_starting_equipment_option_index ?? null,
+    goldPurchasedEquipmentIds: builderPicks.gold_purchased_equipment_ids ?? [],
+    spellPicksByClassId: pruned?.spellPicksByClassId ?? spellPicksByClassId,
+    asiAllocationsByFeatId: (character.asi_allocations as Record<string, Partial<Record<string, number>>>) ?? {},
+    standardArrayAssignments: {},
+    currentHp: character.hit_points ?? character.hit_point_max ?? null,
+    tempHp: 0,
+    editingCharacterId: character.id,
+    cardViewMode: layoutToCardViewMode(getBuilderLayout()),
+  }
+}

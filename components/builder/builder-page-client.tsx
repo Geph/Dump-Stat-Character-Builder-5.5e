@@ -1,0 +1,8096 @@
+"use client"
+
+import { CompactImage } from "@/components/compact-image"
+
+
+import { NameFontPicker, nameFontStyle } from "@/components/character-sheet/name-font-picker"
+import { readNameFontId, withNameFont } from "@/lib/character/name-fonts"
+import { useState, useEffect, useRef, useMemo, useCallback, useDeferredValue, type ReactNode } from "react"
+import dynamic from "next/dynamic"
+import { motion, AnimatePresence } from "framer-motion"
+import { MainNav } from "@/components/main-nav"
+import { SiteFooter } from "@/components/site-footer"
+import { GameIcon } from "@/components/game-icon-picker"
+import { createClient } from "@/lib/db/client"
+import {
+  BUILDER_COMPENDIUM_UPDATED_EVENT,
+  loadBuilderCompendium,
+} from "@/lib/data/builder-compendium-cache"
+import { asCompendiumRow, asCompendiumRows } from "@/lib/data/types"
+import { characterSheetHref, savedCharacterNavigationHref } from "@/lib/compendium/edit-href"
+import { pageFloatingHintClass, pageStepStripClass } from "@/lib/compendium/editor-field-styles"
+import {
+  filterEnabled,
+  filterEnabledIds,
+  pickEnabledId,
+} from "@/lib/compendium/compendium-enabled"
+import { useRouter } from "next/navigation"
+import { SearchBox } from "@/components/search/search-box"
+import { rankSearchResults, searchItems } from "@/lib/search/ranked-search"
+import { spellAliasLookupKeys } from "@/lib/compendium/spell-name-aliases"
+import { 
+  ChevronLeft, 
+  ChevronRight, 
+  Check, 
+  Upload,
+  X,
+  Wand2,
+  Search,
+  Heart,
+  Sparkles,
+  Eye,
+  LayoutGrid,
+  Coins,
+  Backpack,
+  ShoppingBag,
+  UserCircle,
+  Shield,
+  Dices,
+  RotateCcw,
+} from "lucide-react"
+import {
+  aggregateCharacteristics,
+  normalizeCharacteristics,
+  ABILITY_SCORE_KEYS,
+} from "@/lib/compendium/characteristic-modifiers"
+import {
+  buildCharacterSaveSnapshot,
+  computeDerivedCharacter,
+} from "@/lib/character/compute-derived"
+import { filterDisplaySpeedEntries } from "@/lib/character/resolve-all-speeds"
+import {
+  findBackgroundGrantedFeat,
+  formatBackgroundAbilityBonuses,
+} from "@/lib/compendium/background-display"
+import {
+  getEffectiveBackgroundFeatGranted,
+  isLegacyBackground,
+  legacyBackgroundOriginFeatPickKey,
+  magicInitiateListFromFeatGranted,
+} from "@/lib/compendium/background-origin-feat"
+import { magicInitiateAbilityForSpellList, pruneConflictingMagicInitiateSpellListPicks, takenMagicInitiateSpellLists } from "@/lib/builder/magic-initiate"
+import { OriginFeatGrantedSelect } from "@/components/compendium/origin-feat-granted-select"
+import {
+  applyBackgroundProficienciesToDraft,
+  getEffectiveArmorProficiencies,
+  getEffectiveWeaponProficiencies,
+  mergeProficiencyLists,
+  normalizeBackgroundProficiencies,
+  type BackgroundProficiencies,
+} from "@/lib/compendium/background-proficiencies"
+import {
+  isArmorItem,
+  isShieldItem,
+  isWeaponItem,
+} from "@/lib/compendium/combat-stats"
+import { BuilderStepNav } from "@/components/builder/builder-step-nav"
+import {
+  asBuilderBlockers,
+  scrollToBuilderTarget,
+  type BuilderBlocker,
+} from "@/lib/builder/proceed-blockers"
+import { PickerGridPagination } from "@/components/builder/picker-grid-pagination"
+import { EquipmentShoppingPanel } from "@/components/builder/equipment-shopping-panel"
+import { BackgroundDetailStrip } from "@/components/compendium/background-detail-strip"
+import { RichTextContent } from "@/components/compendium/rich-text-editor"
+import { ClampedRichText } from "@/components/character-sheet/expandable-description"
+import { CompendiumSelectionCard } from "@/components/compendium/compendium-selection-card"
+import { CompendiumDenseSelectionCard } from "@/components/compendium/compendium-dense-selection-card"
+import { ClassDetailFeatureList } from "@/components/compendium/class-detail-feature-list"
+import {
+  SpeciesDetailTraitList,
+} from "@/components/compendium/species-detail-trait-list"
+import { StartingEquipmentPackagePicker } from "@/components/builder/starting-equipment-package-picker"
+import { SwipeVisualPicker } from "@/components/builder/swipe-visual-picker"
+import { BuilderCatalogEmptyPrompt } from "@/components/builder/builder-catalog-empty-prompt"
+import { BuilderCompletableSection } from "@/components/builder/builder-completable-section"
+import { BuilderSelectedChoiceChips } from "@/components/builder/builder-selected-choice-chips"
+import { BuilderSelectedCatalogItem } from "@/components/builder/builder-selected-catalog-item"
+import {
+  BuilderSpellCompactPick,
+  SpellSelectionCard,
+} from "@/components/builder/spell-selection-card"
+import { compendiumCardBlurb, getCompendiumCardBlurb, getCompendiumCardImageUrl } from "@/lib/compendium/card-image"
+import { getCompendiumDetailFlavor } from "@/lib/compendium/class-detail-flavor"
+import { buildCustomSkillIconByName } from "@/lib/compendium/skill-icons"
+import { getClassDetailBaseFeatures } from "@/lib/builder/class-detail-features"
+import { subclassFeatureTitleRows } from "@/lib/builder/subclass-detail-display"
+import { getClassComplexityHeroBadge, getClassDetailHeroBadges } from "@/lib/builder/class-detail-badges"
+import {
+  findSpeciesSizeChoiceTraitIndex,
+  formatSpeciesSizeDisplay,
+  formatSpeciesSpeedDisplay,
+  isSpeciesSizeChoiceTrait,
+} from "@/lib/compendium/species-display"
+import {
+  portraitDetailBadge,
+  portraitDetailBody,
+  portraitDetailEyebrow,
+  portraitDetailHeading,
+  portraitDetailMeta,
+  portraitDetailSummary,
+  portraitDetailTitle,
+} from "@/lib/compendium/portrait-detail-typography"
+import {
+  suggestEquipmentLoadout,
+} from "@/lib/builder/equipment-loadout"
+import {
+  getBackgroundStartingEquipmentGroups,
+  getBackgroundStartingGold,
+} from "@/lib/compendium/background-equipment"
+import { getCompendiumItemAccentColor, compendiumAccentColorStyles } from "@/lib/compendium/theme-colors"
+import { cn } from "@/lib/utils"
+import { getCompendiumItemIcon } from "@/lib/compendium/content-types"
+import { enrichSubclassDisplayDefaults } from "@/lib/compendium/enrich-subclass-display"
+import { MultiSelectChoices } from "@/components/builder/multi-select-choices"
+import { ClassAbilitiesStepPanel } from "@/components/builder/class-abilities-step-panel"
+import { FeatPickGallery } from "@/components/builder/feat-pick-gallery"
+import { BuilderFeatChoiceButton } from "@/components/builder/builder-feat-choice-button"
+import { WeaponMasteryChoices } from "@/components/builder/weapon-mastery-choices"
+import {
+  buildWeaponMasteryDescriptionsLookup,
+  weaponMasteryCatalogEntriesFromAbilities,
+} from "@/lib/compendium/weapon-mastery"
+import {
+  resolveChoiceOptionDescription,
+  shouldShowNamedChoiceSummaries,
+} from "@/lib/compendium/choice-option-description"
+import { isWeaponMasteryFeature } from "@/lib/compendium/weapon-mastery-choice"
+import { chosenOptionNames, withChosenOptionChrome } from "@/lib/character/chosen-option-label"
+import { AsiAllocator } from "@/components/builder/asi-allocator"
+import { AbilityScoreCards } from "@/components/builder/ability-score-cards"
+import {
+  classNeedsSubclass,
+  featureChoiceKey,
+  buildSkillPickSources,
+  getSubclassesForClass,
+  getTakenSkills,
+  resolveSubclassUnlockLabel,
+  resolveSubclassUnlockLevel,
+  validateClassStepChoices,
+  validateOriginStepChoices,
+  collectClassStepBlockers,
+  collectOriginStepBlockers,
+  collectSpeciesOptionBlockers,
+  collectBackgroundOptionBlockers,
+  proficientSkillsInBuilder,
+} from "@/lib/builder/choices"
+import {
+  collectGrantedSkillNames,
+  describeReleasedClassSkills,
+  releaseOverlappingClassSkillPicks,
+} from "@/lib/builder/skill-overlap"
+import { resolveFeatureChoiceCount } from "@/lib/compendium/resolve-feature-choice-count"
+import { getBuilderLayout, layoutToCardViewMode, cardViewModeToLayout, setBuilderLayout, BUILDER_LAYOUT_CHANGE_EVENT } from "@/lib/site-settings/builder-layout"
+import { APP_PRESENTATION_MODE_CHANGE_EVENT, isCompactOnlyPresentation } from "@/lib/site-settings/app-presentation-mode"
+import { useAppPresentationMode } from "@/components/settings/use-app-presentation-mode"
+import {
+  clearBuilderDraft,
+  loadBuilderDraft,
+  normalizePreviewTab,
+  saveBuilderDraft,
+  type BuilderDraftSnapshot,
+  type BuilderPreviewTab,
+} from "@/lib/builder/draft-storage"
+import { characterToBuilderState } from "@/lib/builder/character-to-draft"
+import { buildBuilderPicksFromSnapshot } from "@/lib/builder/builder-picks"
+import {
+  collectFeatPickSlotKeys,
+  collectMaxLevelFeatPickSlotKeys,
+} from "@/lib/builder/feat-pick-keys"
+import { partitionToolProficiencies } from "@/lib/compendium/partition-tool-proficiencies"
+import {
+  collapseWeaponCategoryPackageOptions,
+  computeStartingCharacterGold,
+  equipmentCategoryKind,
+  equipmentForCategory,
+  getEquipmentCostGp,
+  getStartingEquipmentGroups,
+  hasMartialWeaponProficiency,
+  isGoldOnlyOption,
+  packageOptionRequiresMartialProficiency,
+  resolvePackageEquipment,
+  sumEquipmentGoldCost,
+} from "@/lib/builder/equipment-utils"
+import {
+  holdingsFromRepeatedIds,
+  mergeEquipmentHoldings,
+  normalizeEquipmentQuantities,
+  ownedEquipmentQuantity,
+} from "@/lib/character/equipment-quantities"
+import {
+  grantedEquipmentSignature,
+  resolveGrantedEquipmentHoldings,
+} from "@/lib/character/granted-equipment"
+import {
+  canSelectSpell,
+  countSelectedSpells,
+  getSpellLimits,
+  mergeSpellPicks,
+} from "@/lib/builder/spell-limits"
+import { filterSpellsBySchool, uniqueSpellSchools } from "@/lib/builder/spell-grant-filters"
+import { spellMatchesClassName } from "@/lib/compendium/investigator-spell-list"
+import { dedupeSpellsByName } from "@/lib/compendium/spell-name-match"
+import {
+  catalogFeatPickOptions,
+  isCatalogFeatPickId,
+  slotUsesCatalogFeatPicks,
+} from "@/lib/builder/catalog-feat-options"
+import {
+  distributeCatalogFeatPicksToSlots,
+  groupCatalogFeatPickSlots,
+  readCatalogFeatPicksFromSlots,
+} from "@/lib/builder/catalog-feat-pick-groups"
+import { getCustomAbilityFeatPickSlots, getFeatPickSlots } from "@/lib/builder/class-feat-features"
+import {
+  filterPreferredSourceReplacements,
+  preferredSourcesFromClasses,
+} from "@/lib/compendium/prefer-same-source"
+import {
+  buildFeatSelectionEntries,
+  featChoicePickKey,
+  grantedFeatChoicePickKey,
+  validateFeatModifierChoices,
+  collectFeatModifierChoiceBlockers,
+} from "@/lib/builder/feat-choices"
+import { getSpeciesFeatPickSlots } from "@/lib/builder/species-feat-options"
+import { getBackgroundFeatPickSlots } from "@/lib/builder/background-feat-options"
+import { FeatModifierChoicePicker } from "@/components/builder/feat-modifier-choice-picker"
+import { ClassLevelRow } from "@/components/builder/class-level-row"
+import { ModifierPlayerChoicePanel } from "@/components/builder/modifier-player-choice-panel"
+import {
+  clearModifierPicksForSource,
+  collectModifierPlayerChoiceSlots,
+  reconcileModifierPlayerPicks,
+  setModifierPlayerPickValue,
+  speciesModsSourceKey,
+  speciesTraitSourceKey,
+  validateModifierPlayerChoices,
+  collectModifierPlayerChoiceBlockers,
+  nonSpellModifierPlayerChoiceSlots,
+  spellModifierPlayerChoiceSlots,
+  type ModifierPlayerChoiceSlot,
+} from "@/lib/builder/modifier-player-choices"
+import {
+  normalizeSpeciesTraitPicksForSpecies,
+  resolveSpeciesTraitPicks,
+  speciesTraitPickKey,
+} from "@/lib/builder/species-trait-picks"
+import { backgroundFeatureModsSourceKey } from "@/lib/compendium/wire-background-proficiency-choices"
+import {
+  allAbilityScorePoolAllocationsValid,
+  collectAbilityScorePoolGrants,
+  shouldUseLegacyMilestoneAsiUi,
+} from "@/lib/builder/ability-score-pools"
+import {
+  BACKGROUND_ASI_KEY,
+  BACKGROUND_ASI_TOTAL_POINTS,
+  getBackgroundAbilityGrant,
+  getBackgroundAsiHelpText,
+  isValidBackgroundAsiAllocation,
+} from "@/lib/builder/background-asi"
+import { collectBuilderModifierRefIds } from "@/lib/compendium/builder-modifier-refs"
+import { collectSubclassAlwaysPreparedSpellIds } from "@/lib/character/subclass-granted-spells"
+import { resolveSpellIdAgainstCatalog } from "@/lib/import/resolve-linked-modifier-spells"
+import type { ModifierCatalogEntry } from "@/lib/compendium/modifier-catalog"
+import {
+  abilitySpecializationChoice,
+  abilitySpecializationChoiceKey,
+} from "@/lib/import/parse-alternate-effects-table"
+import {
+  buildOwnedFeatIds,
+  collectFeatAbilityScoreBlockers,
+  isFeatEligibleForCategories,
+  isOriginSelectableCategory,
+  normalizeFeatCategory,
+} from "@/lib/builder/feat-selection"
+import {
+  collectOriginFeatDuplicateBlockers,
+  findDuplicateOriginFeatNames,
+  resolveOriginFeatOwnership,
+} from "@/lib/builder/origin-feat-conflicts"
+import { characterHasFightingStyleAccess } from "@/lib/builder/fighting-style-access"
+import {
+  allSelectedAsiAllocationsValid,
+  COMBINED_MILESTONE_ASI_KEY,
+  countMilestoneAsiFeats,
+  getAsiPointsUsed,
+  getCombinedMilestoneAsiAllocation,
+  isAsiFeat,
+  milestoneAsiPointTotal,
+  trimAsiAllocation,
+  withCombinedMilestoneAsiAllocation,
+} from "@/lib/builder/asi-allocation"
+import { generateRandomCharacterDetails } from "@/lib/builder/random-character-details"
+import { pickRandomSheetBannerUrl } from "@/lib/site-images"
+import {
+  CINEMATIC_TWO_COL_PAGE_SIZE,
+  getCinematicPickerContainerClass,
+  getCinematicSpellPickerContainerClass,
+  getDenseSpellPickerGridClass,
+  paginateList,
+} from "@/lib/builder/picker-pagination"
+import { pruneMissingClassSelections } from "@/lib/builder/prune-missing-class-picks"
+import { resolveSpellCardImageUrl } from "@/lib/compendium/enrich-srd-spells"
+import {
+  BUILDER_ABILITY_NAMES,
+  BUILDER_EMPTY_CHARACTER,
+  BUILDER_STANDARD_ARRAY,
+  BUILDER_STEPS,
+  BUILDER_STEP_IDS,
+  builderStepOrder,
+} from "@/lib/builder/builder-constants"
+import {
+  collectClassAbilityFeatures,
+  collectClassAbilityStepBlockers,
+  hasClassAbilityStep as characterHasClassAbilityStep,
+  isClassAbilityFeatureChoice,
+  isClassAbilityFeatSlot,
+} from "@/lib/builder/class-ability-step"
+import { formatSpellListGroupLabel } from "@/lib/compendium/spell-slots"
+import { spellDetailOverlayTags, spellCastingDetailRows } from "@/lib/compendium/spell-detail-tags"
+import {
+  formatMulticlassAbilityIssue,
+  getMulticlassAbilityIssues,
+  multiclassAbilityRequirementsMet,
+  registerClassAdded,
+  resolvePrimaryAfterRemoval,
+  resolvePrimaryClassId,
+} from "@/lib/builder/primary-class"
+import {
+  aggregateClassToolProficiencies,
+  getClassSkillPickRequirement,
+  getMulticlassToolPickRequirement,
+  multiclassProficiencySummary,
+} from "@/lib/builder/multiclass-proficiencies"
+import {
+  enrichPsionicTalentGrantFeatures,
+  resolveFeatureChoiceOptions,
+} from "@/lib/builder/aggregate-psionic-talents"
+import { validateKnackSelectionChange } from "@/lib/builder/knack-choices"
+import { choicePoolHint } from "@/lib/builder/choice-pool-noun"
+import { validateUpgradeSelectionChange } from "@/lib/builder/upgrade-choices"
+import {
+  useIsPhonePickerScreen,
+  usePickerPageSize,
+  useSpellPickerPageSize,
+} from "@/hooks/use-picker-page-size"
+import { PortraitCropDialog } from "@/components/builder/portrait-crop-dialog"
+import {
+  MAX_PORTRAIT_FILE_BYTES,
+  MAX_PORTRAIT_FILE_MB,
+  formatImageUploadHint,
+  normalizePortraitUrl,
+  normalizeBannerUrl,
+} from "@/lib/portrait"
+import type {
+  DndClass,
+  Species,
+  Background,
+  Spell,
+  Equipment,
+  CharacterDraft,
+  CustomAbility,
+  Subclass,
+  Character,
+  Feat,
+} from "@/lib/types"
+
+const CompendiumDetailOverlay = dynamic(
+  () =>
+    import("@/components/compendium/compendium-detail-overlay").then((mod) => ({
+      default: mod.CompendiumDetailOverlay,
+    })),
+)
+
+const ABILITY_NAMES = BUILDER_ABILITY_NAMES
+
+type AbilityName = (typeof ABILITY_NAMES)[number]
+
+type StandardArrayAssignments = Partial<Record<AbilityName, number>>
+
+const STANDARD_ARRAY = BUILDER_STANDARD_ARRAY
+const STANDARD_ARRAY_UNASSIGNED_SCORE = 10
+
+function featIconForAsiSource(sourceLabel: string | null | undefined, feats: Feat[]): string | null {
+  const featName = sourceLabel?.startsWith("Feat · ")
+    ? sourceLabel.slice("Feat · ".length)
+    : sourceLabel?.includes("Ability Score Improvement")
+      ? "Ability Score Improvement"
+      : null
+  if (!featName) return null
+  const feat = feats.find((entry) => entry.name === featName)
+  return getCompendiumItemIcon(
+    "feats",
+    (feat ?? { name: featName }) as unknown as Record<string, unknown>,
+  )
+}
+
+function standardAssignmentsFromCharacter(
+  scores: Pick<CharacterDraft, AbilityName>,
+): StandardArrayAssignments {
+  const assignments: StandardArrayAssignments = {}
+  const usedValues = new Set<number>()
+  for (const name of ABILITY_NAMES) {
+    const value = scores[name]
+    if (!(STANDARD_ARRAY as readonly number[]).includes(value) || usedValues.has(value)) continue
+    assignments[name] = value
+    usedValues.add(value)
+  }
+  return assignments
+}
+
+function isStandardArrayComplete(assignments: StandardArrayAssignments): boolean {
+  return ABILITY_NAMES.every((name) => assignments[name] != null)
+}
+
+const ABILITY_GAME_ICONS: Record<(typeof ABILITY_NAMES)[number], string> = {
+  strength: "muscle-up",
+  dexterity: "dodge",
+  constitution: "heart-plus",
+  intelligence: "brain",
+  wisdom: "third-eye",
+  charisma: "charm",
+}
+
+const PREVIEW_STAT_ICONS = {
+  speed: "running-shoe",
+  initiative: "lightning-arc",
+  proficiency: "medal",
+  passivePerception: "all-seeing-eye",
+} as const
+
+const PREVIEW_SECTION_ICONS = {
+  skills: "skills",
+  saves: "shield-reflect",
+  proficiencies: "bookshelf",
+} as const
+
+type AbilityMethod = "pointbuy" | "standard" | "roll" | "custom"
+
+const EMPTY_CHARACTER = BUILDER_EMPTY_CHARACTER
+
+export default function BuilderPageClient() {
+  const router = useRouter()
+  const { isCompactOnly } = useAppPresentationMode()
+  const [currentStep, setCurrentStep] = useState(1)
+  const [maxStepReached, setMaxStepReached] = useState(1)
+  const [saving, setSaving] = useState(false)
+  
+  // Content from database
+  const [classes, setClasses] = useState<DndClass[]>([])
+  const [subclasses, setSubclasses] = useState<Subclass[]>([])
+  const [species, setSpecies] = useState<Species[]>([])
+  const [backgrounds, setBackgrounds] = useState<Background[]>([])
+  const [spells, setSpells] = useState<Spell[]>([])
+  const [equipment, setEquipment] = useState<Equipment[]>([])
+  const [feats, setFeats] = useState<Feat[]>([])
+  const [featsLoadError, setFeatsLoadError] = useState<string | null>(null)
+  const [customAbilities, setCustomAbilities] = useState<CustomAbility[]>([])
+  const [modifierCatalog, setModifierCatalog] = useState<ModifierCatalogEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [portraitCropSrc, setPortraitCropSrc] = useState<string | null>(null)
+  const portraitInputRef = useRef<HTMLInputElement>(null)
+
+  // Character draft
+  const [character, setCharacter] = useState<CharacterDraft>(EMPTY_CHARACTER)
+
+  // Ability score generation method
+  const [abilityMethod, setAbilityMethod] = useState<AbilityMethod>("pointbuy")
+  const [standardArrayAssignments, setStandardArrayAssignments] = useState<StandardArrayAssignments>({})
+  const [pointsRemaining, setPointsRemaining] = useState(27)
+  
+  // Search state for each step
+  const [classSearch, setClassSearch] = useState("")
+  const [classSourceFilter, setClassSourceFilter] = useState("all")
+  const [classPickerPage, setClassPickerPage] = useState(0)
+  const [speciesSearch, setSpeciesSearch] = useState("")
+  const [speciesSourceFilter, setSpeciesSourceFilter] = useState("all")
+  const [speciesPickerPage, setSpeciesPickerPage] = useState(0)
+  const [backgroundSearch, setBackgroundSearch] = useState("")
+  const [backgroundSourceFilter, setBackgroundSourceFilter] = useState("all")
+  const [backgroundPickerPage, setBackgroundPickerPage] = useState(0)
+  const [spellSearch, setSpellSearch] = useState("")
+  const deferredClassSearch = useDeferredValue(classSearch)
+  const deferredSpeciesSearch = useDeferredValue(speciesSearch)
+  const deferredBackgroundSearch = useDeferredValue(backgroundSearch)
+  const deferredSpellSearch = useDeferredValue(spellSearch)
+  const [equipmentSearch, setEquipmentSearch] = useState("")
+  const [equipmentFilterCategory, setEquipmentFilterCategory] = useState("all")
+  const [spellFilterLevelByClassId, setSpellFilterLevelByClassId] = useState<Record<string, string>>({})
+  const [spellFilterSchoolByClassId, setSpellFilterSchoolByClassId] = useState<Record<string, string>>({})
+  const [spellLevelPages, setSpellLevelPages] = useState<Record<string, number>>({})
+  const [startingEquipmentOptionIndex, setStartingEquipmentOptionIndex] = useState<number | null>(null)
+  const [startingEquipmentCategoryPicks, setStartingEquipmentCategoryPicks] = useState<
+    Record<string, string>
+  >({})
+  const [backgroundStartingEquipmentCategoryPicks, setBackgroundStartingEquipmentCategoryPicks] =
+    useState<Record<string, string>>({})
+  const [backgroundStartingEquipmentOptionIndex, setBackgroundStartingEquipmentOptionIndex] =
+    useState<number | null>(null)
+  const [goldPurchasedEquipmentIds, setGoldPurchasedEquipmentIds] = useState<string[]>([])
+  const [cardViewMode, setCardViewMode] = useState<"dense" | "cinematic">("cinematic")
+  const pickerPageSize = usePickerPageSize(cardViewMode)
+  const spellPickerPageSize = useSpellPickerPageSize()
+  const isPhonePickerScreen = useIsPhonePickerScreen()
+  const useSwipeVisualPicker = cardViewMode === "cinematic" && isPhonePickerScreen
+  const useCinematicPortraitCards = cardViewMode === "cinematic" && !isPhonePickerScreen
+  
+  // Details modal state
+  const [detailsModal, setDetailsModal] = useState<{
+    type: "class" | "subclass" | "species" | "background" | "spell" | "equipment" | "feat" | null
+    item: DndClass | Subclass | Species | Background | Spell | Equipment | Feat | null
+  }>({ type: null, item: null })
+  
+  // Preview tabs
+  const [previewTab, setPreviewTab] = useState<BuilderPreviewTab>("summary")
+  const [mobilePanel, setMobilePanel] = useState<"steps" | "preview">("steps")
+  const [equippedArmorId, setEquippedArmorId] = useState<string | null>(null)
+  const [equippedShieldId, setEquippedShieldId] = useState<string | null>(null)
+  const [equippedWeaponId, setEquippedWeaponId] = useState<string | null>(null)
+  
+  // Multiclass support - tracks class levels
+  const [classLevels, setClassLevels] = useState<{ classId: string; level: number }[]>([])
+  const [primaryClassId, setPrimaryClassId] = useState<string | null>(null)
+  const [classAddOrder, setClassAddOrder] = useState<string[]>([])
+  const [subclassByClassId, setSubclassByClassId] = useState<Record<string, string>>({})
+  const [classSkillPicks, setClassSkillPicks] = useState<Record<string, string[]>>({})
+  /** Class picks dropped because another source granted the same skill, by class id. */
+  const [releasedClassSkills, setReleasedClassSkills] = useState<Record<string, string[]>>({})
+  const [classToolPicks, setClassToolPicks] = useState<Record<string, string[]>>({})
+  const [featureChoicePicks, setFeatureChoicePicks] = useState<Record<string, string[]>>({})
+  const [featChoicePicks, setFeatChoicePicks] = useState<Record<string, string[]>>({})
+  const [modifierPlayerPicks, setModifierPlayerPicks] = useState<Record<string, string[]>>({})
+  const [speciesTraitPicks, setSpeciesTraitPicks] = useState<Record<string, string[]>>({})
+  const [spellPicksByClassId, setSpellPicksByClassId] = useState<Record<string, string[]>>({})
+  const [asiAllocationsByFeatId, setAsiAllocationsByFeatId] = useState<
+    Record<string, Partial<Record<(typeof ABILITY_NAMES)[number], number>>>
+  >({})
+  
+  // Current HP tracker
+  const [currentHp, setCurrentHp] = useState<number | null>(null)
+  const [tempHp, setTempHp] = useState(0)
+  const [draftReady, setDraftReady] = useState(false)
+  const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null)
+  const [editIdParam, setEditIdParam] = useState<string | null>(null)
+  const editHydratedRef = useRef(false)
+  const [editHydrated, setEditHydrated] = useState(false)
+
+  const activeClassLevels = Array.isArray(classLevels) ? classLevels : []
+  const activeClassAddOrder = Array.isArray(classAddOrder) ? classAddOrder : []
+
+  useEffect(() => {
+    if (Array.isArray(classLevels)) return
+    setClassLevels(
+      character.class_id
+        ? [{ classId: character.class_id, level: Math.max(1, character.level || 1) }]
+        : [],
+    )
+  }, [classLevels, character.class_id, character.level])
+
+  const applyBuilderSnapshot = (snapshot: Omit<BuilderDraftSnapshot, "version" | "savedAt">) => {
+    setCurrentStep(snapshot.currentStep)
+    setMaxStepReached(snapshot.maxStepReached)
+    setCharacter(snapshot.character)
+    setAbilityMethod(snapshot.abilityMethod)
+    setPointsRemaining(snapshot.pointsRemaining)
+    setClassSearch(snapshot.classSearch)
+    setSpeciesSearch(snapshot.speciesSearch)
+    setBackgroundSearch(snapshot.backgroundSearch)
+    setSpellSearch(snapshot.spellSearch)
+    setEquipmentSearch(snapshot.equipmentSearch)
+    setEquipmentFilterCategory(snapshot.equipmentFilterCategory ?? "all")
+    setSpellFilterLevelByClassId(snapshot.spellFilterLevelByClassId ?? {})
+    setSpellFilterSchoolByClassId(snapshot.spellFilterSchoolByClassId ?? {})
+    setSpellLevelPages(snapshot.spellLevelPages ?? {})
+    setStartingEquipmentOptionIndex(snapshot.startingEquipmentOptionIndex ?? null)
+    setBackgroundStartingEquipmentOptionIndex(
+      snapshot.backgroundStartingEquipmentOptionIndex ?? null,
+    )
+    setGoldPurchasedEquipmentIds(snapshot.goldPurchasedEquipmentIds ?? [])
+    setCardViewMode(snapshot.cardViewMode ?? layoutToCardViewMode(getBuilderLayout()))
+    setPreviewTab(normalizePreviewTab(snapshot.previewTab))
+    setMobilePanel(snapshot.mobilePanel)
+    setEquippedArmorId(snapshot.equippedArmorId)
+    setEquippedShieldId(snapshot.equippedShieldId)
+    setEquippedWeaponId(snapshot.equippedWeaponId)
+    const restoredClassLevels =
+      Array.isArray(snapshot.classLevels) && snapshot.classLevels.length > 0
+        ? snapshot.classLevels
+        : snapshot.character.class_id
+          ? [
+              {
+                classId: snapshot.character.class_id,
+                level: snapshot.character.level > 0 ? snapshot.character.level : 1,
+              },
+            ]
+          : []
+    setClassLevels(restoredClassLevels)
+    setPrimaryClassId(
+      snapshot.primaryClassId ??
+        snapshot.character.class_id ??
+        restoredClassLevels[0]?.classId ??
+        null,
+    )
+    setClassAddOrder(
+      snapshot.classAddOrder?.length
+        ? snapshot.classAddOrder
+        : restoredClassLevels.map((entry) => entry.classId),
+    )
+    setSubclassByClassId(snapshot.subclassByClassId ?? {})
+    setClassSkillPicks(snapshot.classSkillPicks)
+    setClassToolPicks(snapshot.classToolPicks ?? {})
+    setFeatureChoicePicks(snapshot.featureChoicePicks)
+    setFeatChoicePicks(snapshot.featChoicePicks ?? {})
+    setModifierPlayerPicks(snapshot.modifierPlayerPicks ?? {})
+    setSpeciesTraitPicks(snapshot.speciesTraitPicks)
+    setSpellPicksByClassId(snapshot.spellPicksByClassId ?? {})
+    setAsiAllocationsByFeatId(snapshot.asiAllocationsByFeatId ?? {})
+    setStandardArrayAssignments(
+      snapshot.standardArrayAssignments ??
+        (snapshot.abilityMethod === "standard"
+          ? standardAssignmentsFromCharacter(snapshot.character)
+          : {}),
+    )
+    setCurrentHp(snapshot.currentHp)
+    setTempHp(snapshot.tempHp)
+    setEditingCharacterId(snapshot.editingCharacterId ?? null)
+  }
+
+  const clearClassChoices = (classId: string) => {
+    setSubclassByClassId((prev) => {
+      const next = { ...prev }
+      delete next[classId]
+      return next
+    })
+    setClassSkillPicks((prev) => {
+      const next = { ...prev }
+      delete next[classId]
+      return next
+    })
+    setClassToolPicks((prev) => {
+      const next = { ...prev }
+      delete next[classId]
+      return next
+    })
+    setFeatureChoicePicks((prev) => {
+      const next = { ...prev }
+      for (const key of Object.keys(next)) {
+        if (key.startsWith(`${classId}:`)) delete next[key]
+      }
+      return next
+    })
+    setSpellPicksByClassId((prev) => {
+      const next = { ...prev }
+      delete next[classId]
+      return next
+    })
+  }
+
+  const syncPrimaryClassToCharacter = (nextPrimaryId: string | null) => {
+    setPrimaryClassId(nextPrimaryId)
+    setCharacter((prev) => ({
+      ...prev,
+      class_id: nextPrimaryId,
+      subclass_id: nextPrimaryId ? (subclassByClassId[nextPrimaryId] ?? null) : null,
+    }))
+  }
+
+  const removeClassFromBuild = (classId: string, nextLevels: { classId: string; level: number }[]) => {
+    clearClassChoices(classId)
+    const remainingIds = new Set(nextLevels.map((entry) => entry.classId))
+    const nextPrimary = resolvePrimaryAfterRemoval(
+      classId,
+      primaryClassId,
+      activeClassAddOrder,
+      remainingIds,
+    )
+    setClassLevels(nextLevels)
+    syncPrimaryClassToCharacter(nextPrimary)
+  }
+
+  const addClassToBuild = (classId: string) => {
+    const registration = registerClassAdded(classId, primaryClassId, activeClassAddOrder)
+    setClassAddOrder(registration.classAddOrder)
+    syncPrimaryClassToCharacter(registration.primaryClassId)
+    setClassLevels((prev) => [...prev, { classId, level: 1 }])
+  }
+
+  const resetCharacter = () => {
+    setCharacter({ ...EMPTY_CHARACTER })
+    setClassLevels([])
+    setPrimaryClassId(null)
+    setClassAddOrder([])
+    setSubclassByClassId({})
+    setClassSkillPicks({})
+    setClassToolPicks({})
+    setFeatureChoicePicks({})
+    setSpeciesTraitPicks({})
+    setSpellPicksByClassId({})
+    setAsiAllocationsByFeatId({})
+    setStandardArrayAssignments({})
+    setAbilityMethod("pointbuy")
+    setPointsRemaining(27)
+    setClassSearch("")
+    setSpeciesSearch("")
+    setBackgroundSearch("")
+    setSpellSearch("")
+    setEquipmentSearch("")
+    setEquipmentFilterCategory("all")
+    setSpellFilterLevelByClassId({})
+    setSpellLevelPages({})
+    setStartingEquipmentOptionIndex(null)
+    setBackgroundStartingEquipmentOptionIndex(null)
+    setStartingEquipmentCategoryPicks({})
+    setBackgroundStartingEquipmentCategoryPicks({})
+    setGoldPurchasedEquipmentIds([])
+    setCardViewMode("cinematic")
+    setCurrentHp(null)
+    setTempHp(0)
+    setEquippedArmorId(null)
+    setEquippedShieldId(null)
+    setEquippedWeaponId(null)
+    setEditingCharacterId(null)
+    setMobilePanel("steps")
+    setCurrentStep(1)
+    setMaxStepReached(1)
+    clearBuilderDraft()
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    setEditIdParam(params.get("edit"))
+  }, [])
+
+  useEffect(() => {
+    setClassPickerPage(0)
+  }, [classSearch, classSourceFilter])
+
+  useEffect(() => {
+    setSpeciesPickerPage(0)
+  }, [speciesSearch, speciesSourceFilter])
+
+  useEffect(() => {
+    setBackgroundPickerPage(0)
+  }, [backgroundSearch, backgroundSourceFilter])
+
+  useEffect(() => {
+    setClassPickerPage(0)
+    setSpeciesPickerPage(0)
+    setBackgroundPickerPage(0)
+  }, [cardViewMode, pickerPageSize])
+
+  useEffect(() => {
+    if (isCompactOnly) {
+      setCardViewMode("dense")
+    }
+  }, [isCompactOnly])
+
+  useEffect(() => {
+    const syncPresentation = () => {
+      if (isCompactOnlyPresentation()) {
+        setCardViewMode("dense")
+        return
+      }
+      setCardViewMode(layoutToCardViewMode(getBuilderLayout()))
+    }
+    window.addEventListener(APP_PRESENTATION_MODE_CHANGE_EVENT, syncPresentation)
+    window.addEventListener(BUILDER_LAYOUT_CHANGE_EVENT, syncPresentation)
+    return () => {
+      window.removeEventListener(APP_PRESENTATION_MODE_CHANGE_EVENT, syncPresentation)
+      window.removeEventListener(BUILDER_LAYOUT_CHANGE_EVENT, syncPresentation)
+    }
+  }, [])
+
+  const applyCardViewMode = useCallback(
+    (mode: "dense" | "cinematic") => {
+      setCardViewMode(mode)
+      if (!isCompactOnlyPresentation()) {
+        setBuilderLayout(cardViewModeToLayout(mode))
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    setSpellLevelPages({})
+  }, [spellPickerPageSize])
+
+  useEffect(() => {
+    if (editIdParam) {
+      setCardViewMode(layoutToCardViewMode(getBuilderLayout()))
+      return
+    }
+    const draft = loadBuilderDraft()
+    if (draft) {
+      applyBuilderSnapshot(draft)
+    } else {
+      setCardViewMode(layoutToCardViewMode(getBuilderLayout()))
+    }
+    setEditHydrated(true)
+    setDraftReady(true)
+  }, [editIdParam])
+
+  useEffect(() => {
+    if (loading || !editIdParam || editHydratedRef.current) return
+
+    const hydrateFromCharacter = async () => {
+      const db = createClient()
+      const { data, error } = await db
+        .from("characters")
+        .select("*")
+        .eq("id", editIdParam)
+        .single()
+
+      if (error || !data) {
+        alert(error?.message ?? "Could not load character for editing.")
+        return
+      }
+
+      editHydratedRef.current = true
+      clearBuilderDraft()
+
+      const saved = data as Character
+      const dndClass = classes.find((c) => c.id === saved.class_id)
+      const background = backgrounds.find((b) => b.id === saved.background_id)
+      applyBuilderSnapshot(
+        characterToBuilderState(saved, {
+          dndClass,
+          background,
+          species: species.find((row) => row.id === saved.species_id) ?? null,
+          allClasses: classes,
+          spells,
+        }),
+      )
+      setEditHydrated(true)
+      setDraftReady(true)
+    }
+
+    void hydrateFromCharacter()
+  }, [loading, editIdParam, classes, backgrounds, spells, species])
+
+  useEffect(() => {
+    if (loading || !draftReady || classes.length === 0) return
+    const pruned = pruneMissingClassSelections({
+      knownClassIds: classes.map((cls) => cls.id),
+      classLevels: activeClassLevels,
+      classAddOrder: activeClassAddOrder,
+      primaryClassId,
+      subclassByClassId,
+      classSkillPicks,
+      classToolPicks,
+      featureChoicePicks,
+      spellPicksByClassId,
+      extraSkillProficiencies: character.skill_proficiencies ?? [],
+    })
+    if (!pruned.changed) return
+    setClassLevels(pruned.classLevels)
+    setClassAddOrder(pruned.classAddOrder)
+    setPrimaryClassId(pruned.primaryClassId)
+    setSubclassByClassId(pruned.subclassByClassId)
+    setClassSkillPicks(pruned.classSkillPicks)
+    setClassToolPicks(pruned.classToolPicks)
+    setFeatureChoicePicks(pruned.featureChoicePicks)
+    setSpellPicksByClassId(pruned.spellPicksByClassId)
+    setCharacter((prev) => ({
+      ...prev,
+      class_id: pruned.primaryClassId,
+      subclass_id: pruned.primaryClassId
+        ? (pruned.subclassByClassId[pruned.primaryClassId] ?? null)
+        : null,
+      skill_proficiencies: pruned.extraSkillProficiencies,
+    }))
+  }, [
+    loading,
+    draftReady,
+    classes,
+    activeClassLevels,
+    activeClassAddOrder,
+    primaryClassId,
+    subclassByClassId,
+    classSkillPicks,
+    classToolPicks,
+    featureChoicePicks,
+    spellPicksByClassId,
+    character.skill_proficiencies,
+  ])
+
+  useEffect(() => {
+    if (!draftReady) return
+    saveBuilderDraft({
+      currentStep,
+      maxStepReached,
+      character,
+      abilityMethod,
+      pointsRemaining,
+      classSearch,
+      speciesSearch,
+      backgroundSearch,
+      spellSearch,
+      equipmentSearch,
+      equipmentFilterCategory,
+      spellFilterLevelByClassId,
+      spellFilterSchoolByClassId,
+      spellLevelPages,
+      startingEquipmentOptionIndex,
+      backgroundStartingEquipmentOptionIndex,
+      goldPurchasedEquipmentIds,
+      cardViewMode,
+      previewTab,
+      mobilePanel,
+      equippedArmorId,
+      equippedShieldId,
+      equippedWeaponId,
+      classLevels: activeClassLevels,
+      primaryClassId,
+      classAddOrder: activeClassAddOrder,
+      subclassByClassId,
+      classSkillPicks,
+      classToolPicks,
+      featureChoicePicks,
+      featChoicePicks,
+      modifierPlayerPicks,
+      speciesTraitPicks,
+      spellPicksByClassId,
+      asiAllocationsByFeatId,
+      standardArrayAssignments,
+      editingCharacterId,
+      currentHp,
+      tempHp,
+    })
+  }, [
+    draftReady,
+    currentStep,
+    maxStepReached,
+    character,
+    abilityMethod,
+    pointsRemaining,
+    classSearch,
+    speciesSearch,
+    backgroundSearch,
+    spellSearch,
+    equipmentSearch,
+    equipmentFilterCategory,
+    spellFilterLevelByClassId,
+    spellFilterSchoolByClassId,
+    spellLevelPages,
+    startingEquipmentOptionIndex,
+    backgroundStartingEquipmentOptionIndex,
+    goldPurchasedEquipmentIds,
+    cardViewMode,
+    previewTab,
+    mobilePanel,
+    equippedArmorId,
+    equippedShieldId,
+    equippedWeaponId,
+    classLevels,
+    primaryClassId,
+    classAddOrder,
+    subclassByClassId,
+    classSkillPicks,
+    classToolPicks,
+    featureChoicePicks,
+    featChoicePicks,
+    modifierPlayerPicks,
+    speciesTraitPicks,
+    spellPicksByClassId,
+    asiAllocationsByFeatId,
+    standardArrayAssignments,
+    editingCharacterId,
+    currentHp,
+    tempHp,
+  ])
+
+  useEffect(() => {
+    const applyPayload = (payload: Awaited<ReturnType<typeof loadBuilderCompendium>>) => {
+      setModifierCatalog(payload.modifierCatalog)
+      setClasses(
+        payload.classes.map((row) => ({
+          ...row,
+          features: enrichPsionicTalentGrantFeatures(row.features ?? []),
+        })),
+      )
+      setSubclasses(payload.subclasses)
+      setSpecies(payload.species)
+      setBackgrounds(payload.backgrounds)
+      setFeatsLoadError(payload.featsLoadError)
+      setFeats(payload.feats)
+      setSpells(payload.spells)
+      setEquipment(payload.equipment)
+      setCustomAbilities(payload.customAbilities)
+      setLoading(false)
+    }
+
+    const fetchContent = async (force = false) => {
+      const db = createClient()
+      applyPayload(await loadBuilderCompendium(db, force ? { force: true } : undefined))
+    }
+
+    void fetchContent()
+    const onCompendiumUpdated = () => {
+      void fetchContent(true)
+    }
+    window.addEventListener(BUILDER_COMPENDIUM_UPDATED_EVENT, onCompendiumUpdated)
+    return () => window.removeEventListener(BUILDER_COMPENDIUM_UPDATED_EVENT, onCompendiumUpdated)
+  }, [])
+
+  // Calculate point buy cost
+  const getPointCost = (score: number) => {
+    if (score <= 13) return score - 8
+    if (score === 14) return 7
+    if (score === 15) return 9
+    return 0
+  }
+
+  const updateAbilityScore = (ability: typeof ABILITY_NAMES[number], delta: number) => {
+    const currentScore = character[ability]
+    const newScore = currentScore + delta
+
+    if (newScore < 8 || newScore > 15) return
+
+    if (abilityMethod === "pointbuy") {
+      const currentCost = getPointCost(currentScore)
+      const newCost = getPointCost(newScore)
+      const costDiff = newCost - currentCost
+
+      if (pointsRemaining - costDiff < 0) return
+      setPointsRemaining(pointsRemaining - costDiff)
+    }
+
+    setCharacter({ ...character, [ability]: newScore })
+  }
+
+  const setCustomAbilityScore = (ability: (typeof ABILITY_NAMES)[number], raw: string) => {
+    if (raw === "") return
+    const parsed = parseInt(raw, 10)
+    if (!Number.isFinite(parsed)) return
+    setCharacter({ ...character, [ability]: Math.min(30, Math.max(1, parsed)) })
+  }
+
+  const assignStandardArrayValue = (ability: AbilityName, value: number) => {
+    setStandardArrayAssignments((prev) => {
+      const current = prev[ability]
+      const next = { ...prev }
+      if (current === value) {
+        delete next[ability]
+        setCharacter((characterPrev) => ({
+          ...characterPrev,
+          [ability]: STANDARD_ARRAY_UNASSIGNED_SCORE,
+        }))
+      } else {
+        next[ability] = value
+        setCharacter((characterPrev) => ({ ...characterPrev, [ability]: value }))
+      }
+      return next
+    })
+  }
+
+  const isStandardValueUsedElsewhere = (ability: AbilityName, value: number) =>
+    ABILITY_NAMES.some(
+      (name) => name !== ability && standardArrayAssignments[name] === value,
+    )
+
+  const applyStandardArray = () => {
+    setStandardArrayAssignments({})
+    setCharacter((prev) => ({
+      ...prev,
+      strength: STANDARD_ARRAY_UNASSIGNED_SCORE,
+      dexterity: STANDARD_ARRAY_UNASSIGNED_SCORE,
+      constitution: STANDARD_ARRAY_UNASSIGNED_SCORE,
+      intelligence: STANDARD_ARRAY_UNASSIGNED_SCORE,
+      wisdom: STANDARD_ARRAY_UNASSIGNED_SCORE,
+      charisma: STANDARD_ARRAY_UNASSIGNED_SCORE,
+    }))
+  }
+
+  const rollAbilities = () => {
+    const rollStat = () => {
+      const rolls = Array(4).fill(0).map(() => Math.floor(Math.random() * 6) + 1)
+      rolls.sort((a, b) => b - a)
+      return rolls.slice(0, 3).reduce((a, b) => a + b, 0)
+    }
+    
+    setCharacter({
+      ...character,
+      strength: rollStat(),
+      dexterity: rollStat(),
+      constitution: rollStat(),
+      intelligence: rollStat(),
+      wisdom: rollStat(),
+      charisma: rollStat(),
+    })
+  }
+
+  const patchCharacter = useCallback((patch: Partial<CharacterDraft>) => {
+    setCharacter((prev) => ({ ...prev, ...patch }))
+  }, [])
+
+  const handlePortraitUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ""
+    if (!file) return
+
+    if (file.size > MAX_PORTRAIT_FILE_BYTES) {
+      alert(`Image must be ${MAX_PORTRAIT_FILE_MB} MB or smaller.`)
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") setPortraitCropSrc(reader.result)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleBannerUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (file.size > MAX_PORTRAIT_FILE_BYTES) {
+      alert(`Image must be ${MAX_PORTRAIT_FILE_MB} MB or smaller.`)
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      patchCharacter({ banner_url: reader.result as string })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const applyRandomCharacterDetails = () => {
+    const generated = generateRandomCharacterDetails(selectedSpecies?.name)
+    const stockBanner = isCompactOnly ? null : pickRandomSheetBannerUrl()
+    setCharacter((prev) => ({
+      ...prev,
+      ...generated,
+      name: prev.name.trim() ? prev.name : generated.name,
+      // Always assign in visual mode so the landscape slot updates on each click.
+      banner_url: stockBanner ?? prev.banner_url,
+    }))
+  }
+
+  const selectedClass = classes.find(c => c.id === character.class_id)
+  const selectedSpecies = species.find(s => s.id === character.species_id)
+  const selectedBackground = backgrounds.find(b => b.id === character.background_id)
+
+  // Dedicated size_options control is the only Size UI; keep the Size trait pick in sync
+  // so option linkedModifiers (creature size) still apply.
+  useEffect(() => {
+    if (!selectedSpecies || (selectedSpecies.size_options?.length ?? 0) <= 1) return
+    const sizeTraitIndex = findSpeciesSizeChoiceTraitIndex(selectedSpecies)
+    if (sizeTraitIndex < 0) return
+    const size = character.size ?? selectedSpecies.size ?? null
+    const sizeTrait = selectedSpecies.traits?.[sizeTraitIndex]
+    const key = sizeTrait
+      ? speciesTraitPickKey(sizeTrait, sizeTraitIndex)
+      : String(sizeTraitIndex)
+    setSpeciesTraitPicks((prev) => {
+      if (!size) {
+        if (!(key in prev) && !(String(sizeTraitIndex) in prev)) return prev
+        const next = { ...prev }
+        delete next[key]
+        delete next[String(sizeTraitIndex)]
+        return next
+      }
+      const current = resolveSpeciesTraitPicks(prev, sizeTrait ?? { name: "" }, sizeTraitIndex)
+      if (current.length === 1 && current[0] === size) return prev
+      return { ...prev, [key]: [size] }
+    })
+  }, [selectedSpecies, character.size])
+
+  // Prefer trait-name keys so lineage picks survive trait reordering on edit.
+  useEffect(() => {
+    if (!selectedSpecies) return
+    setSpeciesTraitPicks((prev) => {
+      const next = normalizeSpeciesTraitPicksForSpecies(prev, selectedSpecies)
+      return JSON.stringify(next) === JSON.stringify(prev) ? prev : next
+    })
+  }, [selectedSpecies])
+
+  const effectiveBackgroundFeatGranted = getEffectiveBackgroundFeatGranted(
+    selectedBackground,
+    featureChoicePicks,
+  )
+  const backgroundGrantedFeat = findBackgroundGrantedFeat(
+    effectiveBackgroundFeatGranted,
+    feats,
+  )
+  const grantedFeatIds = backgroundGrantedFeat?.id ? [backgroundGrantedFeat.id] : []
+  const backgroundAbilityGrant = getBackgroundAbilityGrant(selectedBackground)
+  const originFeats = useMemo(
+    () =>
+      feats
+        .filter((feat) => isOriginSelectableCategory(feat.category))
+        .map((feat) => ({ id: feat.id, name: feat.name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [feats],
+  )
+  
+  // Calculate total level from all class levels
+  const totalLevel = activeClassLevels.length > 0 
+    ? activeClassLevels.reduce((sum, cl) => sum + cl.level, 0)
+      : character.level
+
+  const featPickSlots = [
+    ...getFeatPickSlots(
+      activeClassLevels,
+      classes,
+      modifierCatalog,
+      totalLevel,
+      subclasses,
+      subclassByClassId,
+    ),
+    ...getCustomAbilityFeatPickSlots({
+      classLevels: activeClassLevels,
+      classes,
+      catalog: modifierCatalog,
+      customAbilities,
+      featureChoicePicks,
+    }),
+  ]
+  const preferredFeatSources = useMemo(
+    () =>
+      preferredSourcesFromClasses(
+        activeClassLevels
+          .map((entry) => classes.find((cls) => cls.id === entry.classId))
+          .filter((cls): cls is (typeof classes)[number] => Boolean(cls)),
+      ),
+    [activeClassLevels, classes],
+  )
+  const { catalogGroups: classCatalogFeatGroups, regularSlots: allRegularClassFeatSlots } = useMemo(
+    () => groupCatalogFeatPickSlots(featPickSlots),
+    [featPickSlots],
+  )
+  const classAbilityRegularFeatSlots = useMemo(
+    () => allRegularClassFeatSlots.filter(isClassAbilityFeatSlot),
+    [allRegularClassFeatSlots],
+  )
+  const regularClassFeatSlots = useMemo(
+    () => allRegularClassFeatSlots.filter((slot) => !isClassAbilityFeatSlot(slot)),
+    [allRegularClassFeatSlots],
+  )
+  const classStepFeatSlots = useMemo(
+    () => [...regularClassFeatSlots],
+    [regularClassFeatSlots],
+  )
+  const classAbilityFeatSlots = useMemo(
+    () => [
+      ...featPickSlots.filter(isClassAbilityFeatSlot),
+    ],
+    [featPickSlots],
+  )
+  const speciesFeatPickSlots = useMemo(
+    () => getSpeciesFeatPickSlots(selectedSpecies, speciesTraitPicks, modifierCatalog),
+    [selectedSpecies, speciesTraitPicks, modifierCatalog],
+  )
+  const backgroundFeatPickSlots = useMemo(
+    () => getBackgroundFeatPickSlots(selectedBackground, modifierCatalog),
+    [selectedBackground, modifierCatalog],
+  )
+  const allFeatPickSlotKeys = useMemo(
+    () => [
+      ...featPickSlots.map((slot) => slot.key),
+      ...speciesFeatPickSlots.map((slot) => slot.key),
+      ...backgroundFeatPickSlots.map((slot) => slot.key),
+    ],
+    [featPickSlots, speciesFeatPickSlots, backgroundFeatPickSlots],
+  )
+  const activeFeatPickSlotKeys = useMemo(
+    () =>
+      collectFeatPickSlotKeys({
+        classLevels: activeClassLevels,
+        classes,
+        catalog: modifierCatalog,
+        totalLevel,
+        subclasses,
+        subclassByClassId,
+        species: selectedSpecies,
+        speciesTraitPicks,
+        background: selectedBackground,
+        customAbilities,
+        featureChoicePicks,
+      }),
+    [
+      activeClassLevels,
+      classes,
+      modifierCatalog,
+      totalLevel,
+      subclasses,
+      subclassByClassId,
+      selectedSpecies,
+      speciesTraitPicks,
+      selectedBackground,
+      customAbilities,
+      featureChoicePicks,
+    ],
+  )
+  const maxLevelFeatPickSlotKeys = useMemo(
+    () =>
+      collectMaxLevelFeatPickSlotKeys({
+        classLevels: activeClassLevels,
+        classes,
+        catalog: modifierCatalog,
+        subclasses,
+        subclassByClassId,
+        species: selectedSpecies,
+        speciesTraitPicks,
+        background: selectedBackground,
+        customAbilities,
+        featureChoicePicks,
+      }),
+    [
+      activeClassLevels,
+      classes,
+      modifierCatalog,
+      subclasses,
+      subclassByClassId,
+      selectedSpecies,
+      speciesTraitPicks,
+      selectedBackground,
+      customAbilities,
+      featureChoicePicks,
+    ],
+  )
+  const ownedFeatIds = useMemo(
+    () =>
+      buildOwnedFeatIds({
+        featureChoicePicks,
+        pickSlotKeys: allFeatPickSlotKeys,
+        grantedFeatIds,
+      }),
+    [featureChoicePicks, allFeatPickSlotKeys, grantedFeatIds],
+  )
+  const hasFightingStyleAccess = useMemo(
+    () =>
+      characterHasFightingStyleAccess({
+        classLevels: activeClassLevels,
+        classes,
+        subclasses,
+        subclassByClassId,
+        ownedFeatIds,
+        feats,
+      }),
+    [activeClassLevels, classes, feats, ownedFeatIds, subclassByClassId, subclasses],
+  )
+  const weaponMasteryDescriptions = useMemo(
+    () =>
+      buildWeaponMasteryDescriptionsLookup(
+        weaponMasteryCatalogEntriesFromAbilities(customAbilities),
+      ),
+    [customAbilities],
+  )
+  const featSelectionEntries = useMemo(
+    () =>
+      buildFeatSelectionEntries({
+        featPickSlots,
+        speciesFeatPickSlots,
+        backgroundFeatPickSlots,
+        featureChoicePicks,
+        grantedFeatIds,
+      }),
+    [featPickSlots, speciesFeatPickSlots, backgroundFeatPickSlots, featureChoicePicks, grantedFeatIds],
+  )
+  const requiredFeatSlots = classStepFeatSlots.length
+  const classSelectedFeatIds = classStepFeatSlots.map((slot) => featureChoicePicks[slot.key]?.[0] ?? "")
+  const speciesSelectedFeatIds = speciesFeatPickSlots.map(
+    (slot) => featureChoicePicks[slot.key]?.[0] ?? "",
+  )
+  const backgroundSelectedFeatIds = [
+    ...backgroundFeatPickSlots.map((slot) => featureChoicePicks[slot.key]?.[0] ?? ""),
+    ...(backgroundGrantedFeat?.id ? [backgroundGrantedFeat.id] : []),
+  ]
+  const duplicateOriginFeatNames = useMemo(
+    () =>
+      findDuplicateOriginFeatNames(
+        resolveOriginFeatOwnership(speciesSelectedFeatIds, feats, "species"),
+        resolveOriginFeatOwnership(backgroundSelectedFeatIds, feats, "background"),
+      ),
+    [speciesSelectedFeatIds, backgroundSelectedFeatIds, feats],
+  )
+  const duplicateOriginFeatBlockers = useMemo(
+    () => collectOriginFeatDuplicateBlockers(duplicateOriginFeatNames),
+    [duplicateOriginFeatNames],
+  )
+  const selectedFeatIds = [...classSelectedFeatIds, ...speciesSelectedFeatIds].filter(Boolean)
+  const selectedFeatCount = classSelectedFeatIds.filter(Boolean).length
+  const requiredClassAbilityFeatSlots = classAbilityFeatSlots.length
+  const selectedClassAbilityFeatCount = classAbilityFeatSlots.filter(
+    (slot) => (featureChoicePicks[slot.key]?.[0] ?? "").length > 0,
+  ).length
+  const hasCatalogFeatPickOptions = useMemo(
+    () =>
+      classCatalogFeatGroups.some(
+        (group) => catalogFeatPickOptions(group.featCategories, customAbilities).length > 0,
+      ),
+    [classCatalogFeatGroups, customAbilities],
+  )
+  const milestoneAsiFeatCount = countMilestoneAsiFeats(selectedFeatIds, feats)
+  const milestoneAsiTotalPoints = milestoneAsiPointTotal(milestoneAsiFeatCount)
+  const milestoneAsiAllocation = getCombinedMilestoneAsiAllocation(
+    asiAllocationsByFeatId,
+    selectedFeatIds,
+    feats,
+  )
+  const abilityScorePoolGrants = collectAbilityScorePoolGrants({
+    catalog: modifierCatalog,
+    species: selectedSpecies,
+    speciesTraitPicks,
+    feats,
+    selectedFeatIds,
+    grantedFeatIds,
+    featSelectionEntries,
+    featChoicePicks,
+    classLevels: activeClassLevels,
+    classes,
+    subclasses,
+    subclassByClassId,
+    featureChoicePicks,
+  })
+  const showLegacyMilestoneAsi = shouldUseLegacyMilestoneAsiUi({
+    milestoneAsiFeatCount,
+    grants: abilityScorePoolGrants,
+    featSelectionEntries,
+    feats,
+  })
+
+  // If level drops, clear feat picks that no longer apply (keep class feature choices).
+  useEffect(() => {
+    if (!editHydrated) return
+    const validKeys = activeFeatPickSlotKeys
+    setFeatureChoicePicks((prev) => {
+      const next: Record<string, string[]> = {}
+      let changed = false
+      for (const [key, picks] of Object.entries(prev)) {
+        if (validKeys.has(key) || !maxLevelFeatPickSlotKeys.has(key)) {
+          next[key] = picks
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [
+    editHydrated,
+    [...activeFeatPickSlotKeys].sort().join("|"),
+    [...maxLevelFeatPickSlotKeys].sort().join("|"),
+  ])
+
+  useEffect(() => {
+    const validKeys = new Set(featSelectionEntries.map((entry) => entry.choicePickKey))
+    setFeatChoicePicks((prev) => {
+      const next: Record<string, string[]> = {}
+      let changed = false
+      for (const [key, picks] of Object.entries(prev)) {
+        if (validKeys.has(key)) {
+          next[key] = picks
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [featSelectionEntries.map((entry) => entry.choicePickKey).join("|")])
+
+  const modifierPlayerChoiceSlots = useMemo(
+    () =>
+      collectModifierPlayerChoiceSlots({
+        featEntries: featSelectionEntries,
+        feats,
+        featChoicePicks,
+        catalog: modifierCatalog,
+        customAbilities,
+        classLevels: activeClassLevels,
+        classes,
+        subclasses,
+        subclassByClassId,
+        featureChoicePicks,
+        species: selectedSpecies,
+        speciesTraitPicks,
+        background: selectedBackground,
+      }),
+    [
+      featSelectionEntries,
+      feats,
+      featChoicePicks,
+      modifierCatalog,
+      customAbilities,
+      activeClassLevels,
+      classes,
+      subclasses,
+      subclassByClassId,
+      featureChoicePicks,
+      selectedSpecies,
+      speciesTraitPicks,
+      selectedBackground,
+    ],
+  )
+
+  useEffect(() => {
+    if (!editHydrated) return
+    setModifierPlayerPicks((prev) => {
+      const next = reconcileModifierPlayerPicks(prev, modifierPlayerChoiceSlots)
+      return next === prev ? prev : next
+    })
+  }, [editHydrated, modifierPlayerChoiceSlots.map((slot) => slot.slotKey).join("|")])
+
+  useEffect(() => {
+    const spellList = magicInitiateListFromFeatGranted(effectiveBackgroundFeatGranted)
+    if (!spellList || !backgroundGrantedFeat?.id) return
+
+    const sourceKey = grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+    const listSlot = modifierPlayerChoiceSlots.find(
+      (slot) => slot.sourceKey === sourceKey && slot.kind === "spell_list_class",
+    )
+    const abilitySlot = modifierPlayerChoiceSlots.find(
+      (slot) => slot.sourceKey === sourceKey && slot.kind === "spellcasting_ability",
+    )
+    if (!listSlot && !abilitySlot) return
+
+    const defaultAbility = magicInitiateAbilityForSpellList(spellList)
+    const abilityLabel =
+      defaultAbility.charAt(0).toUpperCase() + defaultAbility.slice(1)
+
+    setModifierPlayerPicks((prev) => {
+      let next = prev
+      let changed = false
+      if (listSlot && prev[listSlot.slotKey]?.[0] !== spellList) {
+        next = { ...next, [listSlot.slotKey]: [spellList] }
+        changed = true
+      }
+      if (abilitySlot && !prev[abilitySlot.slotKey]?.[0]) {
+        next = { ...next, [abilitySlot.slotKey]: [abilityLabel] }
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [
+    effectiveBackgroundFeatGranted,
+    backgroundGrantedFeat?.id,
+    modifierPlayerChoiceSlots,
+  ])
+
+  useEffect(() => {
+    setModifierPlayerPicks((prev) =>
+      pruneConflictingMagicInitiateSpellListPicks(modifierPlayerChoiceSlots, prev),
+    )
+  }, [modifierPlayerChoiceSlots])
+
+  const featPickSlotKeys = featPickSlots.map((slot) => slot.key).join("|")
+
+  useEffect(() => {
+    if (!showLegacyMilestoneAsi || milestoneAsiTotalPoints <= 0) {
+      setAsiAllocationsByFeatId((prev) => {
+        if (!prev[COMBINED_MILESTONE_ASI_KEY]) return prev
+        const next = { ...prev }
+        delete next[COMBINED_MILESTONE_ASI_KEY]
+        return next
+      })
+      return
+    }
+    const allocation = getCombinedMilestoneAsiAllocation(
+      asiAllocationsByFeatId,
+      selectedFeatIds,
+      feats,
+    )
+    if (getAsiPointsUsed(allocation) <= milestoneAsiTotalPoints) return
+    setAsiAllocationsByFeatId((prev) =>
+      withCombinedMilestoneAsiAllocation(
+        prev,
+        trimAsiAllocation(allocation, milestoneAsiTotalPoints),
+      ),
+    )
+  }, [
+    asiAllocationsByFeatId,
+    selectedFeatIds,
+    feats,
+    milestoneAsiTotalPoints,
+    showLegacyMilestoneAsi,
+  ])
+
+  useEffect(() => {
+    if (!abilityScorePoolGrants.length) return
+    setAsiAllocationsByFeatId((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const grant of abilityScorePoolGrants) {
+        const current = next[grant.allocationKey]
+        if (!current) continue
+        const trimmed = trimAsiAllocation(current, grant.points)
+        if (JSON.stringify(trimmed) !== JSON.stringify(current)) {
+          next[grant.allocationKey] = trimmed
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [abilityScorePoolGrants.map((grant) => `${grant.allocationKey}:${grant.points}`).join("|")])
+  
+  // Get all classes the character has levels in
+  const resolvedPrimaryClassId = resolvePrimaryClassId(
+    primaryClassId,
+    activeClassAddOrder,
+    activeClassLevels,
+  )
+  const characterClasses = activeClassLevels
+    .map((cl) => {
+      const found = classes.find((c) => c.id === cl.classId)
+      if (!found) return null
+      return { ...found, level: cl.level }
+    })
+    .filter((c): c is DndClass & { level: number } => c != null)
+
+  const primaryClass =
+    (resolvedPrimaryClassId
+      ? characterClasses.find((cls) => cls.id === resolvedPrimaryClassId)
+      : undefined) ??
+    (characterClasses.length > 0 ? characterClasses[0] : selectedClass)
+
+  const equipmentClass = primaryClass ?? selectedClass
+  const startingEquipmentGroups = getStartingEquipmentGroups(equipmentClass)
+  const classStartingGold = equipmentClass?.starting_gold ?? 0
+  const backgroundStartingEquipmentGroups =
+    getBackgroundStartingEquipmentGroups(selectedBackground)
+  const backgroundStartingGold = getBackgroundStartingGold(selectedBackground)
+  const classPackageOptions = useMemo(
+    () =>
+      collapseWeaponCategoryPackageOptions(
+        startingEquipmentGroups[0]?.options ?? [],
+        equipment,
+      ),
+    [startingEquipmentGroups, equipment],
+  )
+  const backgroundPackageOptions = useMemo(
+    () =>
+      collapseWeaponCategoryPackageOptions(
+        backgroundStartingEquipmentGroups[0]?.options ?? [],
+        equipment,
+      ),
+    [backgroundStartingEquipmentGroups, equipment],
+  )
+  const selectedStartingOption =
+    startingEquipmentOptionIndex != null
+      ? (classPackageOptions[startingEquipmentOptionIndex] ?? null)
+      : null
+  const selectedBackgroundStartingOption =
+    backgroundStartingEquipmentOptionIndex != null
+      ? (backgroundPackageOptions[backgroundStartingEquipmentOptionIndex] ?? null)
+      : null
+  const useGoldEquipment =
+    selectedStartingOption != null &&
+    isGoldOnlyOption(selectedStartingOption, classStartingGold)
+  const useBackgroundGoldEquipment =
+    selectedBackgroundStartingOption != null &&
+    isGoldOnlyOption(selectedBackgroundStartingOption, backgroundStartingGold)
+  const inGoldShoppingMode = useGoldEquipment || useBackgroundGoldEquipment
+
+  const modifierGrantedEquipmentIds = useMemo(() => {
+    const byName = new Map(equipment.map((item) => [item.name.trim().toLowerCase(), item.id]))
+    const ids: string[] = []
+    for (const slot of modifierPlayerChoiceSlots) {
+      if (slot.kind !== "equipment") continue
+      for (const pickedName of modifierPlayerPicks[slot.slotKey] ?? []) {
+        const id = byName.get(pickedName.trim().toLowerCase())
+        if (id && !ids.includes(id)) ids.push(id)
+      }
+    }
+    return ids
+  }, [equipment, modifierPlayerChoiceSlots, modifierPlayerPicks])
+
+  const packageCategoryPicksComplete = (
+    option: { items?: { name: string; quantity: number }[] } | null,
+    optionIndex: number | null,
+    picks: Record<string, string>,
+  ) => {
+    if (!option || optionIndex == null) return true
+    return (option.items ?? []).every((item, itemIndex) => {
+      if (!equipmentCategoryKind(item.name)) return true
+      return Boolean(picks[`${optionIndex}:${itemIndex}`])
+    })
+  }
+
+  const packageEquipment = useMemo(() => {
+    const groups = []
+    if (selectedStartingOption && !useGoldEquipment) {
+      groups.push(
+        resolvePackageEquipment(
+          selectedStartingOption.items ?? [],
+          equipment,
+          startingEquipmentCategoryPicks,
+          `${startingEquipmentOptionIndex}:`,
+        ),
+      )
+    }
+    if (selectedBackgroundStartingOption && !useBackgroundGoldEquipment) {
+      groups.push(
+        resolvePackageEquipment(
+          selectedBackgroundStartingOption.items ?? [],
+          equipment,
+          backgroundStartingEquipmentCategoryPicks,
+          `${backgroundStartingEquipmentOptionIndex}:`,
+        ),
+      )
+    }
+    return mergeEquipmentHoldings(...groups)
+  }, [
+    selectedStartingOption,
+    selectedBackgroundStartingOption,
+    useGoldEquipment,
+    useBackgroundGoldEquipment,
+    equipment,
+    startingEquipmentCategoryPicks,
+    backgroundStartingEquipmentCategoryPicks,
+    startingEquipmentOptionIndex,
+    backgroundStartingEquipmentOptionIndex,
+  ])
+
+  const totalGoldBudget =
+    (useGoldEquipment ? classStartingGold : 0) +
+    (useBackgroundGoldEquipment ? backgroundStartingGold : 0)
+  const goldSpent = useMemo(
+    () => sumEquipmentGoldCost(goldPurchasedEquipmentIds, equipment),
+    [goldPurchasedEquipmentIds, equipment],
+  )
+  const goldRemaining = totalGoldBudget - goldSpent
+
+  useEffect(() => {
+    if (!inGoldShoppingMode && goldPurchasedEquipmentIds.length > 0) {
+      setGoldPurchasedEquipmentIds([])
+    }
+  }, [inGoldShoppingMode, goldPurchasedEquipmentIds.length])
+
+
+  useEffect(() => {
+    if (!draftReady) return
+    const suggestion = suggestEquipmentLoadout(character.equipment_ids, equipment)
+    setEquippedArmorId((prev) => {
+      const item = equipment.find((entry) => entry.id === prev)
+      if (prev && character.equipment_ids.includes(prev) && item && isArmorItem(item)) {
+        return prev
+      }
+      return suggestion.armorId
+    })
+    setEquippedShieldId((prev) => {
+      const item = equipment.find((entry) => entry.id === prev)
+      if (prev && character.equipment_ids.includes(prev) && item && isShieldItem(item)) {
+        return prev
+      }
+      return suggestion.shieldId
+    })
+    setEquippedWeaponId((prev) => {
+      const item = equipment.find((entry) => entry.id === prev)
+      if (prev && character.equipment_ids.includes(prev) && item && isWeaponItem(item)) {
+        return prev
+      }
+      return suggestion.weaponId
+    })
+  }, [draftReady, character.equipment_ids, equipment])
+
+  const toggleGoldPurchasedEquipment = (itemId: string, checked: boolean) => {
+    if (checked) {
+      const item = equipment.find((entry) => entry.id === itemId)
+      if (!item) return
+      const nextCost = goldSpent + getEquipmentCostGp(item)
+      if (nextCost > totalGoldBudget) return
+      setGoldPurchasedEquipmentIds((prev) => [...prev, itemId])
+    } else {
+      setGoldPurchasedEquipmentIds((prev) => prev.filter((id) => id !== itemId))
+    }
+  }
+
+  const adjustGoldPurchasedQuantity = (itemId: string, delta: number) => {
+    const item = equipment.find((entry) => entry.id === itemId)
+    if (!item || delta === 0) return
+    if (delta > 0) {
+      const cost = getEquipmentCostGp(item)
+      const affordable =
+        cost <= 0 ? delta : Math.max(0, Math.floor((totalGoldBudget - goldSpent) / cost))
+      const add = Math.min(delta, affordable)
+      if (add <= 0) return
+      setGoldPurchasedEquipmentIds((prev) => [...prev, ...Array.from({ length: add }, () => itemId)])
+      return
+    }
+    setGoldPurchasedEquipmentIds((prev) => {
+      let remaining = -delta
+      const next: string[] = []
+      for (const id of [...prev].reverse()) {
+        if (id === itemId && remaining > 0) {
+          remaining -= 1
+          continue
+        }
+        next.push(id)
+      }
+      return next.reverse()
+    })
+  }
+
+  const selectStartingEquipmentOption = (index: number) => {
+    setStartingEquipmentOptionIndex((prev) => {
+      if (prev !== index) setStartingEquipmentCategoryPicks({})
+      return index
+    })
+  }
+
+  const selectBackgroundStartingEquipmentOption = (index: number) => {
+    setBackgroundStartingEquipmentOptionIndex((prev) => {
+      if (prev !== index) setBackgroundStartingEquipmentCategoryPicks({})
+      return index
+    })
+  }
+
+  const setClassPackageCategoryPick = (
+    optionIndex: number,
+    itemIndex: number,
+    equipmentId: string,
+  ) => {
+    setStartingEquipmentCategoryPicks((prev) => ({
+      ...prev,
+      [`${optionIndex}:${itemIndex}`]: equipmentId,
+    }))
+  }
+
+  const setBackgroundPackageCategoryPick = (
+    optionIndex: number,
+    itemIndex: number,
+    equipmentId: string,
+  ) => {
+    setBackgroundStartingEquipmentCategoryPicks((prev) => ({
+      ...prev,
+      [`${optionIndex}:${itemIndex}`]: equipmentId,
+    }))
+  }
+
+  const pickerGridClass =
+    cardViewMode === "cinematic"
+      ? getCinematicPickerContainerClass(3)
+      : "grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 px-1 py-2"
+  const backgroundPickerGridClass =
+    cardViewMode === "cinematic"
+      ? getCinematicPickerContainerClass(2)
+      : "grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 px-1 py-2"
+  const backgroundPickerPageSize =
+    cardViewMode === "cinematic" ? CINEMATIC_TWO_COL_PAGE_SIZE : pickerPageSize
+  const cinematicPickerPaginationClass = useSwipeVisualPicker ? "max-sm:hidden" : undefined
+
+  const compactPickerLayout = (cardViewMode === "dense" ? "compact" : "default") as "compact" | "default"
+  const skillPickerLayout = (cardViewMode === "cinematic" ? "visual" : "compact") as "visual" | "compact"
+  const asiAllocatorVariant = cardViewMode === "cinematic" ? "visual" : "default"
+  const selectedBackgroundCardImage = selectedBackground
+    ? getCompendiumCardImageUrl(selectedBackground)
+    : null
+  const customSkillIconByName = useMemo(
+    () => buildCustomSkillIconByName(customAbilities),
+    [customAbilities],
+  )
+
+  const skillPickSources = buildSkillPickSources({
+    backgroundSkills: selectedBackground?.skill_proficiencies,
+    classSkillPicks,
+    featureChoicePicks,
+    speciesTraitPicks,
+  })
+
+  const spellcastingClasses =
+    characterClasses.filter((c) => c.spellcasting).length > 0
+      ? characterClasses.filter((c) => c.spellcasting)
+      : selectedClass?.spellcasting
+        ? [selectedClass]
+        : []
+  const mergedSpellIds = mergeSpellPicks(spellPicksByClassId)
+
+  const builderCharacteristicMods = [
+    ...collectBuilderModifierRefIds({
+      catalog: modifierCatalog,
+      species: selectedSpecies,
+      speciesTraitPicks,
+      background: selectedBackground,
+      feats,
+      selectedFeatIds,
+      grantedFeatIds,
+      featSelectionEntries,
+      featChoicePicks,
+      modifierPlayerPicks,
+      classLevels: activeClassLevels,
+      classes,
+      subclasses,
+      subclassByClassId,
+      featureChoicePicks,
+      customAbilities,
+    }),
+  ]
+  const aggregatedCharacteristics = aggregateCharacteristics(builderCharacteristicMods)
+
+  // Gear handed out by unlocked features (Investigator Trinkets) is part of starting inventory
+  // for characters built at or above the granting level. Keyed off a signature because the
+  // aggregation above is rebuilt on every render.
+  const grantedEquipmentKey = grantedEquipmentSignature(aggregatedCharacteristics.grantedEquipment)
+  const grantedByKey = aggregatedCharacteristics.grantedEquipment
+    .map((entry) => `${entry.grantedBy?.featureId ?? ""}:${entry.grantedBy?.modifierId ?? ""}`)
+    .join("|")
+  const featureGrantedEquipment = useMemo(
+    () => resolveGrantedEquipmentHoldings(aggregatedCharacteristics.grantedEquipment, equipment),
+    [grantedEquipmentKey, grantedByKey, equipment, aggregatedCharacteristics.grantedEquipment],
+  )
+
+  /** Gear picked beyond starting packages: gold buys, modifier choices, and feature grants. */
+  const additionalEquipment = useMemo(
+    () =>
+      mergeEquipmentHoldings(
+        { ids: modifierGrantedEquipmentIds },
+        featureGrantedEquipment,
+        inGoldShoppingMode ? holdingsFromRepeatedIds(goldPurchasedEquipmentIds) : { ids: [] },
+      ),
+    [
+      modifierGrantedEquipmentIds,
+      featureGrantedEquipment,
+      inGoldShoppingMode,
+      goldPurchasedEquipmentIds,
+    ],
+  )
+
+  useEffect(() => {
+    if (!draftReady) return
+    const preserveLoadedEquipment =
+      editingCharacterId != null &&
+      startingEquipmentOptionIndex == null &&
+      backgroundStartingEquipmentOptionIndex == null &&
+      !inGoldShoppingMode
+    if (preserveLoadedEquipment) return
+
+    const merged = mergeEquipmentHoldings(
+      packageEquipment,
+      { ids: modifierGrantedEquipmentIds },
+      featureGrantedEquipment,
+      inGoldShoppingMode ? holdingsFromRepeatedIds(goldPurchasedEquipmentIds) : { ids: [] },
+    )
+    setCharacter((prev) => {
+      const sameIds =
+        prev.equipment_ids.length === merged.ids.length &&
+        prev.equipment_ids.every((id) => merged.ids.includes(id))
+      const prevQty = prev.equipment_quantities ?? {}
+      const sameQty =
+        Object.keys(prevQty).length === Object.keys(merged.quantities).length &&
+        Object.entries(merged.quantities).every(([id, qty]) => prevQty[id] === qty)
+      if (sameIds && sameQty) return prev
+      return {
+        ...prev,
+        equipment_ids: merged.ids,
+        equipment_quantities: merged.quantities,
+      }
+    })
+  }, [
+    draftReady,
+    editingCharacterId,
+    startingEquipmentOptionIndex,
+    backgroundStartingEquipmentOptionIndex,
+    packageEquipment,
+    modifierGrantedEquipmentIds,
+    featureGrantedEquipment,
+    goldPurchasedEquipmentIds,
+    inGoldShoppingMode,
+  ])
+
+  const modifierExpertisePickerProps = {
+    proficientSkills: proficientSkillsInBuilder({
+      backgroundSkills: selectedBackground?.skill_proficiencies,
+      classSkillPicks,
+      featureChoicePicks,
+      speciesTraitPicks,
+      modifierGrantedSkills: aggregatedCharacteristics.skills,
+    }),
+    proficientTools: [
+      ...new Set([
+        ...aggregatedCharacteristics.toolProficiencies,
+        ...aggregateClassToolProficiencies({
+          classLevels: activeClassLevels,
+          classes,
+          primaryClassId,
+          classToolPicks,
+        }),
+        ...normalizeBackgroundProficiencies(
+          selectedBackground?.proficiencies as BackgroundProficiencies | null,
+          selectedBackground?.tool_proficiencies,
+        ).tools,
+      ]),
+    ],
+    knownLanguages: [
+      ...new Set([
+        ...(character.languages ?? []),
+        ...aggregatedCharacteristics.languages,
+      ]),
+    ],
+    existingExpertiseSkills: aggregatedCharacteristics.skillExpertise,
+    choiceLayout: compactPickerLayout,
+    skillPickerLayout,
+    skillIconByName: customSkillIconByName,
+    magicInitiateFeatGranted: effectiveBackgroundFeatGranted,
+  }
+  /**
+   * Skills handed out by species, background, feats and features. Sorted and re-derived
+   * from a signature so the release effect below only reruns when the set really changes.
+   */
+  const grantedSkillSignature = collectGrantedSkillNames({
+    backgroundSkills: selectedBackground?.skill_proficiencies,
+    speciesTraitPicks,
+    featureChoicePicks,
+    modifierGrantedSkills: aggregatedCharacteristics.skills,
+  }).join("|")
+  const grantedSkillNames = useMemo(
+    () => (grantedSkillSignature ? grantedSkillSignature.split("|") : []),
+    [grantedSkillSignature],
+  )
+
+  // Skill proficiencies never stack, so a class pick that another source also grants is
+  // handed back to the player: the class picker goes short and asks for a replacement.
+  useEffect(() => {
+    if (!draftReady) return
+    const next = releaseOverlappingClassSkillPicks(classSkillPicks, grantedSkillNames)
+    if (!next.changed) return
+    setClassSkillPicks(next.classSkillPicks)
+    setReleasedClassSkills((prev) => {
+      const merged = { ...prev }
+      for (const entry of next.released) {
+        merged[entry.classId] = [...new Set([...(merged[entry.classId] ?? []), ...entry.skills])]
+      }
+      return merged
+    })
+  }, [draftReady, classSkillPicks, grantedSkillNames])
+
+  const featGrantedSpellIds = aggregatedCharacteristics.spellsKnown.flatMap((entry) =>
+    entry.spellIds.map((id) => resolveSpellIdAgainstCatalog(id, spells)),
+  )
+  const subclassGrantedSpellIds = collectSubclassAlwaysPreparedSpellIds(
+    activeClassLevels.map((cl) => ({
+      subclass: subclasses.find((sc) => sc.id === subclassByClassId[cl.classId]) ?? null,
+      classFeatures: classes.find((cls) => cls.id === cl.classId)?.features as
+        | import("@/lib/types").Feature[]
+        | undefined,
+      classLevel: cl.level,
+    })),
+    spells,
+  )
+  const grantedSpellIds = [...new Set([...featGrantedSpellIds, ...subclassGrantedSpellIds])]
+  const allSpellIds = [...new Set([...mergedSpellIds, ...grantedSpellIds])]
+  const knownSpellNames = allSpellIds
+    .map((id) => spells.find((spell) => spell.id === id)?.name)
+    .filter((name): name is string => Boolean(name?.trim()))
+
+  /** Shared context for feat choice pools (disciplines, talents, upgrades). */
+  const featChoiceOptionContext = useMemo(
+    () => ({
+      customAbilities,
+      featureChoicePicks: { ...featureChoicePicks, ...featChoicePicks },
+      classNames: activeClassLevels
+        .map((entry) => classes.find((cls) => cls.id === entry.classId)?.name)
+        .filter((name): name is string => Boolean(name)),
+      classLevel: totalLevel,
+      equipmentCatalog: equipment,
+      knownSpellNames,
+      grantedCustomAbilityNames: aggregatedCharacteristics.grantedCustomAbilityNames,
+    }),
+    [
+      customAbilities,
+      featureChoicePicks,
+      featChoicePicks,
+      activeClassLevels,
+      classes,
+      totalLevel,
+      equipment,
+      knownSpellNames,
+      aggregatedCharacteristics.grantedCustomAbilityNames,
+    ],
+  )
+
+  const characterDerived = useMemo(
+    () => {
+      const resolvedFeatures = characterClasses.flatMap((cls) => {
+        const classFeatures = (cls.features ?? []).filter(
+          (feature) => (feature.level ?? 1) <= cls.level,
+        )
+        const subclass = subclasses.find((sc) => sc.id === subclassByClassId[cls.id]) ?? null
+        const subclassFeatures = (subclass?.features ?? []).filter(
+          (feature) => (feature.level ?? 1) <= cls.level,
+        )
+        return [...classFeatures, ...subclassFeatures]
+      })
+      return computeDerivedCharacter({
+        baseAbilityScores: {
+          strength: character.strength,
+          dexterity: character.dexterity,
+          constitution: character.constitution,
+          intelligence: character.intelligence,
+          wisdom: character.wisdom,
+          charisma: character.charisma,
+        },
+        asiAllocations: asiAllocationsByFeatId,
+        background: selectedBackground ?? null,
+        species: selectedSpecies ?? null,
+        classLevels: activeClassLevels,
+        classes,
+        subclasses,
+        subclassByClassId,
+        primaryClassId: resolvedPrimaryClassId,
+        classAddOrder: activeClassAddOrder,
+        classSkillPicks,
+        classToolPicks,
+        featureChoicePicks,
+        speciesTraitPicks,
+        featChoicePicks,
+        modifierPlayerPicks,
+        selectedFeatIds,
+        grantedFeatIds,
+        featSelectionEntries,
+        extraSkillProficiencies: character.skill_proficiencies ?? [],
+        extraToolProficiencies: character.tool_proficiencies ?? [],
+        extraWeaponProficiencies: character.weapon_proficiencies ?? [],
+        extraArmorProficiencies: character.armor_proficiencies ?? [],
+        languages: character.languages ?? ["Common"],
+        equipment,
+        equippedArmorId,
+        equippedShieldId,
+        equippedWeaponId,
+        modifierCatalog,
+        feats,
+        customAbilities,
+        resolvedFeatures,
+      })
+    },
+    [
+      character.strength,
+      character.dexterity,
+      character.constitution,
+      character.intelligence,
+      character.wisdom,
+      character.charisma,
+      character.skill_proficiencies,
+      character.tool_proficiencies,
+      character.weapon_proficiencies,
+      character.armor_proficiencies,
+      character.languages,
+      asiAllocationsByFeatId,
+      selectedBackground,
+      selectedSpecies,
+      classLevels,
+      classes,
+      subclasses,
+      subclassByClassId,
+      resolvedPrimaryClassId,
+      classAddOrder,
+      classSkillPicks,
+      classToolPicks,
+      featureChoicePicks,
+      speciesTraitPicks,
+      featChoicePicks,
+      modifierPlayerPicks,
+      selectedFeatIds,
+      grantedFeatIds,
+      featSelectionEntries,
+      equipment,
+      equippedArmorId,
+      equippedShieldId,
+      equippedWeaponId,
+      modifierCatalog,
+      feats,
+      customAbilities,
+      activeClassLevels,
+      activeClassAddOrder,
+    ],
+  )
+  const proficiencyBonus = characterDerived.proficiencyBonus
+  const derivedSkills = characterDerived.skills
+  const derivedSaves = characterDerived.saves
+  const derivedSpellcasting = characterDerived.spellcasting
+  const primarySpellcasting =
+    derivedSpellcasting.find((entry) => entry.classId === primaryClass?.id) ??
+    derivedSpellcasting[0] ??
+    null
+
+
+  const effectiveAbilityScores = characterDerived.abilityScores
+  const abilityMods = characterDerived.abilityMods
+
+  const multiclassAbilityIssues = getMulticlassAbilityIssues({
+    classLevels: activeClassLevels,
+    classes,
+    primaryClassId: resolvedPrimaryClassId,
+    classAddOrder: activeClassAddOrder,
+    abilityScores: effectiveAbilityScores,
+  })
+  const meetsMulticlassRequirements = multiclassAbilityRequirementsMet({
+    classLevels: activeClassLevels,
+    classes,
+    primaryClassId: resolvedPrimaryClassId,
+    classAddOrder: activeClassAddOrder,
+    abilityScores: effectiveAbilityScores,
+  })
+
+  const effectiveSkillProficiencies = characterDerived.skillProficiencies
+  const effectiveSkillExpertise = characterDerived.skillExpertise
+  const effectiveToolProficiencies = characterDerived.toolProficiencies
+  const partitionedToolProficiencies = useMemo(
+    () => partitionToolProficiencies(effectiveToolProficiencies),
+    [effectiveToolProficiencies],
+  )
+  const effectiveWeaponProficiencies = characterDerived.weaponProficiencies
+  const canPickMartialStartingWeapon = hasMartialWeaponProficiency(effectiveWeaponProficiencies)
+
+  useEffect(() => {
+    if (startingEquipmentOptionIndex == null) return
+    const selected = classPackageOptions[startingEquipmentOptionIndex]
+    if (!selected) return
+    if (
+      packageOptionRequiresMartialProficiency(selected) &&
+      !canPickMartialStartingWeapon
+    ) {
+      setStartingEquipmentOptionIndex(null)
+      setStartingEquipmentCategoryPicks({})
+    }
+  }, [
+    startingEquipmentOptionIndex,
+    classPackageOptions,
+    canPickMartialStartingWeapon,
+  ])
+
+  const effectiveArmorProficiencies = characterDerived.armorProficiencies
+  const savingThrowProficiencies = characterDerived.savingThrowProficiencies
+  const maxHp = characterDerived.maxHp
+  const armorClass = characterDerived.armorClass
+  const speed = characterDerived.speed
+  const speedEntries = filterDisplaySpeedEntries(
+    characterDerived.speeds?.length
+      ? characterDerived.speeds
+      : [{ type: "walk", label: "walk", feet: speed }],
+  )
+  const passivePerception = characterDerived.passivePerception
+  const initiative = characterDerived.initiative
+
+  const featPrerequisiteStats = useMemo(
+    () => ({
+      armorProficiencies: effectiveArmorProficiencies,
+      abilityScores: effectiveAbilityScores,
+      takenMagicInitiateSpellLists: [
+        ...takenMagicInitiateSpellLists(modifierPlayerChoiceSlots, modifierPlayerPicks, null, {
+          featGranted: effectiveBackgroundFeatGranted,
+        }),
+      ],
+      speciesCatalog: species.map((row) => ({ id: row.id, name: row.name })),
+      classCatalog: classes.map((row) => ({ id: row.id, name: row.name })),
+      backgroundCatalog: backgrounds.map((row) => ({ id: row.id, name: row.name })),
+    }),
+    [
+      effectiveArmorProficiencies,
+      effectiveAbilityScores,
+      modifierPlayerChoiceSlots,
+      modifierPlayerPicks,
+      effectiveBackgroundFeatGranted,
+      species,
+      classes,
+      backgrounds,
+    ],
+  )
+
+  // Clear feat picks that no longer meet prerequisites (including armor training / ability scores).
+  useEffect(() => {
+    if (selectedFeatCount === 0) return
+    const classIds = activeClassLevels.map((cl) => cl.classId)
+    const context = {
+      totalLevel,
+      classIds,
+      feats,
+      ownedFeatIds,
+      speciesId: character.species_id,
+      backgroundId: character.background_id,
+      preferredSources: preferredFeatSources,
+      ...featPrerequisiteStats,
+      hasFightingStyleAccess,
+      // Ability scores are finalized on a later step — don't wipe Grappler-style picks early.
+      skipAbilityScorePrerequisites: true,
+    }
+
+    setFeatureChoicePicks((prev) => {
+      const nextPicks = { ...prev }
+      let changed = false
+      for (const slot of featPickSlots) {
+        const pickedId = nextPicks[slot.key]?.[0]
+        if (!pickedId) continue
+        if (isCatalogFeatPickId(pickedId)) continue
+        const feat = feats.find((f) => f.id === pickedId)
+        if (
+          !feat ||
+          !isFeatEligibleForCategories(feat, slot.featCategories, slot.milestoneLevel, {
+            ...context,
+            currentSlotFeatId: pickedId,
+          })
+        ) {
+          nextPicks[slot.key] = []
+          changed = true
+        }
+      }
+      if (changed) {
+        window.setTimeout(() => {
+          alert("One or more selected feats no longer meet prerequisites. Please reselect.")
+        }, 0)
+        return nextPicks
+      }
+      return prev
+    })
+  }, [
+    character.species_id,
+    character.background_id,
+    totalLevel,
+    classLevels,
+    feats,
+    ownedFeatIds,
+    selectedFeatCount,
+    featPickSlotKeys,
+    featPrerequisiteStats,
+    preferredFeatSources,
+    featPickSlots,
+    activeClassLevels,
+    hasFightingStyleAccess,
+  ])
+  
+  // Darkvision: engine merges species-trait text with CharacteristicModifier vision entries
+  // (see resolve-vision.ts) — read from DerivedCharacter instead of re-deriving here.
+  const darkvision = (
+    characterDerived.vision.find((v) => v.type.toLowerCase().includes("darkvision"))?.rangeFeet ?? 0
+  ).toString()
+
+  const resistanceDisplay = [
+    ...characterDerived.resistances,
+    ...((selectedSpecies?.traits ?? [])
+      .filter(
+        (t) =>
+          t.name.toLowerCase().includes("resistance") ||
+          t.description?.toLowerCase().includes("resistance to"),
+      )
+      .map((t) => t.name)),
+  ]
+  const immunityDisplay = characterDerived.immunities
+
+  const saveCharacter = async () => {
+    if (!meetsMulticlassRequirements) {
+      alert(
+        "Multiclass ability requirements are not met. Each additional class requires 13+ in its primary ability and in your primary class's primary ability.",
+      )
+      return
+    }
+
+    setSaving(true)
+    try {
+      const db = createClient()
+      const calculatedLevel =
+        activeClassLevels.length > 0
+          ? activeClassLevels.reduce((sum, cl) => sum + cl.level, 0)
+          : character.level
+
+      const buildInputs = {
+        baseAbilityScores: {
+          strength: character.strength,
+          dexterity: character.dexterity,
+          constitution: character.constitution,
+          intelligence: character.intelligence,
+          wisdom: character.wisdom,
+          charisma: character.charisma,
+        },
+        asiAllocations: asiAllocationsByFeatId,
+        background: backgrounds.find((b) => b.id === character.background_id) ?? null,
+        species: species.find((s) => s.id === character.species_id) ?? null,
+        classLevels: activeClassLevels,
+        classes,
+        subclasses,
+        subclassByClassId,
+        primaryClassId: resolvedPrimaryClassId,
+        classAddOrder: activeClassAddOrder,
+        classSkillPicks,
+        classToolPicks,
+        featureChoicePicks,
+        speciesTraitPicks,
+        featChoicePicks,
+        modifierPlayerPicks,
+        selectedFeatIds,
+        grantedFeatIds,
+        featSelectionEntries,
+        extraSkillProficiencies: character.skill_proficiencies ?? [],
+        extraToolProficiencies: character.tool_proficiencies ?? [],
+        extraWeaponProficiencies: character.weapon_proficiencies ?? [],
+        extraArmorProficiencies: character.armor_proficiencies ?? [],
+        languages: character.languages ?? ["Common"],
+        equipment,
+        equippedArmorId,
+        equippedShieldId,
+        equippedWeaponId,
+        modifierCatalog,
+        feats,
+        customAbilities,
+        resolvedFeatures: characterClasses.flatMap((cls) => {
+          const classFeatures = (cls.features ?? []).filter(
+            (feature) => (feature.level ?? 1) <= cls.level,
+          )
+          const subclass = subclasses.find((sc) => sc.id === subclassByClassId[cls.id]) ?? null
+          const subclassFeatures = (subclass?.features ?? []).filter(
+            (feature) => (feature.level ?? 1) <= cls.level,
+          )
+          return [...classFeatures, ...subclassFeatures]
+        }),
+      }
+      const derived = computeDerivedCharacter(buildInputs)
+      const snapshot = buildCharacterSaveSnapshot(buildInputs, derived)
+
+      const validClassId = pickEnabledId(resolvedPrimaryClassId ?? character.class_id, classes)
+      const validSpeciesId = pickEnabledId(character.species_id, species)
+      const validBackgroundId = pickEnabledId(character.background_id, backgrounds)
+      const staleRefs: string[] = []
+      if (character.class_id && !validClassId) staleRefs.push("class")
+      if (character.species_id && !validSpeciesId) staleRefs.push("species")
+      if (character.background_id && !validBackgroundId) staleRefs.push("background")
+      const staleSubclass = snapshot.character_classes.some(
+        (row) => row.subclass_id && !pickEnabledId(row.subclass_id, subclasses),
+      )
+      if (staleSubclass) staleRefs.push("subclass")
+
+      if (staleRefs.length > 0) {
+        alert(
+          `Your draft still points at old compendium IDs (${staleRefs.join(", ")}). ` +
+            "That usually happens after reseeding the database. Re-select your class, subclass, species, and background, then save again.",
+        )
+        return
+      }
+
+      const validSubclassId =
+        validClassId && subclassByClassId[validClassId]
+          ? pickEnabledId(subclassByClassId[validClassId], subclasses)
+          : null
+
+      const characterData: Record<string, unknown> = {
+        name: character.name.trim() || "Unnamed",
+        level: calculatedLevel,
+        class_id: validClassId,
+        subclass_id: validSubclassId,
+        species_id: validSpeciesId,
+        background_id: validBackgroundId,
+        size: validSpeciesId ? (character.size ?? selectedSpecies?.size ?? null) : null,
+        strength: snapshot.strength,
+        dexterity: snapshot.dexterity,
+        constitution: snapshot.constitution,
+        intelligence: snapshot.intelligence,
+        wisdom: snapshot.wisdom,
+        charisma: snapshot.charisma,
+        alignment: character.alignment ?? null,
+        personality_traits: character.personality_traits || null,
+        ideals: character.ideals || null,
+        bonds: character.bonds || null,
+        flaws: character.flaws || null,
+        backstory: character.backstory || null,
+        appearance: character.appearance ?? null,
+        portrait_url: normalizePortraitUrl(character.portrait_url),
+        banner_url: normalizeBannerUrl(character.banner_url),
+        skill_proficiencies: snapshot.skill_proficiencies,
+        skill_expertise: snapshot.skill_expertise,
+        tool_proficiencies: snapshot.tool_proficiencies,
+        weapon_proficiencies: snapshot.weapon_proficiencies,
+        armor_proficiencies: snapshot.armor_proficiencies,
+        languages: snapshot.languages,
+        equipment_ids: filterEnabledIds(character.equipment_ids, equipment),
+        equipment_quantities: normalizeEquipmentQuantities(
+          filterEnabledIds(character.equipment_ids, equipment),
+          character.equipment_quantities,
+        ),
+        // Only names that resolved to a real item count as honored, so a trinket whose compendium
+        // row lands later still gets granted on the sheet.
+        granted_equipment_names: featureGrantedEquipment.names,
+        gold: inGoldShoppingMode
+          ? goldRemaining
+          : editingCharacterId
+            ? Math.max(0, character.gold ?? 0)
+            : computeStartingCharacterGold({
+                inGoldShoppingMode,
+                goldRemaining,
+                classOption: selectedStartingOption,
+                backgroundOption: selectedBackgroundStartingOption,
+              }),
+        spell_ids: filterEnabledIds(allSpellIds, spells),
+        feat_ids: [
+          ...filterEnabledIds(
+            ownedFeatIds.filter((id) => !isCatalogFeatPickId(id)),
+            feats,
+          ),
+          ...ownedFeatIds.filter(isCatalogFeatPickId),
+        ],
+        feat_choice_picks: featChoicePicks,
+        feature_choice_picks: featureChoicePicks,
+        modifier_player_picks: modifierPlayerPicks,
+        builder_picks: buildBuilderPicksFromSnapshot({
+          classSkillPicks,
+          classToolPicks,
+          spellPicksByClassId,
+          speciesTraitPicks,
+          startingEquipmentOptionIndex,
+          backgroundStartingEquipmentOptionIndex,
+          goldPurchasedEquipmentIds,
+        }),
+        asi_allocations: asiAllocationsByFeatId,
+        character_classes: snapshot.character_classes.map((row) => ({
+          ...row,
+          subclass_id: row.subclass_id
+            ? pickEnabledId(row.subclass_id, subclasses)
+            : null,
+        })),
+        class_add_order: snapshot.class_add_order,
+        hit_point_max: snapshot.hit_point_max,
+        hit_points: currentHp ?? snapshot.hit_point_max,
+        armor_class: snapshot.armor_class,
+        equipped_armor_id: equippedArmorId,
+        equipped_shield_id: equippedShieldId,
+        equipped_weapon_id: equippedWeaponId,
+        speed: snapshot.speed,
+        initiative: snapshot.initiative,
+        proficiency_bonus: snapshot.proficiency_bonus,
+      }
+
+      if (!editingCharacterId) {
+        characterData.local_id = `local_${Date.now()}`
+      }
+
+      const { data, error } = editingCharacterId
+        ? await db.from("characters").update(characterData).eq("id", editingCharacterId).select().single()
+        : await db.from("characters").insert([characterData]).select().single()
+
+      const savedRow = asCompendiumRow<{ id: string }>(data)
+      if (error?.message || !savedRow?.id) {
+        const message =
+          error?.message ??
+          (editingCharacterId
+            ? "Character record not found. If you cleared the database, open the builder fresh and create a new character."
+            : "Save completed without a character id. Refresh the page and try again.")
+        console.error("Error saving character:", message, { error, data })
+        alert(message)
+        return
+      }
+
+      clearBuilderDraft()
+      // Hard navigate so we always leave the builder after a successful save.
+      window.location.assign(savedCharacterNavigationHref(savedRow.id))
+    } catch (err) {
+      console.error("Error saving character:", err)
+      alert(err instanceof Error ? err.message : "Failed to save character. Please try again.")
+    } finally {
+      setSaving(false)
+    }
+  }
+  
+  // All skills with calculated modifiers
+  const SKILLS_DATA: { name: string; ability: keyof typeof abilityMods }[] = [
+    { name: "Acrobatics", ability: "dexterity" },
+    { name: "Animal Handling", ability: "wisdom" },
+    { name: "Arcana", ability: "intelligence" },
+    { name: "Athletics", ability: "strength" },
+    { name: "Deception", ability: "charisma" },
+    { name: "History", ability: "intelligence" },
+    { name: "Insight", ability: "wisdom" },
+    { name: "Intimidation", ability: "charisma" },
+    { name: "Investigation", ability: "intelligence" },
+    { name: "Medicine", ability: "wisdom" },
+    { name: "Nature", ability: "intelligence" },
+    { name: "Perception", ability: "wisdom" },
+    { name: "Performance", ability: "charisma" },
+    { name: "Persuasion", ability: "charisma" },
+    { name: "Religion", ability: "intelligence" },
+    { name: "Sleight of Hand", ability: "dexterity" },
+    { name: "Stealth", ability: "dexterity" },
+    { name: "Survival", ability: "wisdom" },
+  ]
+  
+  const classAbilityFeatures = useMemo(
+    () =>
+      collectClassAbilityFeatures({
+        classLevels: activeClassLevels,
+        classes,
+        subclasses,
+        subclassByClassId,
+        modifierPlayerChoiceSlots,
+      }),
+    [activeClassLevels, classes, subclasses, subclassByClassId, modifierPlayerChoiceSlots],
+  )
+  const classAbilityFeatureKeys = useMemo(
+    () =>
+      new Set(
+        classAbilityFeatures.map((entry) =>
+          featureChoiceKey(entry.classId, entry.feature.name, entry.feature.level),
+        ),
+      ),
+    [classAbilityFeatures],
+  )
+
+  /** Includes spell slots: the Feats section renders feat spell pickers inline. */
+  const classStepFeatSectionSlots = useMemo(
+    () =>
+      modifierPlayerChoiceSlots.filter((slot) =>
+        classStepFeatSlots.some(
+          (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+        ),
+      ),
+    [modifierPlayerChoiceSlots, classStepFeatSlots],
+  )
+  const classStepFeatModifierSlots = useMemo(
+    () => nonSpellModifierPlayerChoiceSlots(classStepFeatSectionSlots),
+    [classStepFeatSectionSlots],
+  )
+
+  const classAbilityFeatModifierSlots = useMemo(
+    () =>
+      nonSpellModifierPlayerChoiceSlots(
+        modifierPlayerChoiceSlots.filter((slot) =>
+          classAbilityFeatSlots.some(
+            (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+          ),
+        ),
+      ),
+    [modifierPlayerChoiceSlots, classAbilityFeatSlots],
+  )
+
+  const classStepClassFeatureModifierSlots = useMemo(
+    () =>
+      nonSpellModifierPlayerChoiceSlots(
+        modifierPlayerChoiceSlots.filter(
+          (slot) =>
+            activeClassLevels.some((entry) =>
+              slot.sourceKey.startsWith(`${entry.classId}:`),
+            ) &&
+            !featPickSlots.some(
+              (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+            ) &&
+            !classAbilityFeatureKeys.has(slot.sourceKey),
+        ),
+      ),
+    [modifierPlayerChoiceSlots, activeClassLevels, featPickSlots, classAbilityFeatureKeys],
+  )
+
+  const classAbilityFeatureModifierSlots = useMemo(
+    () =>
+      nonSpellModifierPlayerChoiceSlots(
+        modifierPlayerChoiceSlots.filter((slot) => classAbilityFeatureKeys.has(slot.sourceKey)),
+      ),
+    [modifierPlayerChoiceSlots, classAbilityFeatureKeys],
+  )
+
+  const classStepAllModifierSlots = useMemo(
+    () => [...classStepFeatModifierSlots, ...classStepClassFeatureModifierSlots],
+    [classStepFeatModifierSlots, classStepClassFeatureModifierSlots],
+  )
+
+  const classAbilityStepAllModifierSlots = useMemo(
+    () => [...classAbilityFeatModifierSlots, ...classAbilityFeatureModifierSlots],
+    [classAbilityFeatModifierSlots, classAbilityFeatureModifierSlots],
+  )
+
+  const originStepModifierSlots = useMemo(
+    () =>
+      nonSpellModifierPlayerChoiceSlots(
+        modifierPlayerChoiceSlots.filter(
+          (slot) =>
+            speciesFeatPickSlots.some(
+              (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+            ) ||
+            backgroundFeatPickSlots.some(
+              (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+            ) ||
+            (character.species_id != null &&
+              slot.sourceKey.startsWith(`species:${character.species_id}:`)) ||
+            (character.background_id != null &&
+              slot.sourceKey.startsWith(`background:${character.background_id}:`)) ||
+            slot.sourceKey ===
+              (backgroundGrantedFeat?.id
+                ? grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+                : ""),
+        ),
+      ),
+    [
+      modifierPlayerChoiceSlots,
+      speciesFeatPickSlots,
+      backgroundFeatPickSlots,
+      character.species_id,
+      character.background_id,
+      backgroundGrantedFeat?.id,
+    ],
+  )
+
+  const spellGrantModifierSlots = useMemo(
+    () => spellModifierPlayerChoiceSlots(modifierPlayerChoiceSlots),
+    [modifierPlayerChoiceSlots],
+  )
+
+  const spellGrantSourceKeys = useMemo(
+    () => [...new Set(spellGrantModifierSlots.map((slot) => slot.sourceKey))],
+    [spellGrantModifierSlots],
+  )
+
+  const classStepFeatSelectionEntries = useMemo(
+    () =>
+      featSelectionEntries.filter((entry) =>
+        classStepFeatSlots.some((slot) => featChoicePickKey(slot.key) === entry.choicePickKey),
+      ),
+    [featSelectionEntries, classStepFeatSlots],
+  )
+
+  const classAbilityStepFeatSelectionEntries = useMemo(
+    () =>
+      featSelectionEntries.filter((entry) =>
+        classAbilityFeatSlots.some((slot) => featChoicePickKey(slot.key) === entry.choicePickKey),
+      ),
+    [featSelectionEntries, classAbilityFeatSlots],
+  )
+
+  const originStepFeatSelectionEntries = useMemo(
+    () =>
+      featSelectionEntries.filter(
+        (entry) =>
+          speciesFeatPickSlots.some(
+            (slot) => featChoicePickKey(slot.key) === entry.choicePickKey,
+          ) ||
+          backgroundFeatPickSlots.some(
+            (slot) => featChoicePickKey(slot.key) === entry.choicePickKey,
+          ) ||
+          entry.choicePickKey ===
+            (backgroundGrantedFeat?.id
+              ? grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+              : ""),
+      ),
+    [
+      featSelectionEntries,
+      speciesFeatPickSlots,
+      backgroundFeatPickSlots,
+      backgroundGrantedFeat?.id,
+    ],
+  )
+
+  const speciesStepFeatSelectionEntries = useMemo(
+    () =>
+      featSelectionEntries.filter((entry) =>
+        speciesFeatPickSlots.some((slot) => featChoicePickKey(slot.key) === entry.choicePickKey),
+      ),
+    [featSelectionEntries, speciesFeatPickSlots],
+  )
+
+  const backgroundStepFeatSelectionEntries = useMemo(
+    () =>
+      featSelectionEntries.filter(
+        (entry) =>
+          backgroundFeatPickSlots.some(
+            (slot) => featChoicePickKey(slot.key) === entry.choicePickKey,
+          ) ||
+          entry.choicePickKey ===
+            (backgroundGrantedFeat?.id
+              ? grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+              : ""),
+      ),
+    [featSelectionEntries, backgroundFeatPickSlots, backgroundGrantedFeat?.id],
+  )
+
+  const spellNameById = useMemo(
+    () => new Map(spells.map((spell) => [spell.id, spell.name])),
+    [spells],
+  )
+  const modifierPickPreviewNames = useCallback(
+    (slot: ModifierPlayerChoiceSlot, picks: string[]) =>
+      slot.kind === "spell" ? picks.map((id) => spellNameById.get(id) ?? id) : picks,
+    [spellNameById],
+  )
+
+  /** Includes spell slots: Species Options renders trait / feat spell pickers inline. */
+  const speciesStepSectionSlots = useMemo(
+    () =>
+      modifierPlayerChoiceSlots.filter(
+        (slot) =>
+          speciesFeatPickSlots.some(
+            (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+          ) ||
+          (character.species_id != null &&
+            slot.sourceKey.startsWith(`species:${character.species_id}:`)),
+      ),
+    [modifierPlayerChoiceSlots, speciesFeatPickSlots, character.species_id],
+  )
+  const speciesStepModifierSlots = useMemo(
+    () => nonSpellModifierPlayerChoiceSlots(speciesStepSectionSlots),
+    [speciesStepSectionSlots],
+  )
+
+  /**
+   * Includes feat spell slots: Background Options renders origin-feat spell pickers inline
+   * (e.g. Guide's Magic Initiate cantrips), which must keep the section open. The
+   * background's own feature panel hides spell pickers, so those stay on the Spells step.
+   */
+  const backgroundStepSectionSlots = useMemo(
+    () =>
+      modifierPlayerChoiceSlots.filter(
+        (slot) =>
+          backgroundFeatPickSlots.some(
+            (featSlot) => featChoicePickKey(featSlot.key) === slot.sourceKey,
+          ) ||
+          (character.background_id != null &&
+            slot.kind !== "spell" &&
+            slot.sourceKey.startsWith(`background:${character.background_id}:`)) ||
+          slot.sourceKey ===
+            (backgroundGrantedFeat?.id
+              ? grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+              : ""),
+      ),
+    [
+      modifierPlayerChoiceSlots,
+      backgroundFeatPickSlots,
+      character.background_id,
+      backgroundGrantedFeat?.id,
+    ],
+  )
+  const backgroundStepModifierSlots = useMemo(
+    () => nonSpellModifierPlayerChoiceSlots(backgroundStepSectionSlots),
+    [backgroundStepSectionSlots],
+  )
+
+  const classLevelSectionComplete = activeClassLevels.length > 0
+
+  const classOptionsSectionComplete = useMemo(() => {
+    if (!classLevelSectionComplete) return false
+    return (
+      collectClassStepBlockers(
+        activeClassLevels,
+        classes,
+        subclasses,
+        classSkillPicks,
+        subclassByClassId,
+        featureChoicePicks,
+        resolvedPrimaryClassId,
+        activeClassAddOrder,
+        classToolPicks,
+      ).length === 0 &&
+      validateModifierPlayerChoices(classStepClassFeatureModifierSlots, modifierPlayerPicks)
+    )
+  }, [
+    classLevelSectionComplete,
+    activeClassLevels,
+    classes,
+    subclasses,
+    classSkillPicks,
+    subclassByClassId,
+    featureChoicePicks,
+    resolvedPrimaryClassId,
+    activeClassAddOrder,
+    classToolPicks,
+    classStepClassFeatureModifierSlots,
+    modifierPlayerPicks,
+  ])
+
+  const classFeatsSectionComplete = useMemo(() => {
+    if (requiredFeatSlots <= 0) return true
+    return (
+      selectedFeatCount === requiredFeatSlots &&
+      validateFeatModifierChoices(feats, classStepFeatSelectionEntries, featChoicePicks) &&
+      validateModifierPlayerChoices(classStepFeatSectionSlots, modifierPlayerPicks)
+    )
+  }, [
+    requiredFeatSlots,
+    selectedFeatCount,
+    feats,
+    classStepFeatSelectionEntries,
+    featChoicePicks,
+    classStepFeatSectionSlots,
+    modifierPlayerPicks,
+  ])
+
+  const speciesPickerComplete = Boolean(character.species_id)
+
+  const hasSpeciesOptionsSection = Boolean(
+    selectedSpecies &&
+      ((selectedSpecies.traits ?? []).some(
+        (t) => t.isChoice && (t.choices?.options?.length ?? 0) > 0,
+      ) ||
+        speciesFeatPickSlots.length > 0 ||
+        (selectedSpecies.size_options?.length ?? 0) > 1 ||
+        speciesStepModifierSlots.length > 0),
+  )
+
+  const speciesOptionsSectionComplete = useMemo(() => {
+    if (!speciesPickerComplete || !selectedSpecies) return false
+    if (!hasSpeciesOptionsSection) return true
+    if (duplicateOriginFeatNames.length > 0) return false
+    return (
+      collectSpeciesOptionBlockers(
+        selectedSpecies,
+        speciesTraitPicks,
+        speciesFeatPickSlots.map((slot) => slot.key),
+        featureChoicePicks,
+      ).length === 0 &&
+      validateFeatModifierChoices(feats, speciesStepFeatSelectionEntries, featChoicePicks) &&
+      validateModifierPlayerChoices(speciesStepSectionSlots, modifierPlayerPicks)
+    )
+  }, [
+    speciesPickerComplete,
+    selectedSpecies,
+    hasSpeciesOptionsSection,
+    speciesTraitPicks,
+    speciesFeatPickSlots,
+    featureChoicePicks,
+    feats,
+    speciesStepFeatSelectionEntries,
+    featChoicePicks,
+    speciesStepSectionSlots,
+    modifierPlayerPicks,
+    duplicateOriginFeatNames,
+  ])
+
+  const backgroundPickerComplete = Boolean(character.background_id)
+
+  const hasBackgroundOptionsSection = Boolean(
+    selectedBackground &&
+      (isLegacyBackground(selectedBackground) ||
+        backgroundFeatPickSlots.length > 0 ||
+        Boolean(backgroundGrantedFeat) ||
+        backgroundStepModifierSlots.length > 0),
+  )
+
+  const backgroundOptionsSectionComplete = useMemo(() => {
+    if (!backgroundPickerComplete || !selectedBackground) return false
+    if (!hasBackgroundOptionsSection) return true
+    if (duplicateOriginFeatNames.length > 0) return false
+    return (
+      collectBackgroundOptionBlockers(
+        backgroundFeatPickSlots.map((slot) => slot.key),
+        featureChoicePicks,
+        selectedBackground,
+      ).length === 0 &&
+      validateFeatModifierChoices(feats, backgroundStepFeatSelectionEntries, featChoicePicks) &&
+      validateModifierPlayerChoices(backgroundStepSectionSlots, modifierPlayerPicks)
+    )
+  }, [
+    backgroundPickerComplete,
+    selectedBackground,
+    hasBackgroundOptionsSection,
+    backgroundFeatPickSlots,
+    featureChoicePicks,
+    feats,
+    backgroundStepFeatSelectionEntries,
+    featChoicePicks,
+    backgroundStepSectionSlots,
+    modifierPlayerPicks,
+    duplicateOriginFeatNames,
+  ])
+
+  const classLevelSectionSummary = useMemo(() => {
+    if (activeClassLevels.length === 0) return null
+    return activeClassLevels
+      .map((cl) => {
+        const cls = classes.find((c) => c.id === cl.classId)
+        return `${cls?.name ?? "Class"} ${cl.level}`
+      })
+      .join(" · ")
+  }, [activeClassLevels, classes])
+
+  const classOptionsSectionPreview = useMemo(() => {
+    if (!classOptionsSectionComplete) return null
+    const chipLayout = skillPickerLayout
+    const groups: ReactNode[] = []
+
+    for (const entry of activeClassLevels) {
+      const cls = classes.find((c) => c.id === entry.classId)
+      if (!cls) continue
+      const subclassId = subclassByClassId[entry.classId]
+      const subclass = subclassId ? subclasses.find((sc) => sc.id === subclassId) : null
+      const skills = classSkillPicks[entry.classId] ?? []
+      const tools = classToolPicks[entry.classId] ?? []
+      const featureGroups: { title: string; names: string[]; showSkillIcons: boolean }[] = []
+      for (const feature of cls.features ?? []) {
+        if (feature.level > entry.level || !feature.isChoice || !feature.choices) continue
+        if (isClassAbilityFeatureChoice(feature, cls.name)) continue
+        const key = featureChoiceKey(entry.classId, feature.name, feature.level)
+        const picks = featureChoicePicks[key] ?? []
+        if (!picks.length) continue
+        const isSkillCategory = feature.choices.category.toLowerCase().includes("skill")
+        featureGroups.push({
+          title: feature.name,
+          names: picks,
+          showSkillIcons: isSkillCategory && chipLayout === "visual",
+        })
+      }
+
+      const hasChips = skills.length > 0 || tools.length > 0 || featureGroups.length > 0
+      const showSubclassChip = Boolean(subclass) && cardViewMode !== "cinematic"
+      if (!hasChips && !showSubclassChip) continue
+
+      groups.push(
+        <div key={entry.classId} className="space-y-3">
+          {activeClassLevels.length > 1 ? (
+            <p className="text-sm font-semibold text-foreground">{cls.name}</p>
+          ) : null}
+          {showSubclassChip && subclass ? (
+            <BuilderSelectedChoiceChips
+              title="Subclass"
+              names={[subclass.name]}
+              layout={chipLayout}
+              accentClass="border-primary bg-primary/10"
+            />
+          ) : null}
+          {skills.length > 0 ? (
+            <BuilderSelectedChoiceChips
+              title="Skills"
+              names={skills}
+              layout={chipLayout}
+              showSkillIcons={chipLayout === "visual"}
+              skillIconByName={customSkillIconByName}
+              accentClass="border-primary bg-primary/10"
+            />
+          ) : null}
+          {tools.length > 0 ? (
+            <BuilderSelectedChoiceChips
+              title="Tools"
+              names={tools}
+              layout={chipLayout}
+              accentClass="border-primary bg-primary/10"
+            />
+          ) : null}
+          {featureGroups.map((group) => (
+            <BuilderSelectedChoiceChips
+              key={`${entry.classId}-${group.title}`}
+              title={group.title}
+              names={group.names}
+              layout={chipLayout}
+              showSkillIcons={group.showSkillIcons}
+              skillIconByName={group.showSkillIcons ? customSkillIconByName : undefined}
+              accentClass="border-accent bg-accent/10"
+            />
+          ))}
+        </div>,
+      )
+    }
+
+    if (groups.length === 0 && cardViewMode === "cinematic") return null
+    if (groups.length === 0) {
+      return (
+        <p className="text-sm font-medium text-foreground/90">Class options complete.</p>
+      )
+    }
+    return <div className="space-y-4">{groups}</div>
+  }, [
+    classOptionsSectionComplete,
+    activeClassLevels,
+    classes,
+    subclasses,
+    subclassByClassId,
+    classSkillPicks,
+    classToolPicks,
+    featureChoicePicks,
+    skillPickerLayout,
+    cardViewMode,
+    customSkillIconByName,
+  ])
+
+  const classFeatsSectionPreview = useMemo(() => {
+    if (!classFeatsSectionComplete || requiredFeatSlots <= 0) return null
+    const chipLayout = skillPickerLayout
+    const groups: ReactNode[] = []
+
+    for (const slot of classStepFeatSlots) {
+      const id = featureChoicePicks[slot.key]?.[0]
+      const feat = id ? feats.find((entry) => entry.id === id) : null
+      if (!feat) continue
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key={slot.key}
+          title={slot.label}
+          names={[feat.name]}
+          layout={chipLayout}
+          showSkillIcons
+          skillIconByName={{
+            ...customSkillIconByName,
+            [feat.name]: getCompendiumItemIcon("feats", feat as unknown as Record<string, unknown>),
+          }}
+          accentClass="border-accent bg-accent/10"
+        />,
+      )
+      const choiceKey = featChoicePickKey(slot.key)
+      const optionPicks = featChoicePicks[choiceKey] ?? []
+      if (optionPicks.length) {
+        groups.push(
+          <BuilderSelectedChoiceChips
+            key={`${choiceKey}-opts`}
+            title={feat.name}
+            names={optionPicks}
+            layout={chipLayout}
+            showSkillIcons
+            skillIconByName={customSkillIconByName}
+            accentClass="border-accent bg-accent/10"
+          />,
+        )
+      }
+    }
+
+    if (groups.length === 0) {
+      return (
+        <p className="text-sm font-medium text-foreground/90">
+          {selectedFeatCount}/{requiredFeatSlots} selected
+        </p>
+      )
+    }
+
+    return <div className="space-y-3">{groups}</div>
+  }, [
+    classFeatsSectionComplete,
+    requiredFeatSlots,
+    classStepFeatSlots,
+    featureChoicePicks,
+    featChoicePicks,
+    feats,
+    selectedFeatCount,
+    skillPickerLayout,
+    customSkillIconByName,
+  ])
+
+  const speciesOptionsSectionPreview = useMemo(() => {
+    if (!speciesOptionsSectionComplete || !selectedSpecies) return null
+    const chipLayout = skillPickerLayout
+    const showIcons = chipLayout === "visual"
+    const groups: ReactNode[] = []
+    const speciesAccent = "border-secondary bg-secondary/10"
+
+    if ((selectedSpecies.size_options?.length ?? 0) > 1 && character.size) {
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key="species-size"
+          title="Size"
+          names={[character.size]}
+          layout={chipLayout}
+          accentClass={speciesAccent}
+        />,
+      )
+    }
+
+    for (const [index, trait] of (selectedSpecies.traits ?? []).entries()) {
+      if (!trait.isChoice || !(trait.choices?.options?.length ?? 0)) continue
+      // Dedicated size_options control is the only Size summary chip.
+      if (
+        (selectedSpecies.size_options?.length ?? 0) > 1 &&
+        isSpeciesSizeChoiceTrait(trait)
+      ) {
+        continue
+      }
+      const picks = resolveSpeciesTraitPicks(speciesTraitPicks, trait, index)
+      if (!picks.length) continue
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key={`species-trait-${speciesTraitPickKey(trait, index)}`}
+          title={trait.name?.trim() || "Trait"}
+          names={picks}
+          layout={chipLayout}
+          showSkillIcons={showIcons}
+          skillIconByName={customSkillIconByName}
+          accentClass={speciesAccent}
+        />,
+      )
+    }
+
+    for (const slot of speciesStepSectionSlots) {
+      const picks = modifierPlayerPicks[slot.slotKey] ?? []
+      if (!picks.length) continue
+      const isSkillOrTool =
+        slot.kind === "skill" ||
+        slot.kind === "tool" ||
+        slot.kind === "skill_or_tool" ||
+        slot.kind === "language"
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key={slot.slotKey}
+          title={slot.label}
+          names={modifierPickPreviewNames(slot, picks)}
+          layout={chipLayout}
+          showSkillIcons={showIcons && isSkillOrTool}
+          skillIconByName={customSkillIconByName}
+          accentClass={speciesAccent}
+        />,
+      )
+    }
+
+    const pushFeat = (
+      feat: (typeof feats)[number] | null | undefined,
+      key: string,
+      accentClass: string,
+    ) => {
+      if (!feat) return
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key={key}
+          title="Feat"
+          names={[feat.name]}
+          layout={chipLayout}
+          showSkillIcons
+          skillIconByName={{
+            ...customSkillIconByName,
+            [feat.name]: getCompendiumItemIcon("feats", feat as unknown as Record<string, unknown>),
+          }}
+          accentClass={accentClass}
+          errorNames={duplicateOriginFeatNames}
+        />,
+      )
+    }
+
+    for (const slot of speciesFeatPickSlots) {
+      const id = featureChoicePicks[slot.key]?.[0]
+      const feat = id ? feats.find((entry) => entry.id === id) : null
+      if (!feat) continue
+      pushFeat(feat, slot.key, speciesAccent)
+      const choiceKey = featChoicePickKey(slot.key)
+      const optionPicks = featChoicePicks[choiceKey] ?? []
+      if (optionPicks.length) {
+        groups.push(
+          <BuilderSelectedChoiceChips
+            key={`${choiceKey}-opts`}
+            title={feat.name}
+            names={optionPicks}
+            layout={chipLayout}
+            showSkillIcons={showIcons}
+            skillIconByName={customSkillIconByName}
+            accentClass={speciesAccent}
+          />,
+        )
+      }
+    }
+
+    if (groups.length === 0) {
+      return (
+        <p className="text-sm font-medium text-foreground/90">Species choices are set.</p>
+      )
+    }
+
+    return <div className="space-y-3">{groups}</div>
+  }, [
+    speciesOptionsSectionComplete,
+    selectedSpecies,
+    character.size,
+    speciesTraitPicks,
+    speciesStepSectionSlots,
+    modifierPickPreviewNames,
+    modifierPlayerPicks,
+    speciesFeatPickSlots,
+    featureChoicePicks,
+    featChoicePicks,
+    feats,
+    skillPickerLayout,
+    customSkillIconByName,
+    duplicateOriginFeatNames,
+  ])
+
+  const backgroundOptionsSectionPreview = useMemo(() => {
+    if (!backgroundOptionsSectionComplete || !selectedBackground) return null
+    const chipLayout = skillPickerLayout
+    const showIcons = chipLayout === "visual"
+    const groups: ReactNode[] = []
+
+    const pushFeat = (feat: (typeof feats)[number] | null | undefined, key: string) => {
+      if (!feat) return
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key={key}
+          title="Feat"
+          names={[feat.name]}
+          layout={chipLayout}
+          showSkillIcons
+          skillIconByName={{
+            ...customSkillIconByName,
+            [feat.name]: getCompendiumItemIcon("feats", feat as unknown as Record<string, unknown>),
+          }}
+          accentClass="border-accent bg-accent/10"
+          errorNames={duplicateOriginFeatNames}
+        />,
+      )
+    }
+
+    for (const slot of backgroundFeatPickSlots) {
+      const id = featureChoicePicks[slot.key]?.[0]
+      const feat = id ? feats.find((entry) => entry.id === id) : null
+      pushFeat(feat, `bg-feat-slot-${slot.key}`)
+      if (feat) {
+        const choiceKey = featChoicePickKey(slot.key)
+        const optionPicks = featChoicePicks[choiceKey] ?? []
+        if (optionPicks.length) {
+          groups.push(
+            <BuilderSelectedChoiceChips
+              key={`${choiceKey}-opts`}
+              title={feat.name}
+              names={optionPicks}
+              layout={chipLayout}
+              showSkillIcons={showIcons}
+              skillIconByName={customSkillIconByName}
+              accentClass="border-accent bg-accent/10"
+            />,
+          )
+        }
+      }
+    }
+
+    if (backgroundGrantedFeat) {
+      pushFeat(backgroundGrantedFeat, `bg-granted-${backgroundGrantedFeat.id}`)
+      const grantedChoiceKey = grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+      const grantedOptionPicks = featChoicePicks[grantedChoiceKey] ?? []
+      if (grantedOptionPicks.length) {
+        groups.push(
+          <BuilderSelectedChoiceChips
+            key={`${grantedChoiceKey}-opts`}
+            title={backgroundGrantedFeat.name}
+            names={grantedOptionPicks}
+            layout={chipLayout}
+            showSkillIcons={showIcons}
+            skillIconByName={customSkillIconByName}
+            accentClass="border-accent bg-accent/10"
+          />,
+        )
+      }
+    }
+
+    const legacyKey = legacyBackgroundOriginFeatPickKey(selectedBackground.id)
+    const legacyId = featureChoicePicks[legacyKey]?.[0]
+    const legacyFeat = legacyId ? feats.find((entry) => entry.id === legacyId) : null
+    pushFeat(legacyFeat, `bg-legacy-${legacyKey}`)
+
+    for (const slot of backgroundStepSectionSlots) {
+      const picks = modifierPlayerPicks[slot.slotKey] ?? []
+      if (!picks.length) continue
+      const isSkillOrTool =
+        slot.kind === "skill" ||
+        slot.kind === "tool" ||
+        slot.kind === "skill_or_tool" ||
+        slot.kind === "language"
+      groups.push(
+        <BuilderSelectedChoiceChips
+          key={slot.slotKey}
+          title={slot.label}
+          names={modifierPickPreviewNames(slot, picks)}
+          layout={chipLayout}
+          showSkillIcons={showIcons && isSkillOrTool}
+          skillIconByName={customSkillIconByName}
+          accentClass="border-accent bg-accent/10"
+        />,
+      )
+    }
+
+    if (groups.length === 0) {
+      return (
+        <p className="text-sm font-medium text-foreground/90">Background choices are set.</p>
+      )
+    }
+
+    return <div className="space-y-3">{groups}</div>
+  }, [
+    backgroundOptionsSectionComplete,
+    selectedBackground,
+    backgroundFeatPickSlots,
+    featureChoicePicks,
+    featChoicePicks,
+    feats,
+    backgroundGrantedFeat,
+    backgroundStepSectionSlots,
+    modifierPickPreviewNames,
+    modifierPlayerPicks,
+    skillPickerLayout,
+    customSkillIconByName,
+    duplicateOriginFeatNames,
+  ])
+
+  const canProceed = () => {
+    switch (currentStep) {
+      case 1:
+        return (
+          validateClassStepChoices(
+            activeClassLevels,
+            classes,
+            subclasses,
+            classSkillPicks,
+            subclassByClassId,
+            featureChoicePicks,
+            resolvedPrimaryClassId,
+            activeClassAddOrder,
+            classToolPicks,
+          ) &&
+          selectedFeatCount === requiredFeatSlots &&
+          validateFeatModifierChoices(
+            feats,
+            classStepFeatSelectionEntries,
+            featChoicePicks,
+          ) &&
+          validateModifierPlayerChoices(classStepAllModifierSlots, modifierPlayerPicks)
+        )
+      case BUILDER_STEP_IDS.CLASS_ABILITIES:
+        return (
+          collectClassAbilityStepBlockers({
+            classLevels: activeClassLevels,
+            classes,
+            subclasses,
+            subclassByClassId,
+            featureChoicePicks,
+            featPickSlots,
+            modifierPlayerChoiceSlots,
+          }).length === 0 &&
+          validateFeatModifierChoices(
+            feats,
+            classAbilityStepFeatSelectionEntries,
+            featChoicePicks,
+          ) &&
+          validateModifierPlayerChoices(classAbilityStepAllModifierSlots, modifierPlayerPicks)
+        )
+      case 2:
+        return (
+          validateOriginStepChoices(
+            character.species_id,
+            character.background_id,
+            selectedSpecies,
+            speciesTraitPicks,
+            speciesFeatPickSlots.map((slot) => slot.key),
+            featureChoicePicks,
+            backgroundFeatPickSlots.map((slot) => slot.key),
+            selectedBackground,
+          ) &&
+          duplicateOriginFeatNames.length === 0 &&
+          validateFeatModifierChoices(
+            feats,
+            originStepFeatSelectionEntries,
+            featChoicePicks,
+          ) &&
+          validateModifierPlayerChoices(originStepModifierSlots, modifierPlayerPicks)
+        )
+      case 3:
+        return (
+          (showLegacyMilestoneAsi
+            ? allSelectedAsiAllocationsValid(selectedFeatIds, asiAllocationsByFeatId, feats)
+            : true) &&
+          allAbilityScorePoolAllocationsValid(abilityScorePoolGrants, asiAllocationsByFeatId) &&
+          (!backgroundAbilityGrant.needsChoice ||
+            isValidBackgroundAsiAllocation(
+              asiAllocationsByFeatId[BACKGROUND_ASI_KEY] ?? {},
+              backgroundAbilityGrant.eligible,
+            )) &&
+          (abilityMethod !== "standard" || isStandardArrayComplete(standardArrayAssignments))
+        )
+      case BUILDER_STEP_IDS.GEAR:
+        return (
+          packageCategoryPicksComplete(
+            selectedStartingOption,
+            startingEquipmentOptionIndex,
+            startingEquipmentCategoryPicks,
+          ) &&
+          packageCategoryPicksComplete(
+            selectedBackgroundStartingOption,
+            backgroundStartingEquipmentOptionIndex,
+            backgroundStartingEquipmentCategoryPicks,
+          )
+        )
+      case BUILDER_STEP_IDS.SPELLS:
+        return validateModifierPlayerChoices(spellGrantModifierSlots, modifierPlayerPicks)
+      case BUILDER_STEP_IDS.DETAILS: return character.name.trim().length > 0
+      default: return false
+    }
+  }
+
+  const proceedBlockers = useMemo(() => {
+    const blockers: string[] = []
+    switch (currentStep) {
+      case 1:
+        blockers.push(
+          ...collectClassStepBlockers(
+            activeClassLevels,
+            classes,
+            subclasses,
+            classSkillPicks,
+            subclassByClassId,
+            featureChoicePicks,
+            resolvedPrimaryClassId,
+            activeClassAddOrder,
+            classToolPicks,
+          ),
+        )
+        if (selectedFeatCount < requiredFeatSlots) {
+          blockers.push(
+            `Choose ${requiredFeatSlots - selectedFeatCount} more class feat${
+              requiredFeatSlots - selectedFeatCount === 1 ? "" : "s"
+            } (${selectedFeatCount}/${requiredFeatSlots}).`,
+          )
+        }
+        blockers.push(
+          ...collectFeatModifierChoiceBlockers(
+            feats,
+            classStepFeatSelectionEntries,
+            featChoicePicks,
+          ),
+        )
+        blockers.push(
+          ...collectModifierPlayerChoiceBlockers(
+            classStepAllModifierSlots,
+            modifierPlayerPicks,
+          ),
+        )
+        break
+      case BUILDER_STEP_IDS.CLASS_ABILITIES:
+        blockers.push(
+          ...collectClassAbilityStepBlockers({
+            classLevels: activeClassLevels,
+            classes,
+            subclasses,
+            subclassByClassId,
+            featureChoicePicks,
+            featPickSlots,
+            modifierPlayerChoiceSlots,
+          }),
+        )
+        blockers.push(
+          ...collectFeatModifierChoiceBlockers(
+            feats,
+            classAbilityStepFeatSelectionEntries,
+            featChoicePicks,
+          ),
+        )
+        blockers.push(
+          ...collectModifierPlayerChoiceBlockers(
+            classAbilityStepAllModifierSlots,
+            modifierPlayerPicks,
+          ),
+        )
+        break
+      case 2:
+        blockers.push(
+          ...collectOriginStepBlockers(
+            character.species_id,
+            character.background_id,
+            selectedSpecies,
+            speciesTraitPicks,
+            speciesFeatPickSlots.map((slot) => slot.key),
+            featureChoicePicks,
+            backgroundFeatPickSlots.map((slot) => slot.key),
+            selectedBackground,
+          ),
+        )
+        blockers.push(...duplicateOriginFeatBlockers)
+        blockers.push(
+          ...collectFeatModifierChoiceBlockers(
+            feats,
+            originStepFeatSelectionEntries,
+            featChoicePicks,
+          ),
+        )
+        blockers.push(
+          ...collectModifierPlayerChoiceBlockers(originStepModifierSlots, modifierPlayerPicks),
+        )
+        break
+      case 3:
+        if (
+          showLegacyMilestoneAsi &&
+          !allSelectedAsiAllocationsValid(selectedFeatIds, asiAllocationsByFeatId, feats)
+        ) {
+          blockers.push("Finish allocating Ability Score Improvement points from feats.")
+        }
+        if (!allAbilityScorePoolAllocationsValid(abilityScorePoolGrants, asiAllocationsByFeatId)) {
+          blockers.push("Finish allocating ability score bonuses from species, background, or feats.")
+        }
+        if (
+          backgroundAbilityGrant.needsChoice &&
+          !isValidBackgroundAsiAllocation(
+            asiAllocationsByFeatId[BACKGROUND_ASI_KEY] ?? {},
+            backgroundAbilityGrant.eligible,
+          )
+        ) {
+          blockers.push("Complete background ability score increases.")
+        }
+        if (abilityMethod === "standard" && !isStandardArrayComplete(standardArrayAssignments)) {
+          blockers.push("Assign every standard array score to an ability.")
+        }
+        blockers.push(
+          ...collectFeatAbilityScoreBlockers(
+            ownedFeatIds,
+            feats,
+            featPrerequisiteStats.abilityScores,
+          ),
+        )
+        break
+      case BUILDER_STEP_IDS.GEAR:
+        if (
+          !packageCategoryPicksComplete(
+            selectedStartingOption,
+            startingEquipmentOptionIndex,
+            startingEquipmentCategoryPicks,
+          ) ||
+          !packageCategoryPicksComplete(
+            selectedBackgroundStartingOption,
+            backgroundStartingEquipmentOptionIndex,
+            backgroundStartingEquipmentCategoryPicks,
+          )
+        ) {
+          blockers.push("Choose a specific weapon for each martial/simple weapon package slot.")
+        }
+        break
+      case BUILDER_STEP_IDS.SPELLS:
+        blockers.push(
+          ...collectModifierPlayerChoiceBlockers(spellGrantModifierSlots, modifierPlayerPicks),
+        )
+        break
+      case BUILDER_STEP_IDS.DETAILS:
+        if (character.name.trim().length === 0) {
+          blockers.push("Enter a character name.")
+        }
+        break
+      default:
+        break
+    }
+    return asBuilderBlockers(blockers, currentStep)
+  }, [
+    currentStep,
+    activeClassLevels,
+    classes,
+    subclasses,
+    classSkillPicks,
+    subclassByClassId,
+    modifierPlayerChoiceSlots,
+    featureChoicePicks,
+    resolvedPrimaryClassId,
+    activeClassAddOrder,
+    classToolPicks,
+    selectedFeatCount,
+    requiredFeatSlots,
+    feats,
+    classStepFeatSelectionEntries,
+    featChoicePicks,
+    classStepFeatModifierSlots,
+    classStepClassFeatureModifierSlots,
+    classStepAllModifierSlots,
+    classAbilityStepFeatSelectionEntries,
+    classAbilityStepAllModifierSlots,
+    featPickSlots,
+    modifierPlayerPicks,
+    character.species_id,
+    character.background_id,
+    character.name,
+    selectedSpecies,
+    speciesTraitPicks,
+    speciesFeatPickSlots,
+    backgroundFeatPickSlots,
+    duplicateOriginFeatBlockers,
+    originStepFeatSelectionEntries,
+    originStepModifierSlots,
+    showLegacyMilestoneAsi,
+    selectedFeatIds,
+    asiAllocationsByFeatId,
+    abilityScorePoolGrants,
+    backgroundAbilityGrant,
+    abilityMethod,
+    standardArrayAssignments,
+    ownedFeatIds,
+    featPrerequisiteStats,
+    spellGrantModifierSlots,
+    selectedStartingOption,
+    selectedBackgroundStartingOption,
+    startingEquipmentOptionIndex,
+    backgroundStartingEquipmentOptionIndex,
+    startingEquipmentCategoryPicks,
+    backgroundStartingEquipmentCategoryPicks,
+  ])
+
+  const canSaveCharacter = () =>
+    character.name.trim().length > 0 &&
+    activeClassLevels.length > 0 &&
+    meetsMulticlassRequirements
+
+  const saveBlockers = useMemo(() => {
+    const blockers: string[] = []
+    if (character.name.trim().length === 0) {
+      blockers.push("Enter a character name on the Details step.")
+    }
+    if (activeClassLevels.length === 0) {
+      blockers.push("Choose at least one class.")
+    }
+    for (const issue of multiclassAbilityIssues) {
+      blockers.push(formatMulticlassAbilityIssue(issue))
+    }
+    return asBuilderBlockers(blockers, BUILDER_STEP_IDS.DETAILS).map((blocker) => {
+      if (/class/i.test(blocker.message) && !/name/i.test(blocker.message)) {
+        return { ...blocker, stepId: BUILDER_STEP_IDS.CLASS, targetId: "builder-class-skills" }
+      }
+      if (/ability/i.test(blocker.message)) {
+        return { ...blocker, stepId: BUILDER_STEP_IDS.ABILITIES, targetId: "builder-abilities" }
+      }
+      return blocker
+    })
+  }, [character.name, activeClassLevels.length, multiclassAbilityIssues])
+
+  const hasSpellStep =
+    spellcastingClasses.length > 0 || spellGrantModifierSlots.length > 0
+  const hasClassAbilityStep = characterHasClassAbilityStep({
+    classLevels: activeClassLevels,
+    classes,
+    subclasses,
+    subclassByClassId,
+    featPickSlots,
+    customAbilities,
+    modifierPlayerChoiceSlots,
+  })
+  const visibleSteps = BUILDER_STEPS.filter((step) => {
+    if (step.id === BUILDER_STEP_IDS.SPELLS) return hasSpellStep
+    if (step.id === BUILDER_STEP_IDS.CLASS_ABILITIES) return hasClassAbilityStep
+    return true
+  })
+  const lastVisibleStepId =
+    visibleSteps[visibleSteps.length - 1]?.id ?? BUILDER_STEP_IDS.DETAILS
+
+  const nextVisibleStepId = (stepId: number) => {
+    const currentOrder = builderStepOrder(stepId)
+    return (
+      visibleSteps.find((step) => builderStepOrder(step.id) > currentOrder)?.id ?? null
+    )
+  }
+  const prevVisibleStepId = (stepId: number) => {
+    const currentOrder = builderStepOrder(stepId)
+    return (
+      [...visibleSteps].reverse().find((step) => builderStepOrder(step.id) < currentOrder)?.id ??
+      null
+    )
+  }
+
+  const goToStep = (stepId: number) => {
+    const maxOrder = builderStepOrder(maxStepReached)
+    if (builderStepOrder(stepId) <= maxOrder) {
+      setCurrentStep(stepId)
+    }
+  }
+
+  const jumpToBlocker = (blocker: BuilderBlocker) => {
+    if (blocker.stepId) setCurrentStep(blocker.stepId)
+    window.setTimeout(() => scrollToBuilderTarget(blocker.targetId), 80)
+  }
+
+  const goBackStep = () => {
+    const prev = prevVisibleStepId(currentStep)
+    if (prev != null) goToStep(prev)
+  }
+
+  const advanceStep = () => {
+    if (!canProceed()) return
+    const next = nextVisibleStepId(currentStep)
+    if (next == null) return
+    setCurrentStep(next)
+    setMaxStepReached((prev) =>
+      builderStepOrder(next) > builderStepOrder(prev) ? next : prev,
+    )
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" })
+    })
+  }
+
+  // If the character stops being a spellcaster / loses class-ability pools while parked
+  // on a hidden step, bounce to a visible neighbor.
+  useEffect(() => {
+    if (currentStep === BUILDER_STEP_IDS.SPELLS && !hasSpellStep) {
+      setCurrentStep(BUILDER_STEP_IDS.GEAR)
+    }
+  }, [currentStep, hasSpellStep])
+
+  useEffect(() => {
+    if (currentStep === BUILDER_STEP_IDS.CLASS_ABILITIES && !hasClassAbilityStep) {
+      setCurrentStep(BUILDER_STEP_IDS.ORIGIN)
+    }
+  }, [currentStep, hasClassAbilityStep])
+
+  const getAbilityModifier = (score: number) => {
+    const mod = Math.floor((score - 10) / 2)
+    return mod >= 0 ? `+${mod}` : `${mod}`
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col">
+        <MainNav />
+        <main className="max-w-4xl mx-auto px-4 py-8">
+          <div className="animate-pulse">
+            <div className="h-8 bg-muted rounded w-1/3 mb-8" />
+            <div className="h-64 bg-muted rounded-2xl" />
+          </div>
+        </main>
+      <SiteFooter />
+      </div>
+    )
+  }
+
+  return (
+    <div id="builder-root" className="min-h-screen bg-background flex flex-col">
+      <MainNav />
+      
+      <div id="builder-steps" className={pageStepStripClass}>
+        <div className="max-w-7xl mx-auto px-4 pt-3 pb-1">
+          <div className="flex items-center justify-center gap-x-1.5 sm:gap-x-0">
+            {visibleSteps.map((step, index) => {
+              const Icon = step.icon
+              const isActive = currentStep === step.id
+              const stepOrd = builderStepOrder(step.id)
+              const currentOrd = builderStepOrder(currentStep)
+              const maxOrd = builderStepOrder(maxStepReached)
+              const isReachable = stepOrd <= maxOrd
+              const isComplete = stepOrd < currentOrd || (stepOrd < maxOrd && !isActive)
+              
+              return (
+                <div key={step.id} className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => goToStep(step.id)}
+                    disabled={!isReachable}
+                    className={`flex flex-col items-center flex-shrink-0 transition-opacity ${
+                      isReachable ? "cursor-pointer" : "cursor-not-allowed opacity-70"
+                    }`}
+                    title={isReachable ? `Go to ${step.label}` : "Complete earlier steps first"}
+                  >
+                    <div
+                      className={`w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center transition-all ${
+                        isComplete
+                          ? "bg-success text-success-foreground"
+                          : isActive
+                          ? "bg-primary text-primary-foreground scale-110 shadow-md shadow-primary/25"
+                          : isReachable
+                          ? "bg-primary/25 text-primary hover:bg-primary/35"
+                          : "bg-primary/15 text-primary/75"
+                      }`}
+                    >
+                      {isComplete ? <Check className="w-5 h-5" /> : <Icon className="w-5 h-5" />}
+                    </div>
+                    <span className={`text-[10px] md:text-xs mt-0.5 font-medium ${
+                      isActive
+                        ? "text-primary"
+                        : isReachable
+                          ? "text-primary/90"
+                          : "text-primary/60"
+                    }`}>
+                      {step.label}
+                    </span>
+                  </button>
+                  {index < visibleSteps.length - 1 && (
+                    <div className={`hidden sm:block sm:w-10 sm:h-1 md:w-14 rounded mx-1 md:mx-2 shrink-0 ${
+                      stepOrd < maxOrd ? "bg-success/80" : "bg-primary/25"
+                    }`} />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          </div>
+      </div>
+      
+      <main id="builder-main" className="max-w-7xl mx-auto px-4 py-8 min-h-[calc(100vh-4rem)] flex-1 w-full">
+
+        {/* Mobile: sticky toggle between step choices and character preview */}
+        <div className="lg:hidden sticky top-16 z-40 -mx-4 px-4 py-2 mb-4 flex gap-2 bg-background/95 backdrop-blur-md border-b border-border/60">
+          <button
+            type="button"
+            onClick={() => setMobilePanel("steps")}
+            className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${
+              mobilePanel === "steps"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            Build
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobilePanel("preview")}
+            className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors ${
+              mobilePanel === "preview"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            Preview
+          </button>
+        </div>
+
+        {/* Two-Column Layout */}
+        <div id="builder-content" className="grid grid-cols-1 lg:grid-cols-5 gap-6 min-h-[720px]">
+          {/* Left Column: Step Content (choices) */}
+          <div
+            id="builder-step-panel"
+            className={`lg:col-span-3 bg-card/80 backdrop-blur-md rounded-2xl border-2 border-border p-6 min-h-[720px] ${
+              mobilePanel === "preview" ? "hidden lg:block" : ""
+            }`}
+          >
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={resetCharacter}
+                  title="Reset"
+                  aria-label="Reset"
+                  className={cn(
+                    "inline-flex items-center justify-center gap-1.5 border border-border font-semibold text-muted-foreground transition-colors hover:border-destructive hover:text-destructive",
+                    cardViewMode === "dense"
+                      ? "rounded-lg px-3 py-2 text-xs max-sm:h-[30px] max-sm:w-[30px] max-sm:px-0 max-sm:py-0"
+                      : "rounded-lg px-3 py-2 text-xs",
+                  )}
+                >
+                  <RotateCcw
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0",
+                      cardViewMode === "dense" ? "max-sm:inline sm:hidden" : "hidden",
+                    )}
+                    aria-hidden
+                  />
+                  <span className={cn(cardViewMode === "dense" && "max-sm:hidden")}>Reset</span>
+                </button>
+                {!isCompactOnly ? (
+                <div className="flex rounded-lg border border-border overflow-hidden">
+                  <button
+                    type="button"
+                    title="Visual cards"
+                    aria-pressed={cardViewMode === "cinematic"}
+                    onClick={() => applyCardViewMode("cinematic")}
+                    className={`flex items-center gap-1 px-2.5 py-2 text-xs font-semibold transition-colors ${
+                      cardViewMode === "cinematic"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-card text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Visual</span>
+                  </button>
+                  <button
+                    type="button"
+                    title="Compact list cards"
+                    aria-pressed={cardViewMode === "dense"}
+                    onClick={() => applyCardViewMode("dense")}
+                    className={`flex items-center gap-1 px-2.5 py-2 text-xs font-semibold transition-colors border-l border-border ${
+                      cardViewMode === "dense"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-card text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Compact</span>
+                  </button>
+                </div>
+                ) : null}
+              </div>
+
+              <div className="flex flex-col items-end gap-2">
+                <BuilderStepNav
+                  currentStep={currentStep}
+                  canProceed={canProceed()}
+                  proceedBlockers={proceedBlockers}
+                  canSave={canSaveCharacter()}
+                  saveBlockers={saveBlockers}
+                  saving={saving}
+                  onBack={goBackStep}
+                  onContinue={advanceStep}
+                  onSave={saveCharacter}
+                  saveLabel={editingCharacterId ? "Save Character" : "Create Character"}
+                  viewSheetHref={
+                    editingCharacterId ? characterSheetHref(editingCharacterId) : null
+                  }
+                  lastStep={lastVisibleStepId}
+                  compact={cardViewMode === "dense"}
+                  onJumpBlocker={jumpToBlocker}
+                />
+              </div>
+            </div>
+
+            {editingCharacterId && (
+              <p className={`${pageFloatingHintClass} mb-4 -mt-2`}>
+                Editing an existing character. Save to update, or open View Sheet anytime.
+              </p>
+            )}
+
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={currentStep}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                transition={{ duration: 0.3 }}
+              >
+            {/* Step 1: Class Selection */}
+            {currentStep === 1 && (
+              <div id="builder-class-skills" className="space-y-6">
+                <BuilderCompletableSection
+                  title="Choose Class & Level"
+                  description="Your class determines your combat abilities and special features."
+                  complete={classLevelSectionComplete}
+                  collapseMode="confirm"
+                  doneLabel="Done with class selections"
+                  summary={classLevelSectionSummary}
+                  pinnedWhenComplete={
+                    activeClassLevels.length > 0 ? (
+                      <div className="flex flex-wrap gap-3">
+                        {activeClassLevels.map((cl) => {
+                          const cls = classes.find((c) => c.id === cl.classId)
+                          if (!cls) return null
+                          const isPrimary = cl.classId === resolvedPrimaryClassId
+                          return (
+                            <BuilderSelectedCatalogItem
+                              key={cl.classId}
+                              item={cls}
+                              cardViewMode={cardViewMode}
+                              portrait={useCinematicPortraitCards}
+                              selectionVariant={isPrimary ? "primary" : "secondary"}
+                              onLearnMore={() => setDetailsModal({ type: "class", item: cls })}
+                              badge={
+                                <span className="rounded bg-primary px-2 py-0.5 text-xs font-bold text-primary-foreground">
+                                  Lv {cl.level}
+                                  {isPrimary ? "" : " · MC"}
+                                </span>
+                              }
+                            />
+                          )
+                        })}
+                      </div>
+                    ) : null
+                  }
+                >
+                
+                {/* Search + source filter */}
+                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <SearchBox
+                    value={classSearch}
+                    onChange={setClassSearch}
+                    suggestions={rankSearchResults(
+                      classes.filter(
+                        (cls) =>
+                          classSourceFilter === "all" ||
+                          (cls.source?.trim() || "Custom") === classSourceFilter,
+                      ),
+                      deferredClassSearch,
+                      {
+                        name: (cls) => cls.name,
+                        fields: [
+                          { name: "description", value: (cls) => cls.description, weight: 0.35 },
+                          { name: "source", value: (cls) => cls.source, weight: 0.9 },
+                          { name: "primary ability", value: (cls) => cls.primary_ability, weight: 1.2 },
+                        ],
+                        limit: 8,
+                      },
+                    ).map((match) => ({
+                      id: match.item.id,
+                      label: match.item.name,
+                      detail: [match.item.primary_ability?.join("/"), match.item.source]
+                        .filter(Boolean)
+                        .join(" · "),
+                      item: match.item,
+                      matchKind: match.kind,
+                    }))}
+                    onSelect={(suggestion) => setClassSearch(suggestion.label)}
+                    scope="builder:classes"
+                    placeholder="Search classes…"
+                    ariaLabel="Search classes"
+                    className="flex-1"
+                    inputClassName="border"
+                  />
+                  {(() => {
+                    const sourceOptions = [
+                      ...new Set(
+                        classes.map((cls) => cls.source?.trim() || "Custom").filter(Boolean),
+                      ),
+                    ].sort((a, b) => a.localeCompare(b))
+                    if (sourceOptions.length <= 1) return null
+                    return (
+                      <div className="flex shrink-0 items-center gap-2">
+                        <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+                          Source
+                        </label>
+                        <select
+                          value={classSourceFilter}
+                          onChange={(e) => setClassSourceFilter(e.target.value)}
+                          className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none max-w-[14rem] w-full sm:w-auto"
+                          aria-label="Filter classes by source"
+                        >
+                          <option value="all">All sources</option>
+                          {sourceOptions.map((source) => (
+                            <option key={source} value={source}>
+                              {source}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )
+                  })()}
+                </div>
+                
+                {cardViewMode !== "cinematic" ? (
+                  <p className={`${pageFloatingHintClass} text-xs mb-2`}>
+                    Click a class to add it, or increase its level if already selected.
+                  </p>
+                ) : null}
+
+                {(() => {
+                  const sourceFilteredClasses = classes.filter(
+                    (cls) =>
+                      !(
+                        classSourceFilter !== "all" &&
+                        (cls.source?.trim() || "Custom") !== classSourceFilter
+                      ),
+                  )
+                  const filteredClasses = searchItems(sourceFilteredClasses, deferredClassSearch, {
+                    name: (cls) => cls.name,
+                    fields: [
+                      { name: "description", value: (cls) => cls.description, weight: 0.35 },
+                      { name: "source", value: (cls) => cls.source },
+                      { name: "primary ability", value: (cls) => cls.primary_ability },
+                    ],
+                  })
+                  const {
+                    items: visibleClasses,
+                    pageCount: classPageCount,
+                    safePage: safeClassPage,
+                  } = paginateList(filteredClasses, classPickerPage, pickerPageSize)
+                  const classesToShow = useSwipeVisualPicker ? filteredClasses : visibleClasses
+
+                  if (classes.length === 0) {
+                    return <BuilderCatalogEmptyPrompt itemLabel="classes" tab="classes" />
+                  }
+
+                  if (classesToShow.length === 0) {
+                    return (
+                      <p className="rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+                        No classes match your search or source filter.
+                      </p>
+                    )
+                  }
+
+                      return (
+                    <>
+                      <PickerGridPagination
+                        page={safeClassPage}
+                        pageCount={classPageCount}
+                        onPrevious={() => setClassPickerPage((p) => Math.max(0, p - 1))}
+                        onNext={() =>
+                          setClassPickerPage((p) => Math.min(classPageCount - 1, p + 1))
+                        }
+                        previousLabel="Previous classes"
+                        nextLabel="Next classes"
+                        className={cn("mb-2 mt-0", cinematicPickerPaginationClass)}
+                      />
+                      <SwipeVisualPicker enabled={useSwipeVisualPicker} className={pickerGridClass}>
+                        {classesToShow.map((cls) => {
+                          const existingLevel = activeClassLevels.find((cl) => cl.classId === cls.id)
+                          const isSelected = !!existingLevel
+                          const isPrimary = cls.id === resolvedPrimaryClassId
+                          const accent = getCompendiumItemAccentColor(cls as unknown as Record<string, unknown>)
+                          const selectClass = () => {
+                            if (existingLevel) {
+                              if (totalLevel < 20) {
+                                setClassLevels(
+                                  activeClassLevels.map((cl) =>
+                                    cl.classId === cls.id ? { ...cl, level: cl.level + 1 } : cl,
+                                  ),
+                                )
+                              }
+                            } else if (totalLevel < 20) {
+                              addClassToBuild(cls.id)
+                            }
+                          }
+                          const levelBadge = existingLevel ? (
+                            <span className="rounded bg-primary px-2 py-0.5 text-xs font-bold text-primary-foreground">
+                              Lv {existingLevel.level}
+                            </span>
+                          ) : undefined
+
+                          if (cardViewMode === "dense") {
+                            return (
+                              <CompendiumDenseSelectionCard
+                                key={cls.id}
+                                name={cls.name}
+                                subtitle={cls.source || "Custom"}
+                                icon={cls.icon}
+                                accentColor={accent}
+                                selected={isSelected}
+                                selectionVariant={isSelected && !isPrimary ? "secondary" : "primary"}
+                                disabled={totalLevel >= 20 && !existingLevel}
+                                badge={levelBadge}
+                                onSelect={selectClass}
+                                onLearnMore={() => setDetailsModal({ type: "class", item: cls })}
+                              />
+                            )
+                          }
+
+                          return (
+                            <CompendiumSelectionCard
+                              key={cls.id}
+                              item={cls}
+                              subtitle={cls.source || "Custom"}
+                              accentColor={accent}
+                              selected={isSelected}
+                              selectionVariant={isSelected && !isPrimary ? "secondary" : "primary"}
+                              disabled={totalLevel >= 20 && !existingLevel}
+                              badge={levelBadge}
+                              size="md"
+                              cardShape={useCinematicPortraitCards ? "portrait" : "wide"}
+                              imageCrop="top"
+                              onSelect={selectClass}
+                              onLearnMore={() => setDetailsModal({ type: "class", item: cls })}
+                              showBlurb={false}
+                            />
+                          )
+                        })}
+                      </SwipeVisualPicker>
+                      <PickerGridPagination
+                        page={safeClassPage}
+                        pageCount={classPageCount}
+                        onPrevious={() => setClassPickerPage((p) => Math.max(0, p - 1))}
+                        onNext={() =>
+                          setClassPickerPage((p) => Math.min(classPageCount - 1, p + 1))
+                        }
+                        previousLabel="Previous classes"
+                        nextLabel="Next classes"
+                        className={cinematicPickerPaginationClass}
+                      />
+                    </>
+                  )
+                })()}
+
+                {/* Current Class Levels */}
+                {activeClassLevels.length > 0 && (
+                  <div
+                    className={
+                      cardViewMode === "cinematic"
+                        ? "mt-4 mb-4 space-y-3"
+                        : "mt-4 mb-4 rounded-xl bg-muted p-3"
+                    }
+                  >
+                    <p
+                      className={
+                        cardViewMode === "cinematic"
+                          ? "text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground max-sm:text-xs"
+                          : "mb-2 text-xs font-bold uppercase text-muted-foreground"
+                      }
+                    >
+                      Current Classes
+                      <span
+                        className={
+                          cardViewMode === "cinematic"
+                            ? "ml-2 text-primary"
+                            : "ml-1 font-normal normal-case tracking-normal text-muted-foreground"
+                        }
+                      >
+                        · Total Level {totalLevel}
+                      </span>
+                    </p>
+                    <div className={cardViewMode === "cinematic" ? "space-y-3" : "space-y-2"}>
+                      {activeClassLevels.map((cl, idx) => {
+                        const cls = classes.find((c) => c.id === cl.classId)
+                        const isPrimary = cl.classId === resolvedPrimaryClassId
+                        const maxForClass = 20 - (totalLevel - cl.level)
+                        return (
+                          <ClassLevelRow
+                            key={cl.classId}
+                            classNameLabel={cls?.name ?? "Class"}
+                            icon={cls?.icon}
+                            level={cl.level}
+                            max={maxForClass}
+                            isPrimary={isPrimary}
+                            canIncrease={totalLevel < 20}
+                            variant={cardViewMode === "cinematic" ? "visual" : "default"}
+                            onDecrease={() => {
+                              const newLevels = [...activeClassLevels]
+                              if (newLevels[idx].level > 1) {
+                                newLevels[idx].level--
+                                const unlockLevel = resolveSubclassUnlockLevel(cls)
+                                if (newLevels[idx].level < unlockLevel) {
+                                  setSubclassByClassId((prev) => {
+                                    const next = { ...prev }
+                                    delete next[newLevels[idx].classId]
+                                    return next
+                                  })
+                                }
+                                setClassLevels(newLevels)
+                              } else {
+                                removeClassFromBuild(
+                                  cl.classId,
+                                  activeClassLevels.filter((_, i) => i !== idx),
+                                )
+                              }
+                            }}
+                            onIncrease={() => {
+                              if (totalLevel < 20) {
+                                const newLevels = [...activeClassLevels]
+                                newLevels[idx].level++
+                                setClassLevels(newLevels)
+                              }
+                            }}
+                            onCommitLevel={(level) => {
+                              const newLevels = [...activeClassLevels]
+                              newLevels[idx] = { ...newLevels[idx], level }
+                              const unlockLevel = resolveSubclassUnlockLevel(cls)
+                              if (level < unlockLevel) {
+                                setSubclassByClassId((prev) => {
+                                  const next = { ...prev }
+                                  delete next[newLevels[idx].classId]
+                                  return next
+                                })
+                              }
+                              setClassLevels(newLevels)
+                            }}
+                            onRemove={() => {
+                              removeClassFromBuild(
+                                cl.classId,
+                                activeClassLevels.filter((_, i) => i !== idx),
+                              )
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {multiclassAbilityIssues.length > 0 && (
+                  <div className="mt-4 rounded-xl border border-warning/50 bg-warning/10 p-4">
+                    <p className="text-sm font-bold text-warning mb-2">Multiclass ability requirements</p>
+                    <ul className="space-y-1 text-xs text-foreground">
+                      {multiclassAbilityIssues.map((issue) => (
+                        <li key={`${issue.classId}-${issue.role}`}>
+                          {formatMulticlassAbilityIssue(issue)}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Per SRD p. 25, each class needs 13+ in at least one primary ability. You can
+                      continue building, but you must meet these requirements before saving.
+                    </p>
+                  </div>
+                )}
+                </BuilderCompletableSection>
+
+                {activeClassLevels.length > 0 && (
+                  <BuilderCompletableSection
+                    title="Class Options"
+                    description="Complete choices for your selected class(es) before continuing."
+                    complete={classOptionsSectionComplete}
+                    headingLevel={3}
+                    pinnedWhenComplete={
+                      classOptionsSectionComplete ? (
+                        <div className="space-y-3">
+                          {cardViewMode === "cinematic" ? (
+                            <div className="flex flex-wrap gap-3">
+                              {activeClassLevels.map((entry) => {
+                                const cls = classes.find((c) => c.id === entry.classId)
+                                if (!cls) return null
+                                const subclassId = subclassByClassId[entry.classId]
+                                const subclass = subclassId
+                                  ? subclasses.find((sc) => sc.id === subclassId)
+                                  : null
+                                if (!subclass) return null
+                                const displaySubclass = enrichSubclassDisplayDefaults(
+                                  subclass,
+                                  cls.name,
+                                )
+                                const cardItem = {
+                                  ...displaySubclass,
+                                  icon:
+                                    displaySubclass.icon?.trim() ||
+                                    getCompendiumItemIcon("subclasses", {
+                                      ...(displaySubclass as unknown as Record<string, unknown>),
+                                      class_name: cls.name,
+                                    }),
+                                }
+                                return (
+                                  <BuilderSelectedCatalogItem
+                                    key={`${entry.classId}-${subclass.id}`}
+                                    item={cardItem}
+                                    cardViewMode={cardViewMode}
+                                    portrait={useCinematicPortraitCards}
+                                    onLearnMore={() =>
+                                      setDetailsModal({ type: "subclass", item: displaySubclass })
+                                    }
+                                    badge={
+                                      <span className="rounded bg-primary px-2 py-0.5 text-xs font-bold text-primary-foreground">
+                                        {cls.name}
+                                      </span>
+                                    }
+                                  />
+                                )
+                              })}
+                            </div>
+                          ) : null}
+                          {classOptionsSectionPreview}
+                        </div>
+                      ) : null
+                    }
+                  >
+                    {activeClassLevels.map((entry) => {
+                      const cls = classes.find((c) => c.id === entry.classId)
+                      if (!cls) return null
+                      const isPrimary = entry.classId === resolvedPrimaryClassId
+                      const classSubclasses = getSubclassesForClass(subclasses, entry.classId)
+                          const eligibleFeatures = (cls.features ?? []).filter(
+                        (feature) =>
+                          feature.level <= entry.level &&
+                          feature.isChoice &&
+                          feature.choices &&
+                          !isClassAbilityFeatureChoice(feature, cls.name) &&
+                          !classAbilityFeatureKeys.has(
+                            featureChoiceKey(entry.classId, feature.name, feature.level),
+                          ) &&
+                          ((feature.choices.options?.length ?? 0) > 0 ||
+                            feature.choices.optionsSource),
+                      )
+
+                      return (
+                        <div key={entry.classId} className="space-y-1">
+                          <p
+                            className={`text-sm font-semibold ${
+                              isPrimary ? "text-primary" : "text-secondary"
+                            }`}
+                          >
+                            {cls.name} (Level {entry.level})
+                            {isPrimary ? " · Primary" : " · Additional (multiclass proficiencies only)"}
+                          </p>
+                          {!isPrimary && (
+                            <p className="text-xs text-muted-foreground mb-2">
+                              {multiclassProficiencySummary(cls)}
+                            </p>
+                          )}
+
+                          {entry.level >= 1 && (() => {
+                            const skillReq = getClassSkillPickRequirement(cls, isPrimary)
+                            if (!skillReq) return null
+                            const picks = classSkillPicks[entry.classId] ?? []
+                            const released = releasedClassSkills[entry.classId] ?? []
+                            const showReleasedNote =
+                              released.length > 0 && picks.length < skillReq.count
+                            return (
+                              <div className="space-y-2">
+                                <MultiSelectChoices
+                                  title={skillReq.label}
+                                  hint={`Choose ${skillReq.count}${skillReq.isMulticlass ? " (SRD multiclass grant)" : ""} from the list below.`}
+                                  options={skillReq.options.map((name) => ({ name }))}
+                                  maxCount={skillReq.count}
+                                  selected={picks}
+                                  unavailableOptions={[
+                                    ...getTakenSkills(skillPickSources, `class:${entry.classId}`),
+                                    ...grantedSkillNames,
+                                  ]}
+                                  showSkillInfo
+                                  layout={skillPickerLayout}
+                                  skillIconByName={customSkillIconByName}
+                                  onChange={(selected) =>
+                                    setClassSkillPicks((prev) => ({
+                                      ...prev,
+                                      [entry.classId]: selected,
+                                    }))
+                                  }
+                                />
+                                {showReleasedNote ? (
+                                  <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                                    {describeReleasedClassSkills(released)}
+                                  </p>
+                                ) : null}
+                              </div>
+                            )
+                          })()}
+
+                          {entry.level >= 1 && (() => {
+                            const toolReq = getMulticlassToolPickRequirement(cls, isPrimary)
+                            if (!toolReq) return null
+                            const selected = classToolPicks[entry.classId] ?? []
+                            const selectedKeys = new Set(
+                              selected.map((name) => name.trim().toLowerCase()).filter(Boolean),
+                            )
+                            const alreadyProficient = new Set(
+                              modifierExpertisePickerProps.proficientTools
+                                .filter((name) => !selectedKeys.has(name.trim().toLowerCase()))
+                                .map((name) => name.trim().toLowerCase())
+                                .filter(Boolean),
+                            )
+                            const options = toolReq.options.filter((name) => {
+                              const key = name.trim().toLowerCase()
+                              return selectedKeys.has(key) || !alreadyProficient.has(key)
+                            })
+                            return (
+                              <MultiSelectChoices
+                                title={toolReq.label}
+                                hint={`Choose ${toolReq.count} from the list below.`}
+                                options={options.map((name) => ({ name }))}
+                                maxCount={toolReq.count}
+                                selected={selected}
+                                onChange={(next) =>
+                                  setClassToolPicks((prev) => ({
+                                    ...prev,
+                                    [entry.classId]: next,
+                                  }))
+                                }
+                                accentClass="border-secondary bg-secondary/10"
+                                layout={compactPickerLayout}
+                              />
+                            )
+                          })()}
+
+                          {(() => {
+                            const subclassUnlockLevel = resolveSubclassUnlockLevel(cls)
+                            const subclassUnlockLabel = resolveSubclassUnlockLabel(cls)
+                            if (!classNeedsSubclass(entry.level, classSubclasses.length, subclassUnlockLevel)) {
+                              return null
+                            }
+                            return (
+                            <div className="mt-4 p-4 bg-muted/40 rounded-xl border border-border">
+                              <h4 className="font-bold text-sm text-foreground mb-2">
+                                {subclassUnlockLabel} (Level {subclassUnlockLevel}+)
+                              </h4>
+                              {classSubclasses.length === 0 ? (
+                                <BuilderCatalogEmptyPrompt itemLabel="subclasses" tab="subclasses" />
+                              ) : (
+                              <SwipeVisualPicker
+                                enabled={useSwipeVisualPicker}
+                                className={
+                                  useSwipeVisualPicker
+                                    ? getCinematicPickerContainerClass(3)
+                                    : cardViewMode === "dense"
+                                      ? "grid grid-cols-1 xl:grid-cols-2 gap-3 px-1 py-2"
+                                      : pickerGridClass
+                                }
+                              >
+                                {classSubclasses.map((subclass) => {
+                                  const isSelected = subclassByClassId[entry.classId] === subclass.id
+                                  const displaySubclass = enrichSubclassDisplayDefaults(
+                                    subclass,
+                                    cls.name,
+                                  )
+                                  const accent = getCompendiumItemAccentColor(
+                                    displaySubclass as unknown as Record<string, unknown>,
+                                  )
+                                  const selectSubclass = () => {
+                                    setSubclassByClassId((prev) => {
+                                      const next = { ...prev, [entry.classId]: subclass.id }
+                                      if (entry.classId === resolvedPrimaryClassId) {
+                                        setCharacter((characterPrev) => ({
+                                          ...characterPrev,
+                                          subclass_id: subclass.id,
+                                        }))
+                                      }
+                                      return next
+                                    })
+                                  }
+                                  const cardItem = {
+                                    ...displaySubclass,
+                                    icon:
+                                      displaySubclass.icon?.trim() ||
+                                      getCompendiumItemIcon("subclasses", {
+                                        ...(displaySubclass as unknown as Record<string, unknown>),
+                                        class_name: cls.name,
+                                      }),
+                                  }
+
+                                  // Visual (cinematic) and compact (dense) both use selection cards —
+                                  // never the plain text buttons.
+                                  if (cardViewMode === "dense") {
+                                    return (
+                                      <CompendiumDenseSelectionCard
+                                        key={subclass.id || subclass.name}
+                                        name={displaySubclass.name}
+                                        subtitle={displaySubclass.source || "Custom"}
+                                        icon={cardItem.icon}
+                                        accentColor={accent}
+                                        selected={isSelected}
+                                        onSelect={selectSubclass}
+                                onLearnMore={() => setDetailsModal({ type: "subclass", item: displaySubclass })}
+                                      />
+                                    )
+                                  }
+
+                                  return (
+                                    <CompendiumSelectionCard
+                                      key={subclass.id || subclass.name}
+                                      item={cardItem}
+                                      subtitle={displaySubclass.source || "Custom"}
+                                      accentColor={accent}
+                                      selected={isSelected}
+                                      size="md"
+                                      cardShape={useCinematicPortraitCards ? "portrait" : "wide"}
+                                      imageCrop="top"
+                                      onSelect={selectSubclass}
+                                      onLearnMore={() =>
+                                        setDetailsModal({ type: "subclass", item: displaySubclass })
+                                      }
+                                      showBlurb={false}
+                                    />
+                                  )
+                                })}
+                              </SwipeVisualPicker>
+                              )}
+                            </div>
+                            )
+                          })()}
+
+                          {eligibleFeatures.map((feature) => {
+                            const key = featureChoiceKey(entry.classId, feature.name, feature.level)
+                            const subclassForClass =
+                              subclasses.find((sc) => sc.id === subclassByClassId[entry.classId]) ??
+                              null
+                            const choiceOptions = resolveFeatureChoiceOptions(feature, {
+                              abilityScores: effectiveAbilityScores,
+                              proficientSkills: effectiveSkillProficiencies,
+                              proficientTools: effectiveToolProficiencies,
+                              knownLanguages: characterDerived.languages,
+                              customAbilities,
+                              featureChoicePicks: { ...featureChoicePicks, ...featChoicePicks },
+                              classNames: [cls.name],
+                              classIds: [entry.classId],
+                              classLevel: entry.level,
+                              equipmentCatalog: equipment,
+                              classWeaponProficiencies: cls.weapon_proficiencies,
+                              knownSpellNames,
+                              subclassName: subclassForClass?.name ?? null,
+                              grantedCustomAbilityNames:
+                                aggregatedCharacteristics.grantedCustomAbilityNames,
+                              optionGrants: aggregatedCharacteristics.featureChoiceOptionGrants,
+                            })
+                            const choiceCount = resolveFeatureChoiceCount(
+                              feature.choices!,
+                              entry.level,
+                              cls.name,
+                              undefined,
+                              {
+                                featureName: feature.name,
+                                bonuses: aggregatedCharacteristics.featureChoiceCountBonuses,
+                              },
+                            )
+                            const resolvedChoiceOptions = choiceOptions.map((option) => ({
+                              ...option,
+                              description: resolveChoiceOptionDescription(
+                                option,
+                                feature.description,
+                              ),
+                            }))
+                            const showNamedChoiceSummaries = shouldShowNamedChoiceSummaries({
+                              optionsSource: feature.choices?.optionsSource,
+                              options: resolvedChoiceOptions,
+                            })
+                            const isWeaponMastery = isWeaponMasteryFeature(feature)
+                            const isKnackPool =
+                              feature.choices?.optionsSource === "class_knacks"
+                            const isUpgradePool = feature.choices?.optionsSource === "class_upgrades"
+                            const masteryHint = isWeaponMastery
+                              ? `Choose ${choiceCount} weapon type${choiceCount === 1 ? "" : "s"}${feature.choices?.swappableOnRest ? " (swap one on a Long Rest)" : ""}.`
+                              : isKnackPool
+                                ? choicePoolHint(feature, choiceCount)
+                                : isUpgradePool
+                                  ? `Choose ${choiceCount} Upgrade${choiceCount === 1 ? "" : "s"}${feature.choices?.swappableOnRest ? " (exchange on level-up per feature rules)" : ""}.`
+                              : feature.choices!.optionsSource === "known_discipline_talents"
+                                ? `Choose ${choiceCount} psionic talent${choiceCount === 1 ? "" : "s"} from your known disciplines.`
+                                : feature.choices!.category
+                            const handleFeatureChoiceChange = (selected: string[]) => {
+                              if (isKnackPool) {
+                                const previous = featureChoicePicks[key] ?? []
+                                const validation = validateKnackSelectionChange({
+                                  abilityScores: effectiveAbilityScores,
+                                  proficientSkills: effectiveSkillProficiencies,
+                                  proficientTools: effectiveToolProficiencies,
+                                  knownLanguages: characterDerived.languages,
+                                  previous,
+                                  next: selected,
+                                  customAbilities,
+                                  classLevel: entry.level,
+                                  knownSpellNames,
+                                  subclassName: subclassForClass?.name ?? null,
+                                })
+                                if (!validation.ok) {
+                                  window.alert(validation.message)
+                                  return
+                                }
+                              }
+                              if (isUpgradePool) {
+                                const validation = validateUpgradeSelectionChange({
+                                  next: selected,
+                                  customAbilities,
+                                  classLevel: entry.level,
+                                })
+                                if (!validation.ok) {
+                                  window.alert(validation.message)
+                                  return
+                                }
+                              }
+                              setFeatureChoicePicks((prev) => ({ ...prev, [key]: selected }))
+                              setModifierPlayerPicks((prev) =>
+                                clearModifierPicksForSource(prev, key),
+                              )
+                            }
+                            return (
+                              <div key={key} className="space-y-2">
+                                {isWeaponMastery ? (
+                                  <WeaponMasteryChoices
+                                    title={withChosenOptionChrome(feature.name, featureChoicePicks[key] ?? [])}
+                                    hint={masteryHint}
+                                    options={choiceOptions}
+                                    maxCount={choiceCount}
+                                    selected={featureChoicePicks[key] ?? []}
+                                    unavailableOptions={[
+                                      ...getTakenSkills(skillPickSources, `feature:${key}`),
+                                    ]}
+                                    onChange={handleFeatureChoiceChange}
+                                    layout={cardViewMode === "cinematic" ? "visual" : "compact"}
+                                    masteryDescriptions={weaponMasteryDescriptions}
+                                    equipmentCatalog={equipment}
+                                  />
+                                ) : (
+                                  <MultiSelectChoices
+                                    title={withChosenOptionChrome(feature.name, featureChoicePicks[key] ?? [])}
+                                    hint={masteryHint}
+                                    options={resolvedChoiceOptions}
+                                    maxCount={choiceCount}
+                                    selected={featureChoicePicks[key] ?? []}
+                                    unavailableOptions={[...getTakenSkills(skillPickSources, `feature:${key}`)]}
+                                    showSkillInfo={
+                                      feature.choices!.category.toLowerCase().includes("skill")
+                                    }
+                                    showOptionInfo={
+                                      !feature.choices!.category.toLowerCase().includes("skill")
+                                    }
+                                    showOptionSummaries={showNamedChoiceSummaries}
+                                    layout={
+                                      feature.choices!.category.toLowerCase().includes("skill")
+                                        ? skillPickerLayout
+                                        : /tool/i.test(
+                                              `${feature.choices!.category} ${feature.name}`,
+                                            ) && cardViewMode === "cinematic"
+                                          ? "visual"
+                                          : compactPickerLayout
+                                    }
+                                    skillIconByName={
+                                      feature.choices!.category.toLowerCase().includes("skill")
+                                        ? customSkillIconByName
+                                        : undefined
+                                    }
+                                    onChange={handleFeatureChoiceChange}
+                                    accentClass="border-accent bg-accent/10"
+                                  />
+                                )}
+                                <ModifierPlayerChoicePanel
+                                  sourceKey={key}
+                                  sourceLabel={`${cls.name}: ${feature.name}`}
+                                  slots={modifierPlayerChoiceSlots}
+                                  picks={modifierPlayerPicks}
+                                  spells={spells}
+                                  excludeKinds={["spell"]}
+                                  unavailableOptions={[...getTakenSkills(skillPickSources)]}
+                                  {...modifierExpertisePickerProps}
+                                  onChange={(slotKey, selected) => {
+                                    const slot = modifierPlayerChoiceSlots.find(
+                                      (entry) => entry.slotKey === slotKey,
+                                    )
+                                    if (!slot) return
+                                    setModifierPlayerPicks((prev) =>
+                                      setModifierPlayerPickValue(
+                                        prev,
+                                        slot,
+                                        modifierPlayerChoiceSlots,
+                                        selected,
+                                      ),
+                                    )
+                                  }}
+                                />
+                              </div>
+                            )
+                          })}
+
+                          {/* Passive class features (Expertise, bonus proficiencies, tool/instrument
+                              choices, etc.) that carry player-choice modifiers but aren't isChoice
+                              features. The panel renders nothing when a feature has no open slots. */}
+                          {(() => {
+                            const eligibleKeys = new Set(
+                              eligibleFeatures.map((f) =>
+                                featureChoiceKey(entry.classId, f.name, f.level),
+                              ),
+                            )
+                            const seen = new Set<string>()
+                            return (cls.features ?? [])
+                              .filter(
+                                (feature) =>
+                                  feature.level <= entry.level &&
+                                  !isClassAbilityFeatureChoice(feature, cls.name) &&
+                                  !classAbilityFeatureKeys.has(
+                                    featureChoiceKey(entry.classId, feature.name, feature.level),
+                                  ) &&
+                                  !eligibleKeys.has(
+                                    featureChoiceKey(entry.classId, feature.name, feature.level),
+                                  ),
+                              )
+                              .map((feature) => {
+                                const key = featureChoiceKey(
+                                  entry.classId,
+                                  feature.name,
+                                  feature.level,
+                                )
+                                if (seen.has(key)) return null
+                                seen.add(key)
+                                return (
+                                  <ModifierPlayerChoicePanel
+                                    key={key}
+                                    sourceKey={key}
+                                    sourceLabel={`${cls.name}: ${feature.name}`}
+                                    slots={modifierPlayerChoiceSlots}
+                                    picks={modifierPlayerPicks}
+                                    spells={spells}
+                                    excludeKinds={["spell"]}
+                                    unavailableOptions={[...getTakenSkills(skillPickSources)]}
+                                    {...modifierExpertisePickerProps}
+                                    onChange={(slotKey, selected) => {
+                                      const slot = modifierPlayerChoiceSlots.find(
+                                        (s) => s.slotKey === slotKey,
+                                      )
+                                      if (!slot) return
+                                      setModifierPlayerPicks((prev) =>
+                                        setModifierPlayerPickValue(
+                                          prev,
+                                          slot,
+                                          modifierPlayerChoiceSlots,
+                                          selected,
+                                        ),
+                                      )
+                                    }}
+                                    accentClass="border-accent bg-accent/10"
+                                  />
+                                )
+                              })
+                          })()}
+                        </div>
+                      )
+                    })}
+                  </BuilderCompletableSection>
+                )}
+
+                {/* Feats granted by class features (ASI / General / Epic Boon — not Metamagic etc.) */}
+                {activeClassLevels.length > 0 && requiredFeatSlots > 0 && (
+                  <BuilderCompletableSection
+                    title="Feats"
+                    description="Choose feats granted by linked common modifiers (Gain a Feat with category filters). Ability-score bonuses apply on later steps. Metamagic, invocations, and similar class ability pools are on the Class Abilities step."
+                    complete={classFeatsSectionComplete}
+                    headingLevel={3}
+                    className="p-4 bg-muted/40 rounded-xl border border-border"
+                    pinnedWhenComplete={
+                      classFeatsSectionComplete ? classFeatsSectionPreview : null
+                    }
+                  >
+                    <div className="mb-2 flex justify-end">
+                      <span className="text-xs font-bold text-muted-foreground">
+                        {selectedFeatCount}/{requiredFeatSlots}
+                      </span>
+                    </div>
+
+                    {featsLoadError && (
+                      <p className="text-xs text-destructive mb-3">
+                        Could not load feats from the database ({featsLoadError}). Run{" "}
+                        <code className="font-mono">npm run db:migrate</code> and refresh the page.
+                      </p>
+                    )}
+                    {!featsLoadError && feats.length === 0 && (
+                      <p className={`${pageFloatingHintClass} text-xs mb-3`}>
+                        No feats in your compendium yet. Seed SRD content from Settings or add feats
+                        in the Compendium.
+                      </p>
+                    )}
+
+                    {regularClassFeatSlots.map((slot) => {
+                      const pickedId = featureChoicePicks[slot.key]?.[0] ?? null
+                      const picked = feats.find((f) => f.id === pickedId) ?? null
+                      const featContext = {
+                        totalLevel,
+                        classIds: activeClassLevels.map((cl) => cl.classId),
+                        feats,
+                        ownedFeatIds,
+                        speciesId: character.species_id,
+                        backgroundId: character.background_id,
+                        currentSlotFeatId: pickedId,
+                        preferredSources: preferredFeatSources,
+                        ...featPrerequisiteStats,
+                        hasFightingStyleAccess,
+                        // Class step is before Abilities — keep score-gated feats (e.g. Grappler) visible.
+                        skipAbilityScorePrerequisites: true,
+                      }
+                      const eligibleFeats = filterPreferredSourceReplacements(
+                        feats.filter((feat) =>
+                          isFeatEligibleForCategories(
+                            feat,
+                            slot.featCategories,
+                            slot.milestoneLevel,
+                            featContext,
+                          ),
+                        ),
+                        preferredFeatSources,
+                      ).sort((a, b) => a.name.localeCompare(b.name))
+
+                      const selectPick = (nextId: string | null) => {
+                        const choiceKey = featChoicePickKey(slot.key)
+                        setFeatureChoicePicks((prev) => ({
+                          ...prev,
+                          [slot.key]: nextId ? [nextId] : [],
+                        }))
+                        setFeatChoicePicks((prev) => {
+                          if (!nextId) {
+                            const next = { ...prev }
+                            delete next[choiceKey]
+                            return next
+                          }
+                          if (prev[choiceKey] && pickedId === nextId) return prev
+                          const next = { ...prev }
+                          delete next[choiceKey]
+                          return next
+                        })
+                        setModifierPlayerPicks((prev) =>
+                          clearModifierPicksForSource(prev, choiceKey),
+                        )
+                      }
+
+                      return (
+                        <div key={slot.key} className="mt-3">
+                          <p className="text-xs font-bold text-primary uppercase mb-2">
+                            {slot.className ? `${slot.className}: ` : ""}
+                            {slot.label}
+                          </p>
+                          <FeatPickGallery
+                            feats={eligibleFeats}
+                            selectedId={pickedId}
+                            onSelect={selectPick}
+                            onShowDetails={(feat) => setDetailsModal({ type: "feat", item: feat })}
+                            layout={cardViewMode}
+                          />
+                          {eligibleFeats.length === 0 && !featsLoadError && feats.length > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              No eligible feats for this slot.
+                            </p>
+                          )}
+                          {picked && (
+                            <p className="text-xs text-muted-foreground mt-2">
+                              Selected:{" "}
+                              <span className="font-semibold text-foreground">{picked.name}</span>
+                            </p>
+                          )}
+                          {picked && isAsiFeat(picked) && (
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                              Allocate ability increases on the Abilities step.
+                            </p>
+                          )}
+                          {picked?.isChoice && (picked.choices?.options?.length || picked.choices?.optionsSource) ? (
+                            <div className="mt-3">
+                              <FeatModifierChoicePicker
+                                entry={{
+                                  featId: picked.id,
+                                  choicePickKey: featChoicePickKey(slot.key),
+                                }}
+                                feat={picked}
+                                choiceOptionContext={featChoiceOptionContext}
+                                selected={featChoicePicks[featChoicePickKey(slot.key)] ?? []}
+                                onChange={(selected) => {
+                                  const choiceKey = featChoicePickKey(slot.key)
+                                  setFeatChoicePicks((prev) => ({
+                                    ...prev,
+                                    [choiceKey]: selected,
+                                  }))
+                                  setModifierPlayerPicks((prev) =>
+                                    clearModifierPicksForSource(prev, choiceKey),
+                                  )
+                                }}
+                                layout={compactPickerLayout}
+                              />
+                            </div>
+                          ) : null}
+                          {pickedId && picked ? (
+                            <ModifierPlayerChoicePanel
+                              sourceKey={featChoicePickKey(slot.key)}
+                              sourceLabel={picked.name}
+                              slots={modifierPlayerChoiceSlots}
+                              picks={modifierPlayerPicks}
+                              spells={spells}
+                              unavailableOptions={[...getTakenSkills(skillPickSources)]}
+                              {...modifierExpertisePickerProps}
+                              onChange={(slotKey, selected) => {
+                                const slotEntry = modifierPlayerChoiceSlots.find(
+                                  (entry) => entry.slotKey === slotKey,
+                                )
+                                if (!slotEntry) return
+                                setModifierPlayerPicks((prev) =>
+                                  setModifierPlayerPickValue(
+                                    prev,
+                                    slotEntry,
+                                    modifierPlayerChoiceSlots,
+                                    selected,
+                                  ),
+                                )
+                              }}
+                            />
+                          ) : null}
+                        </div>
+                      )
+                    })}
+
+                    {selectedFeatCount !== requiredFeatSlots && (
+                      <p className="text-xs text-destructive mt-3">
+                        Select {requiredFeatSlots - selectedFeatCount} more feat
+                        {requiredFeatSlots - selectedFeatCount === 1 ? "" : "s"} to continue.
+                      </p>
+                    )}
+                  </BuilderCompletableSection>
+                )}
+              </div>
+            )}
+
+            {/* Class Abilities (Metamagic, Invocations, disciplines/talents, knacks, etc.) */}
+            {currentStep === BUILDER_STEP_IDS.CLASS_ABILITIES && hasClassAbilityStep && (
+              <ClassAbilitiesStepPanel
+                pageFloatingHintClass={pageFloatingHintClass}
+                abilityFeatures={classAbilityFeatures}
+                featureChoicePicks={featureChoicePicks}
+                setFeatureChoicePicks={setFeatureChoicePicks}
+                setFeatChoicePicks={setFeatChoicePicks}
+                setModifierPlayerPicks={setModifierPlayerPicks}
+                customAbilities={customAbilities}
+                equipment={equipment}
+                knownSpellNames={knownSpellNames}
+                grantedCustomAbilityNames={aggregatedCharacteristics.grantedCustomAbilityNames}
+                featChoicePicks={featChoicePicks}
+                featureChoiceCountBonuses={aggregatedCharacteristics.featureChoiceCountBonuses}
+                featureChoiceOptionGrants={aggregatedCharacteristics.featureChoiceOptionGrants}
+                compactPickerLayout={compactPickerLayout}
+                skillPickerLayout={skillPickerLayout}
+                cardViewMode={cardViewMode}
+                weaponMasteryDescriptions={weaponMasteryDescriptions}
+                skillPickSources={skillPickSources}
+                customSkillIconByName={customSkillIconByName}
+                modifierPlayerChoiceSlots={modifierPlayerChoiceSlots}
+                modifierPlayerPicks={modifierPlayerPicks}
+                spells={spells}
+                featChoiceOptionContext={featChoiceOptionContext}
+                modifierExpertisePickerProps={modifierExpertisePickerProps}
+                classCatalogFeatGroups={classCatalogFeatGroups}
+                classAbilityRegularFeatSlots={classAbilityRegularFeatSlots}
+                feats={feats}
+                featsLoadError={featsLoadError}
+                hasCatalogFeatPickOptions={hasCatalogFeatPickOptions}
+                totalLevel={totalLevel}
+                classIds={activeClassLevels.map((cl) => cl.classId)}
+                ownedFeatIds={ownedFeatIds}
+                speciesId={character.species_id}
+                backgroundId={character.background_id}
+                speciesCatalog={featPrerequisiteStats.speciesCatalog}
+                classCatalog={featPrerequisiteStats.classCatalog}
+                backgroundCatalog={featPrerequisiteStats.backgroundCatalog}
+                preferredFeatSources={preferredFeatSources}
+                armorProficiencies={featPrerequisiteStats.armorProficiencies}
+                abilityScores={featPrerequisiteStats.abilityScores}
+                onShowFeatDetails={(feat) => setDetailsModal({ type: "feat", item: feat })}
+                selectedClassAbilityFeatCount={selectedClassAbilityFeatCount}
+                requiredClassAbilityFeatSlots={requiredClassAbilityFeatSlots}
+                skillPickSourcesTaken={[...getTakenSkills(skillPickSources)]}
+              />
+            )}
+
+            {/* Step 2: Origin (Species + Background) */}
+            {currentStep === 2 && (
+              <div id="builder-origin-species" className="space-y-6">
+                <BuilderCompletableSection
+                  title="Choose Your Species"
+                  description="Your species grants unique traits and abilities."
+                  complete={speciesPickerComplete}
+                  summary={selectedSpecies?.name}
+                  pinnedWhenComplete={
+                    selectedSpecies ? (
+                      <BuilderSelectedCatalogItem
+                        item={selectedSpecies}
+                        cardViewMode={cardViewMode}
+                        portrait={useCinematicPortraitCards}
+                        onLearnMore={() =>
+                          setDetailsModal({ type: "species", item: selectedSpecies })
+                        }
+                      />
+                    ) : null
+                  }
+                >
+                  
+                  {/* Search + source filter */}
+                  <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <SearchBox
+                      value={speciesSearch}
+                      onChange={setSpeciesSearch}
+                      suggestions={rankSearchResults(
+                        species.filter(
+                          (item) =>
+                            speciesSourceFilter === "all" ||
+                            (item.source?.trim() || "Custom") === speciesSourceFilter,
+                        ),
+                        deferredSpeciesSearch,
+                        {
+                          name: (item) => item.name,
+                          fields: [
+                            { name: "description", value: (item) => item.description, weight: 0.35 },
+                            { name: "source", value: (item) => item.source },
+                            { name: "creature type", value: (item) => item.creature_type, weight: 1.3 },
+                          ],
+                          limit: 8,
+                        },
+                      ).map((match) => ({
+                        id: match.item.id,
+                        label: match.item.name,
+                        detail: [match.item.creature_type, match.item.source]
+                          .filter(Boolean)
+                          .join(" · "),
+                        item: match.item,
+                        matchKind: match.kind,
+                      }))}
+                      onSelect={(suggestion) => setSpeciesSearch(suggestion.label)}
+                      scope="builder:species"
+                      placeholder="Search species…"
+                      ariaLabel="Search species"
+                      className="flex-1"
+                      inputClassName="border"
+                    />
+                    {(() => {
+                      const sourceOptions = [
+                        ...new Set(
+                          species.map((item) => item.source?.trim() || "Custom").filter(Boolean),
+                        ),
+                      ].sort((a, b) => a.localeCompare(b))
+                      if (sourceOptions.length <= 1) return null
+                      return (
+                        <div className="flex shrink-0 items-center gap-2">
+                          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+                            Source
+                          </label>
+                          <select
+                            value={speciesSourceFilter}
+                            onChange={(e) => setSpeciesSourceFilter(e.target.value)}
+                            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none max-w-[14rem] w-full sm:w-auto"
+                            aria-label="Filter species by source"
+                          >
+                            <option value="all">All sources</option>
+                            {sourceOptions.map((source) => (
+                              <option key={source} value={source}>
+                                {source}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                  
+                  {(() => {
+                    const sourceFilteredSpecies = species.filter(
+                      (item) =>
+                        !(
+                          speciesSourceFilter !== "all" &&
+                          (item.source?.trim() || "Custom") !== speciesSourceFilter
+                        ),
+                    )
+                    const filteredSpecies = searchItems(sourceFilteredSpecies, deferredSpeciesSearch, {
+                      name: (item) => item.name,
+                      fields: [
+                        { name: "description", value: (item) => item.description, weight: 0.35 },
+                        { name: "source", value: (item) => item.source },
+                        { name: "creature type", value: (item) => item.creature_type },
+                      ],
+                    })
+                    const {
+                      items: visibleSpecies,
+                      pageCount: speciesPageCount,
+                      safePage: safeSpeciesPage,
+                    } = paginateList(filteredSpecies, speciesPickerPage, pickerPageSize)
+                    const speciesToShow = useSwipeVisualPicker ? filteredSpecies : visibleSpecies
+
+                    if (species.length === 0) {
+                      return <BuilderCatalogEmptyPrompt itemLabel="species" tab="species" />
+                    }
+
+                    if (speciesToShow.length === 0) {
+                      return (
+                        <p className="rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+                          No species match your search or source filter.
+                        </p>
+                      )
+                    }
+
+                    return (
+                      <>
+                        <SwipeVisualPicker enabled={useSwipeVisualPicker} className={pickerGridClass}>
+                          {speciesToShow.map((sp) => {
+                        const accent = getCompendiumItemAccentColor(sp as unknown as Record<string, unknown>)
+                        const isSelected = character.species_id === sp.id
+                        const selectSpecies = () => {
+                          const deselecting = character.species_id === sp.id
+                          const nextId = deselecting ? null : sp.id
+                          const nextSize = deselecting
+                            ? null
+                            : (sp.size_options?.[0] ?? sp.size ?? null)
+                          setCharacter({ ...character, species_id: nextId, size: nextSize })
+                          setSpeciesTraitPicks({})
+                          setFeatureChoicePicks((prev) => {
+                            const next = { ...prev }
+                            for (const key of Object.keys(next)) {
+                              if (key.startsWith("species:")) delete next[key]
+                            }
+                            return next
+                          })
+                        }
+                        if (cardViewMode === "dense") {
+                          return (
+                            <CompendiumDenseSelectionCard
+                        key={sp.id}
+                              name={sp.name}
+                              subtitle={sp.source || "Custom"}
+                              icon={sp.icon}
+                              accentColor={accent}
+                              selected={isSelected}
+                              onSelect={selectSpecies}
+                                onLearnMore={() => setDetailsModal({ type: "species", item: sp })}
+                            />
+                          )
+                        }
+                        return (
+                      <CompendiumSelectionCard
+                        key={sp.id}
+                        item={sp}
+                        subtitle={sp.source || "Custom"}
+                        accentColor={accent}
+                        selected={isSelected}
+                        size="md"
+                        cardShape={useCinematicPortraitCards ? "portrait" : "wide"}
+                        imageCrop="top"
+                        onSelect={selectSpecies}
+                        onLearnMore={() => setDetailsModal({ type: "species", item: sp })}
+                        showBlurb={false}
+                      />
+                        )
+                      })}
+                        </SwipeVisualPicker>
+                        <PickerGridPagination
+                          page={safeSpeciesPage}
+                          pageCount={speciesPageCount}
+                          onPrevious={() => setSpeciesPickerPage((p) => Math.max(0, p - 1))}
+                          onNext={() =>
+                            setSpeciesPickerPage((p) => Math.min(speciesPageCount - 1, p + 1))
+                          }
+                          previousLabel="Previous species"
+                          nextLabel="Next species"
+                          className={cinematicPickerPaginationClass}
+                        />
+                      </>
+                    )
+                  })()}
+                </BuilderCompletableSection>
+
+                  {hasSpeciesOptionsSection && selectedSpecies ? (
+                    <BuilderCompletableSection
+                      title="Species Options"
+                      complete={speciesOptionsSectionComplete}
+                      headingLevel={3}
+                      pinnedWhenComplete={
+                        speciesOptionsSectionComplete ? speciesOptionsSectionPreview : null
+                      }
+                    >
+                      {duplicateOriginFeatNames.length > 0 ? (
+                        <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                          {duplicateOriginFeatBlockers[0]}
+                        </p>
+                      ) : null}
+                      {(selectedSpecies.size_options?.length ?? 0) > 1 && (
+                        <div className="mb-2">
+                          <p className="text-sm font-semibold text-foreground mb-1">Size</p>
+                          <div className="flex flex-wrap gap-2">
+                            {selectedSpecies.size_options!.map((sizeOption) => {
+                              const isSelected =
+                                (character.size ?? selectedSpecies.size) === sizeOption
+                              return (
+                                <button
+                                  key={sizeOption}
+                                  type="button"
+                                  onClick={() =>
+                                    setCharacter((prev) => ({ ...prev, size: sizeOption }))
+                                  }
+                                  className={`px-4 py-2 rounded-lg border-2 text-sm font-semibold transition-all ${
+                                    isSelected
+                                      ? "border-secondary bg-secondary/10 text-foreground"
+                                      : "border-border bg-card text-muted-foreground hover:border-secondary/50"
+                                  }`}
+                                >
+                                  {sizeOption}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {(selectedSpecies.traits ?? []).map((trait, index) => {
+                        if (!trait.isChoice || !(trait.choices?.options?.length ?? 0)) return null
+                        // Size is handled by the dedicated size_options picker above.
+                        if (
+                          (selectedSpecies.size_options?.length ?? 0) > 1 &&
+                          isSpeciesSizeChoiceTrait(trait)
+                        ) {
+                          return null
+                        }
+                        const choices = trait.choices!
+                        const traitKey = speciesTraitPickKey(trait, index)
+                        const traitOptions = choices.options.map((option) => ({
+                          ...option,
+                          description: resolveChoiceOptionDescription(option, trait.description),
+                        }))
+                        const showNamedChoiceSummaries = shouldShowNamedChoiceSummaries({
+                          options: traitOptions,
+                        })
+                        return (
+                          <MultiSelectChoices
+                            key={`${selectedSpecies.id}-${traitKey}`}
+                            title={trait.name}
+                            hint={choices.category}
+                            options={traitOptions}
+                            maxCount={choices.count}
+                            selected={resolveSpeciesTraitPicks(speciesTraitPicks, trait, index)}
+                            unavailableOptions={[
+                              ...getTakenSkills(skillPickSources, `species:${index}`),
+                            ]}
+                            onChange={(selected) =>
+                              setSpeciesTraitPicks((prev) => {
+                                const next = { ...prev, [traitKey]: selected }
+                                delete next[String(index)]
+                                return next
+                              })
+                            }
+                            accentClass="border-secondary bg-secondary/10"
+                            layout={compactPickerLayout}
+                            showOptionInfo={showNamedChoiceSummaries}
+                            showOptionSummaries={showNamedChoiceSummaries}
+                          />
+                        )
+                      })}
+                      {(() => {
+                        const onSpeciesModifierChange = (slotKey: string, selected: string[]) => {
+                          const slot = modifierPlayerChoiceSlots.find(
+                            (entry) => entry.slotKey === slotKey,
+                          )
+                          if (!slot) return
+                          setModifierPlayerPicks((prev) =>
+                            setModifierPlayerPickValue(
+                              prev,
+                              slot,
+                              modifierPlayerChoiceSlots,
+                              selected,
+                            ),
+                          )
+                        }
+                        return (
+                          <>
+                            <ModifierPlayerChoicePanel
+                              sourceKey={speciesModsSourceKey(selectedSpecies.id)}
+                              sourceLabel={selectedSpecies.name}
+                              slots={modifierPlayerChoiceSlots}
+                              picks={modifierPlayerPicks}
+                              spells={spells}
+                              accentClass="border-secondary bg-secondary/10"
+                              unavailableOptions={[
+                                ...getTakenSkills(skillPickSources, "species:mods"),
+                              ]}
+                              {...modifierExpertisePickerProps}
+                              onChange={onSpeciesModifierChange}
+                            />
+                            {(selectedSpecies.traits ?? []).map((trait, index) => (
+                              <ModifierPlayerChoicePanel
+                                key={`species-mod-${selectedSpecies.id}-${index}`}
+                                sourceKey={speciesTraitSourceKey(selectedSpecies.id, index)}
+                                sourceLabel={trait.name}
+                                slots={modifierPlayerChoiceSlots}
+                                picks={modifierPlayerPicks}
+                                spells={spells}
+                                accentClass="border-secondary bg-secondary/10"
+                                unavailableOptions={[
+                                  ...getTakenSkills(skillPickSources, `species:trait:${index}`),
+                                ]}
+                                {...modifierExpertisePickerProps}
+                                onChange={onSpeciesModifierChange}
+                              />
+                            ))}
+                          </>
+                        )
+                      })()}
+                      {speciesFeatPickSlots.map((slot) => {
+                        const pickedId = featureChoicePicks[slot.key]?.[0] ?? null
+                        const picked = feats.find((f) => f.id === pickedId) ?? null
+                        const featContext = {
+                          totalLevel,
+                          classIds: activeClassLevels.map((cl) => cl.classId),
+                          feats,
+                          ownedFeatIds,
+                          speciesId: character.species_id,
+                          backgroundId: character.background_id,
+                          currentSlotFeatId: pickedId,
+                          preferredSources: preferredFeatSources,
+                          ...featPrerequisiteStats,
+                          hasFightingStyleAccess,
+                        }
+                        const eligible = filterPreferredSourceReplacements(
+                          feats.filter((feat) =>
+                            isFeatEligibleForCategories(
+                              feat,
+                              slot.featCategories,
+                              1,
+                              featContext,
+                            ),
+                          ),
+                          preferredFeatSources,
+                        ).sort((a, b) => a.name.localeCompare(b.name))
+
+                        return (
+                          <div key={slot.key} className="mt-3">
+                            <p className="text-xs font-bold text-secondary uppercase mb-2">
+                              {slot.label}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {eligible.map((feat) => {
+                                const isSelected = feat.id === pickedId
+                                const isDuplicate = duplicateOriginFeatNames.some(
+                                  (name) =>
+                                    name.trim().toLowerCase() ===
+                                    feat.name.trim().toLowerCase(),
+                                )
+                                return (
+                                  <BuilderFeatChoiceButton
+                                    key={feat.id}
+                                    feat={feat}
+                                    selected={isSelected}
+                                    selectedClassName={
+                                      isDuplicate
+                                        ? "border-destructive bg-destructive/15 ring-1 ring-destructive/40"
+                                        : "border-secondary bg-secondary/10"
+                                    }
+                                    nameClassName={`font-semibold text-sm ${
+                                      isSelected && isDuplicate
+                                        ? "text-destructive"
+                                        : "text-foreground"
+                                    }`}
+                                    onSelect={() => {
+                                      const choiceKey = featChoicePickKey(slot.key)
+                                      setFeatureChoicePicks((prev) => ({
+                                        ...prev,
+                                        [slot.key]: isSelected ? [] : [feat.id],
+                                      }))
+                                      setFeatChoicePicks((prev) => {
+                                        const next = { ...prev }
+                                        delete next[choiceKey]
+                                        return next
+                                      })
+                                      setModifierPlayerPicks((prev) =>
+                                        clearModifierPicksForSource(prev, choiceKey),
+                                      )
+                                    }}
+                                    onShowDetails={(item) =>
+                                      setDetailsModal({ type: "feat", item })
+                                    }
+                                  >
+                                    {(feat.level_requirement && feat.level_requirement > 1) ||
+                                    feat.repeatable ? (
+                                      <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                                        {feat.level_requirement &&
+                                        feat.level_requirement > 1 ? (
+                                          <span>Lvl {feat.level_requirement}+</span>
+                                        ) : null}
+                                        {feat.repeatable ? (
+                                          <span className="text-primary">Repeatable</span>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </BuilderFeatChoiceButton>
+                                )
+                              })}
+                            </div>
+                            {eligible.length === 0 && feats.length > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                No eligible feats for this choice.
+                              </p>
+                            )}
+                            {picked && (
+                              <p className="text-xs text-muted-foreground mt-2">
+                                Selected:{" "}
+                                <span className="font-semibold text-foreground">{picked.name}</span>
+                              </p>
+                            )}
+                            {picked?.isChoice && (picked.choices?.options?.length || picked.choices?.optionsSource) ? (
+                              <div className="mt-3">
+                                <FeatModifierChoicePicker
+                                  entry={{
+                                    featId: picked.id,
+                                    choicePickKey: featChoicePickKey(slot.key),
+                                  }}
+                                  feat={picked}
+                                  choiceOptionContext={featChoiceOptionContext}
+                                  selected={featChoicePicks[featChoicePickKey(slot.key)] ?? []}
+                                  onChange={(selected) => {
+                                    const choiceKey = featChoicePickKey(slot.key)
+                                    setFeatChoicePicks((prev) => ({
+                                      ...prev,
+                                      [choiceKey]: selected,
+                                    }))
+                                    setModifierPlayerPicks((prev) =>
+                                      clearModifierPicksForSource(prev, choiceKey),
+                                    )
+                                  }}
+                                  layout={compactPickerLayout}
+                                />
+                              </div>
+                            ) : null}
+                            {picked ? (
+                              <ModifierPlayerChoicePanel
+                                sourceKey={featChoicePickKey(slot.key)}
+                                sourceLabel={picked.name}
+                                slots={modifierPlayerChoiceSlots}
+                                picks={modifierPlayerPicks}
+                                spells={spells}
+                                {...modifierExpertisePickerProps}
+                                onChange={(slotKey, selected) => {
+                                  const slot = modifierPlayerChoiceSlots.find(
+                                    (entry) => entry.slotKey === slotKey,
+                                  )
+                                  if (!slot) return
+                                  setModifierPlayerPicks((prev) =>
+                                    setModifierPlayerPickValue(
+                                      prev,
+                                      slot,
+                                      modifierPlayerChoiceSlots,
+                                      selected,
+                                    ),
+                                  )
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </BuilderCompletableSection>
+                  ) : null}
+
+                <BuilderCompletableSection
+                  title="Choose Your Background"
+                  description="Your background provides ability bonuses and a 1st-level feat."
+                  complete={backgroundPickerComplete}
+                  summary={selectedBackground?.name}
+                  pinnedWhenComplete={
+                    selectedBackground ? (
+                      <BuilderSelectedCatalogItem
+                        item={selectedBackground}
+                        cardViewMode={cardViewMode}
+                        portrait={false}
+                        onLearnMore={() =>
+                          setDetailsModal({ type: "background", item: selectedBackground })
+                        }
+                      />
+                    ) : null
+                  }
+                >
+                  
+                  {/* Search + source filter */}
+                  <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <SearchBox
+                      value={backgroundSearch}
+                      onChange={setBackgroundSearch}
+                      suggestions={rankSearchResults(backgrounds, deferredBackgroundSearch, {
+                        name: (item) => item.name,
+                        fields: [
+                          { name: "description", value: (item) => item.description, weight: 0.35 },
+                          { name: "source", value: (item) => item.source },
+                          { name: "skills", value: (item) => item.skill_proficiencies, weight: 1.2 },
+                          { name: "feat", value: (item) => item.feat_granted, weight: 1.1 },
+                        ],
+                        limit: 8,
+                      }).map((match) => ({
+                        id: match.item.id,
+                        label: match.item.name,
+                        detail: [match.item.feat_granted, match.item.source].filter(Boolean).join(" · "),
+                        item: match.item,
+                        matchKind: match.kind,
+                      }))}
+                      onSelect={(suggestion) => setBackgroundSearch(suggestion.label)}
+                      scope="builder:backgrounds"
+                      placeholder="Search backgrounds…"
+                      ariaLabel="Search backgrounds"
+                      className="flex-1"
+                      inputClassName="border"
+                    />
+                    {(() => {
+                      const sourceOptions = [
+                        ...new Set(
+                          backgrounds.map((bg) => bg.source?.trim() || "Custom").filter(Boolean),
+                        ),
+                      ].sort((a, b) => a.localeCompare(b))
+                      if (sourceOptions.length <= 1) return null
+                      return (
+                        <div className="flex shrink-0 items-center gap-2">
+                          <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+                            Source
+                          </label>
+                          <select
+                            value={backgroundSourceFilter}
+                            onChange={(e) => setBackgroundSourceFilter(e.target.value)}
+                            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none max-w-[14rem]"
+                            aria-label="Filter backgrounds by source"
+                          >
+                            <option value="all">All sources</option>
+                            {sourceOptions.map((source) => (
+                              <option key={source} value={source}>
+                                {source}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                  
+                  {(() => {
+                    const sourceFilteredBackgrounds = backgrounds.filter(
+                      (bg) =>
+                        !(
+                        backgroundSourceFilter !== "all" &&
+                        (bg.source?.trim() || "Custom") !== backgroundSourceFilter
+                        ),
+                    )
+                    const filteredBackgrounds = searchItems(
+                      sourceFilteredBackgrounds,
+                      deferredBackgroundSearch,
+                      {
+                        name: (item) => item.name,
+                        fields: [
+                          { name: "description", value: (item) => item.description, weight: 0.35 },
+                          { name: "source", value: (item) => item.source },
+                          { name: "skills", value: (item) => item.skill_proficiencies },
+                          { name: "feat", value: (item) => item.feat_granted },
+                        ],
+                      },
+                    )
+                    const {
+                      items: visibleBackgrounds,
+                      pageCount: backgroundPageCount,
+                      safePage: safeBackgroundPage,
+                    } = paginateList(filteredBackgrounds, backgroundPickerPage, backgroundPickerPageSize)
+
+                    if (backgrounds.length === 0) {
+                      return <BuilderCatalogEmptyPrompt itemLabel="backgrounds" tab="backgrounds" />
+                    }
+
+                    if (visibleBackgrounds.length === 0) {
+                      return (
+                        <p className="rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+                          No backgrounds match your search or source filter.
+                        </p>
+                      )
+                    }
+
+                    return (
+                      <>
+                        <PickerGridPagination
+                          page={safeBackgroundPage}
+                          pageCount={backgroundPageCount}
+                          onPrevious={() => setBackgroundPickerPage((p) => Math.max(0, p - 1))}
+                          onNext={() =>
+                            setBackgroundPickerPage((p) => Math.min(backgroundPageCount - 1, p + 1))
+                          }
+                          previousLabel="Previous backgrounds"
+                          nextLabel="Next backgrounds"
+                          className={cn("mb-2 mt-0", cinematicPickerPaginationClass)}
+                        />
+                        <SwipeVisualPicker enabled={useSwipeVisualPicker} className={backgroundPickerGridClass}>
+                          {visibleBackgrounds.map((bg) => {
+                        const accent = getCompendiumItemAccentColor(bg as unknown as Record<string, unknown>)
+                        const isSelected = character.background_id === bg.id
+                        const selectBackground = () => {
+                          const nextId = character.background_id === bg.id ? null : bg.id
+                          const nextBg = nextId ? backgrounds.find((b) => b.id === nextId) : null
+                          setCharacter((prev) => {
+                            let next: CharacterDraft = { ...prev, background_id: nextId }
+                            if (nextBg) {
+                              next = applyBackgroundProficienciesToDraft(next, nextBg)
+                            } else {
+                              next = {
+                                ...next,
+                                tool_proficiencies: [],
+                                weapon_proficiencies: [],
+                                armor_proficiencies: [],
+                              }
+                            }
+                            return next
+                          })
+                          setBackgroundStartingEquipmentOptionIndex(null)
+                          setFeatureChoicePicks((prev) => {
+                            const next: Record<string, string[]> = {}
+                            for (const [key, picks] of Object.entries(prev)) {
+                              if (!key.startsWith("background:")) {
+                                next[key] = picks
+                              }
+                            }
+                            return next
+                          })
+                          setFeatChoicePicks((prev) => {
+                            const next = { ...prev }
+                            for (const key of Object.keys(next)) {
+                              if (key.startsWith("feat:granted:")) delete next[key]
+                            }
+                            return next
+                          })
+                          setModifierPlayerPicks((prev) => {
+                            const next = { ...prev }
+                            for (const key of Object.keys(next)) {
+                              if (
+                                key.startsWith("background:") ||
+                                key.startsWith("feat:granted:")
+                              ) {
+                                delete next[key]
+                              }
+                            }
+                            return next
+                          })
+                          setAsiAllocationsByFeatId((prev) => {
+                            if (!nextId) {
+                              const { [BACKGROUND_ASI_KEY]: _, ...rest } = prev
+                              return rest
+                            }
+                            return { ...prev, [BACKGROUND_ASI_KEY]: {} }
+                          })
+                        }
+                        if (cardViewMode === "dense") {
+                          return (
+                            <CompendiumDenseSelectionCard
+                        key={bg.id}
+                              name={bg.name}
+                              subtitle={bg.source || "Custom"}
+                              icon={bg.icon}
+                              accentColor={accent}
+                              selected={isSelected}
+                              onSelect={selectBackground}
+                                onLearnMore={() => setDetailsModal({ type: "background", item: bg })}
+                            />
+                          )
+                        }
+                        return (
+                      <CompendiumSelectionCard
+                        key={bg.id}
+                        item={bg}
+                        subtitle={bg.source || "Custom"}
+                        accentColor={accent}
+                        selected={isSelected}
+                        size="md"
+                        imageAspect="21/9"
+                        onSelect={selectBackground}
+                        onLearnMore={() => setDetailsModal({ type: "background", item: bg })}
+                        showBlurb={false}
+                      />
+                        )
+                      })}
+                        </SwipeVisualPicker>
+                        <PickerGridPagination
+                          page={safeBackgroundPage}
+                          pageCount={backgroundPageCount}
+                          onPrevious={() => setBackgroundPickerPage((p) => Math.max(0, p - 1))}
+                          onNext={() =>
+                            setBackgroundPickerPage((p) => Math.min(backgroundPageCount - 1, p + 1))
+                          }
+                          previousLabel="Previous backgrounds"
+                          nextLabel="Next backgrounds"
+                          className={cinematicPickerPaginationClass}
+                        />
+                      </>
+                    )
+                  })()}
+                </BuilderCompletableSection>
+
+                  {hasBackgroundOptionsSection && selectedBackground ? (
+                    <BuilderCompletableSection
+                      title="Background Options"
+                      complete={backgroundOptionsSectionComplete}
+                      headingLevel={3}
+                      pinnedWhenComplete={
+                        backgroundOptionsSectionComplete ? backgroundOptionsSectionPreview : null
+                      }
+                    >
+                      {duplicateOriginFeatNames.length > 0 ? (
+                        <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                          {duplicateOriginFeatBlockers[0]}
+                        </p>
+                      ) : null}
+                    <ModifierPlayerChoicePanel
+                      sourceKey={backgroundFeatureModsSourceKey(selectedBackground.id)}
+                      sourceLabel={selectedBackground.name}
+                      slots={modifierPlayerChoiceSlots}
+                      picks={modifierPlayerPicks}
+                      spells={spells}
+                      excludeKinds={["spell"]}
+                      accentClass="border-accent bg-accent/10"
+                      unavailableOptions={[...getTakenSkills(skillPickSources)]}
+                      {...modifierExpertisePickerProps}
+                      onChange={(slotKey, selected) => {
+                        const slot = modifierPlayerChoiceSlots.find(
+                          (entry) => entry.slotKey === slotKey,
+                        )
+                        if (!slot) return
+                        setModifierPlayerPicks((prev) =>
+                          setModifierPlayerPickValue(
+                            prev,
+                            slot,
+                            modifierPlayerChoiceSlots,
+                            selected,
+                          ),
+                        )
+                      }}
+                    />
+
+                  {backgroundGrantedFeat && backgroundFeatPickSlots.length === 0 ? (
+                    <div className="mt-4 space-y-2 border-t border-border pt-4">
+                      <BuilderSelectedChoiceChips
+                        title="Feat"
+                        names={[backgroundGrantedFeat.name]}
+                        layout={skillPickerLayout}
+                        showSkillIcons
+                        skillIconByName={{
+                          ...customSkillIconByName,
+                          [backgroundGrantedFeat.name]: getCompendiumItemIcon(
+                            "feats",
+                            backgroundGrantedFeat as unknown as Record<string, unknown>,
+                          ),
+                        }}
+                        accentClass="border-accent bg-accent/10"
+                        errorNames={duplicateOriginFeatNames}
+                      />
+                      {duplicateOriginFeatNames.some(
+                        (name) =>
+                          name.trim().toLowerCase() ===
+                          backgroundGrantedFeat.name.trim().toLowerCase(),
+                      ) ? (
+                        <p className="text-xs text-muted-foreground">
+                          This background always grants {backgroundGrantedFeat.name}. Change your
+                          species feat (or pick a different background) to continue.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {isLegacyBackground(selectedBackground) ? (
+                    <div className="mt-4 space-y-2 border-t border-border pt-4">
+                      <h3 className="text-lg font-bold text-foreground">Background Origin Feat</h3>
+                      <p className="text-sm text-muted-foreground">
+                        This background predates fixed Origin feats — choose any 1st-level Origin feat.
+                      </p>
+                      <OriginFeatGrantedSelect
+                        value={
+                          featureChoicePicks[
+                            legacyBackgroundOriginFeatPickKey(selectedBackground.id)
+                          ]?.[0] ?? ""
+                        }
+                        originFeats={originFeats}
+                        onChange={(value) => {
+                          const pickKey = legacyBackgroundOriginFeatPickKey(selectedBackground.id)
+                          setFeatureChoicePicks((prev) => ({
+                            ...prev,
+                            [pickKey]: value ? [value] : [],
+                          }))
+                          setFeatChoicePicks((prev) => {
+                            const next = { ...prev }
+                            for (const key of Object.keys(next)) {
+                              if (key.startsWith("feat:granted:")) delete next[key]
+                            }
+                            return next
+                          })
+                          setModifierPlayerPicks((prev) => {
+                            const next = { ...prev }
+                            for (const key of Object.keys(next)) {
+                              if (key.startsWith("feat:granted:") || key.startsWith("background:")) {
+                                delete next[key]
+                              }
+                            }
+                            return next
+                          })
+                        }}
+                      />
+                    </div>
+                  ) : null}
+
+                  {backgroundFeatPickSlots.length > 0 ? (
+                    <div className="mt-4 space-y-2 border-t border-border pt-4">
+                      <h3 className="text-lg font-bold text-foreground">Background Feat</h3>
+                      {backgroundFeatPickSlots.map((slot) => {
+                        const pickedId = featureChoicePicks[slot.key]?.[0] ?? null
+                        const picked = feats.find((f) => f.id === pickedId) ?? null
+                        const featContext = {
+                          totalLevel,
+                          classIds: activeClassLevels.map((cl) => cl.classId),
+                          feats,
+                          ownedFeatIds,
+                          speciesId: character.species_id,
+                          backgroundId: character.background_id,
+                          currentSlotFeatId: pickedId,
+                          preferredSources: preferredFeatSources,
+                          ...featPrerequisiteStats,
+                          hasFightingStyleAccess,
+                        }
+                        const eligible = filterPreferredSourceReplacements(
+                          feats.filter((feat) =>
+                            isFeatEligibleForCategories(
+                              feat,
+                              slot.featCategories,
+                              1,
+                              featContext,
+                              slot.alsoFeatNames ?? [],
+                            ),
+                          ),
+                          preferredFeatSources,
+                        ).sort((a, b) => a.name.localeCompare(b.name))
+
+                        return (
+                          <div key={slot.key} className="mt-3">
+                            <p className="text-xs font-bold text-accent uppercase mb-2">
+                              {slot.label}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {eligible.map((feat) => {
+                                const isSelected = feat.id === pickedId
+                                const isDuplicate = duplicateOriginFeatNames.some(
+                                  (name) =>
+                                    name.trim().toLowerCase() ===
+                                    feat.name.trim().toLowerCase(),
+                                )
+                                return (
+                                  <BuilderFeatChoiceButton
+                                    key={feat.id}
+                                    feat={feat}
+                                    selected={isSelected}
+                                    compact
+                                    showPrerequisite
+                                    selectedClassName={
+                                      isDuplicate
+                                        ? "border-destructive bg-destructive/15 ring-1 ring-destructive/40"
+                                        : "border-accent bg-accent/10"
+                                    }
+                                    unselectedClassName="border-border bg-card hover:border-accent/50"
+                                    nameClassName={`font-semibold text-xs ${
+                                      isSelected && isDuplicate
+                                        ? "text-destructive"
+                                        : "text-foreground"
+                                    }`}
+                                    onSelect={() => {
+                                      const choiceKey = featChoicePickKey(slot.key)
+                                      setFeatureChoicePicks((prev) => ({
+                                        ...prev,
+                                        [slot.key]: isSelected ? [] : [feat.id],
+                                      }))
+                                      setFeatChoicePicks((prev) => {
+                                        const next = { ...prev }
+                                        delete next[choiceKey]
+                                        return next
+                                      })
+                                      setModifierPlayerPicks((prev) =>
+                                        clearModifierPicksForSource(prev, choiceKey),
+                                      )
+                                    }}
+                                    onShowDetails={(item) =>
+                                      setDetailsModal({ type: "feat", item })
+                                    }
+                                  />
+                                )
+                              })}
+                            </div>
+                            {eligible.length === 0 && feats.length > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                No eligible feats for this choice.
+                              </p>
+                            )}
+                            {picked && (
+                              <p className="text-xs text-muted-foreground mt-2">
+                                Selected:{" "}
+                                <span className="font-semibold text-foreground">{picked.name}</span>
+                              </p>
+                            )}
+                            {picked?.isChoice && (picked.choices?.options?.length || picked.choices?.optionsSource) ? (
+                              <div className="mt-3">
+                                <FeatModifierChoicePicker
+                                  entry={{
+                                    featId: picked.id,
+                                    choicePickKey: featChoicePickKey(slot.key),
+                                  }}
+                                  feat={picked}
+                                  choiceOptionContext={featChoiceOptionContext}
+                                  selected={featChoicePicks[featChoicePickKey(slot.key)] ?? []}
+                                  onChange={(selected) => {
+                                    const choiceKey = featChoicePickKey(slot.key)
+                                    setFeatChoicePicks((prev) => ({
+                                      ...prev,
+                                      [choiceKey]: selected,
+                                    }))
+                                    setModifierPlayerPicks((prev) =>
+                                      clearModifierPicksForSource(prev, choiceKey),
+                                    )
+                                  }}
+                                  layout={compactPickerLayout}
+                                />
+                              </div>
+                            ) : null}
+                            {picked ? (
+                              <ModifierPlayerChoicePanel
+                                sourceKey={featChoicePickKey(slot.key)}
+                                sourceLabel={picked.name}
+                                slots={modifierPlayerChoiceSlots}
+                                picks={modifierPlayerPicks}
+                                spells={spells}
+                                unavailableOptions={[...getTakenSkills(skillPickSources)]}
+                                {...modifierExpertisePickerProps}
+                                onChange={(slotKey, selected) => {
+                                  const slot = modifierPlayerChoiceSlots.find(
+                                    (entry) => entry.slotKey === slotKey,
+                                  )
+                                  if (!slot) return
+                                  setModifierPlayerPicks((prev) =>
+                                    setModifierPlayerPickValue(
+                                      prev,
+                                      slot,
+                                      modifierPlayerChoiceSlots,
+                                      selected,
+                                    ),
+                                  )
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+
+                  {backgroundGrantedFeat?.isChoice && (backgroundGrantedFeat.choices?.options?.length || backgroundGrantedFeat.choices?.optionsSource) ? (
+                    <div className="mt-4 border-t border-border pt-4">
+                      <FeatModifierChoicePicker
+                        entry={{
+                          featId: backgroundGrantedFeat.id,
+                          choicePickKey: grantedFeatChoicePickKey(backgroundGrantedFeat.id),
+                        }}
+                        feat={backgroundGrantedFeat}
+                        choiceOptionContext={featChoiceOptionContext}
+                        selected={
+                          featChoicePicks[grantedFeatChoicePickKey(backgroundGrantedFeat.id)] ?? []
+                        }
+                        onChange={(selected) => {
+                          const choiceKey = grantedFeatChoicePickKey(backgroundGrantedFeat.id)
+                          setFeatChoicePicks((prev) => ({
+                            ...prev,
+                            [choiceKey]: selected,
+                          }))
+                          setModifierPlayerPicks((prev) =>
+                            clearModifierPicksForSource(prev, choiceKey),
+                          )
+                        }}
+                        layout={compactPickerLayout}
+                      />
+                    </div>
+                  ) : null}
+                  {backgroundGrantedFeat ? (
+                    <ModifierPlayerChoicePanel
+                      sourceKey={grantedFeatChoicePickKey(backgroundGrantedFeat.id)}
+                      sourceLabel={backgroundGrantedFeat.name}
+                      slots={modifierPlayerChoiceSlots}
+                      picks={modifierPlayerPicks}
+                      spells={spells}
+                      unavailableOptions={[...getTakenSkills(skillPickSources)]}
+                      {...modifierExpertisePickerProps}
+                      onChange={(slotKey, selected) => {
+                        const slot = modifierPlayerChoiceSlots.find(
+                          (entry) => entry.slotKey === slotKey,
+                        )
+                        if (!slot) return
+                        setModifierPlayerPicks((prev) =>
+                          setModifierPlayerPickValue(
+                            prev,
+                            slot,
+                            modifierPlayerChoiceSlots,
+                            selected,
+                          ),
+                        )
+                      }}
+                    />
+                  ) : null}
+                    </BuilderCompletableSection>
+                  ) : null}
+              </div>
+            )}
+
+            {/* Step 3: Ability Scores */}
+            {currentStep === 3 && (
+              <div id="builder-abilities">
+                <h2 className="text-2xl font-black text-foreground mb-2">Determine Ability Scores</h2>
+                <p className={`${pageFloatingHintClass} mb-6`}>Set your character&apos;s core abilities.</p>
+
+                {/* Method Selection */}
+                <div className="flex flex-wrap gap-2 mb-6">
+                  {(
+                    [
+                    { id: "pointbuy", label: "Point Buy" },
+                    { id: "standard", label: "Standard Array" },
+                      { id: "roll", label: "Roll", dice: true },
+                      { id: "custom", label: "Custom" },
+                    ] as const
+                  ).map((method) => (
+                    <button
+                      key={method.id}
+                      type="button"
+                      onClick={() => {
+                        setAbilityMethod(method.id)
+                        if (method.id === "standard") applyStandardArray()
+                        if (method.id === "roll") rollAbilities()
+                        if (method.id === "pointbuy") {
+                          setPointsRemaining(27)
+                          setCharacter({
+                            ...character,
+                            strength: 8,
+                            dexterity: 8,
+                            constitution: 8,
+                            intelligence: 8,
+                            wisdom: 8,
+                            charisma: 8,
+                          })
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold transition-colors ${
+                        abilityMethod === method.id
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted/80"
+                      }`}
+                    >
+                      {"dice" in method && method.dice && (
+                        <Dices className="w-4 h-4 shrink-0" />
+                      )}
+                      {method.label}
+                    </button>
+                  ))}
+                </div>
+
+                {abilityMethod === "pointbuy" && (
+                  <div className="mb-4 p-3 bg-primary/10 rounded-xl text-center">
+                    <span className="font-bold text-primary">Points Remaining: {pointsRemaining}</span>
+                  </div>
+                )}
+
+                {cardViewMode === "cinematic" ? (
+                  <AbilityScoreCards
+                    method={abilityMethod}
+                    scores={{
+                      strength: character.strength,
+                      dexterity: character.dexterity,
+                      constitution: character.constitution,
+                      intelligence: character.intelligence,
+                      wisdom: character.wisdom,
+                      charisma: character.charisma,
+                    }}
+                    standardAssignments={standardArrayAssignments}
+                    standardArray={STANDARD_ARRAY}
+                    getModifierLabel={getAbilityModifier}
+                    onAdjust={updateAbilityScore}
+                    onSetCustom={setCustomAbilityScore}
+                    onAssignStandard={assignStandardArrayValue}
+                    isStandardValueUsedElsewhere={isStandardValueUsedElsewhere}
+                  />
+                ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {ABILITY_NAMES.map((ability) => (
+                    <div key={ability} className="bg-card rounded-xl p-4 border-2 border-border text-center">
+                      <h3 className="font-bold text-foreground capitalize mb-2">{ability}</h3>
+
+                      {abilityMethod === "custom" ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={character[ability]}
+                            onChange={(e) => setCustomAbilityScore(ability, e.target.value)}
+                            className="w-20 text-center text-3xl font-black text-foreground px-2 py-1 bg-background border-2 border-border rounded-lg focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                      ) : abilityMethod === "standard" ? (
+                        <span className="text-3xl font-black text-foreground w-12 inline-block">
+                          {standardArrayAssignments[ability] ?? "—"}
+                        </span>
+                      ) : (
+                      <div className="flex items-center justify-center gap-3">
+                          {abilityMethod === "pointbuy" && (
+                        <button
+                              type="button"
+                          onClick={() => updateAbilityScore(ability, -1)}
+                          disabled={character[ability] <= 8}
+                          className="w-8 h-8 bg-muted rounded-lg font-bold disabled:opacity-30"
+                        >
+                          -
+                        </button>
+                          )}
+                        <span className="text-3xl font-black text-foreground w-12">
+                          {character[ability]}
+                        </span>
+                          {abilityMethod === "pointbuy" && (
+                        <button
+                              type="button"
+                          onClick={() => updateAbilityScore(ability, 1)}
+                              disabled={character[ability] >= 15}
+                          className="w-8 h-8 bg-muted rounded-lg font-bold disabled:opacity-30"
+                        >
+                          +
+                        </button>
+                          )}
+                      </div>
+                      )}
+
+                      {abilityMethod === "standard" && (
+                        <div className="flex flex-wrap justify-center gap-1.5 mt-3">
+                          {STANDARD_ARRAY.map((value) => {
+                            const selectedHere = standardArrayAssignments[ability] === value
+                            const usedElsewhere = isStandardValueUsedElsewhere(ability, value)
+                            const disabled = usedElsewhere && !selectedHere
+                            return (
+                              <button
+                                key={value}
+                                type="button"
+                                disabled={disabled}
+                                aria-pressed={selectedHere}
+                                onClick={() => assignStandardArrayValue(ability, value)}
+                                className={`min-w-[2.25rem] px-2 py-1 rounded-lg text-sm font-bold transition-colors ${
+                                  selectedHere
+                                    ? "bg-primary text-primary-foreground"
+                                    : disabled
+                                      ? "bg-muted/40 text-muted-foreground/40 cursor-not-allowed"
+                                      : "bg-muted text-foreground hover:bg-primary/15 hover:text-primary"
+                                }`}
+                              >
+                                {value}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      <p className="text-lg font-bold text-primary mt-2">
+                        {abilityMethod === "standard" && standardArrayAssignments[ability] == null
+                          ? "—"
+                          : getAbilityModifier(
+                              abilityMethod === "standard"
+                                ? (standardArrayAssignments[ability] ?? STANDARD_ARRAY_UNASSIGNED_SCORE)
+                                : character[ability],
+                            )}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                )}
+
+                <div className="mt-8 space-y-6 border-t border-border pt-6">
+                  <div>
+                    <h3 className="text-lg font-black text-foreground">Ability Score Improvements</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Assign ASI and origin bonuses after setting your base scores. Totals from
+                      base + adjustments cannot exceed 20.
+                    </p>
+                  </div>
+
+                {showLegacyMilestoneAsi && (
+                  <div>
+                    <AsiAllocator
+                      allocation={milestoneAsiAllocation}
+                      totalPoints={milestoneAsiTotalPoints}
+                      pickCount={milestoneAsiFeatCount}
+                      sourceLabel={
+                        milestoneAsiFeatCount > 0
+                          ? `Feat${milestoneAsiFeatCount === 1 ? "" : "s"} · Ability Score Improvement`
+                          : null
+                      }
+                      variant={asiAllocatorVariant}
+                      icon={featIconForAsiSource(
+                        "Feat · Ability Score Improvement",
+                        feats,
+                      )}
+                      baseScores={{
+                        strength: character.strength,
+                        dexterity: character.dexterity,
+                        constitution: character.constitution,
+                        intelligence: character.intelligence,
+                        wisdom: character.wisdom,
+                        charisma: character.charisma,
+                      }}
+                      scoreCap={20}
+                      onChange={(allocation) =>
+                        setAsiAllocationsByFeatId((prev) =>
+                          withCombinedMilestoneAsiAllocation(prev, allocation),
+                        )
+                      }
+                    />
+                  </div>
+                )}
+
+                {abilityScorePoolGrants.map((grant) => (
+                  <div key={grant.allocationKey}>
+                    <AsiAllocator
+                      title={grant.label}
+                      sourceLabel={grant.sourceLabel}
+                      allocation={asiAllocationsByFeatId[grant.allocationKey] ?? {}}
+                      totalPoints={grant.points}
+                      allowedAbilities={grant.allowedAbilities}
+                      variant={asiAllocatorVariant}
+                      icon={featIconForAsiSource(grant.sourceLabel, feats)}
+                      baseScores={{
+                        strength: character.strength,
+                        dexterity: character.dexterity,
+                        constitution: character.constitution,
+                        intelligence: character.intelligence,
+                        wisdom: character.wisdom,
+                        charisma: character.charisma,
+                      }}
+                      scoreCap={20}
+                      onChange={(allocation) =>
+                        setAsiAllocationsByFeatId((prev) => ({
+                          ...prev,
+                          [grant.allocationKey]: allocation,
+                        }))
+                      }
+                    />
+                  </div>
+                ))}
+
+                {backgroundAbilityGrant.needsChoice && (
+                  <div>
+                    <AsiAllocator
+                      title={`${selectedBackground?.name ?? "Background"} Ability Scores`}
+                      sourceLabel={
+                        selectedBackground?.name
+                          ? `Background · ${selectedBackground.name}`
+                          : "Background"
+                      }
+                      allocation={asiAllocationsByFeatId[BACKGROUND_ASI_KEY] ?? {}}
+                      totalPoints={BACKGROUND_ASI_TOTAL_POINTS}
+                      allowedAbilities={backgroundAbilityGrant.eligible}
+                      maxPerAbility={2}
+                      helpText={getBackgroundAsiHelpText(backgroundAbilityGrant)}
+                      variant={asiAllocatorVariant}
+                      headerImageUrl={selectedBackgroundCardImage}
+                      baseScores={{
+                        strength: character.strength,
+                        dexterity: character.dexterity,
+                        constitution: character.constitution,
+                        intelligence: character.intelligence,
+                        wisdom: character.wisdom,
+                        charisma: character.charisma,
+                      }}
+                      scoreCap={20}
+                      onChange={(allocation) =>
+                        setAsiAllocationsByFeatId((prev) => ({
+                          ...prev,
+                          [BACKGROUND_ASI_KEY]: allocation,
+                        }))
+                      }
+                    />
+                  </div>
+                )}
+
+                {Object.keys(backgroundAbilityGrant.fixed).length > 0 && (
+                  <div
+                    className={
+                      asiAllocatorVariant === "visual"
+                        ? "overflow-hidden rounded-xl border-2 border-border bg-gradient-to-b from-black via-zinc-950 to-black p-4"
+                        : "p-3 rounded-lg border border-border bg-card/80"
+                    }
+                    style={
+                      asiAllocatorVariant === "visual"
+                        ? {
+                            boxShadow:
+                              "inset 0 0 0 1px rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.45)",
+                          }
+                        : undefined
+                    }
+                  >
+                    {asiAllocatorVariant === "visual" && selectedBackgroundCardImage ? (
+                      <div className="relative -mx-4 -mt-4 mb-3 aspect-[21/9] max-h-[11.2rem] overflow-hidden">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <CompactImage
+                          src={selectedBackgroundCardImage}
+                          alt=""
+                          className="h-full w-full object-cover object-top"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-black/45 to-black" />
+                      </div>
+                    ) : null}
+                    <p
+                      className={
+                        asiAllocatorVariant === "visual"
+                          ? "font-serif text-base font-black uppercase tracking-wide text-white"
+                          : "text-xs font-bold text-foreground mb-1"
+                      }
+                    >
+                      {selectedBackground?.name ?? "Background"} Ability Scores
+                    </p>
+                    <p
+                      className={
+                        asiAllocatorVariant === "visual"
+                          ? "mt-1 text-sm text-amber-400/90"
+                          : "text-sm text-foreground"
+                      }
+                    >
+                      {formatBackgroundAbilityBonuses(selectedBackground?.ability_bonuses)}
+                    </p>
+                  </div>
+                )}
+
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Gear */}
+            {currentStep === BUILDER_STEP_IDS.GEAR && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-black text-foreground mb-2">Select Equipment</h2>
+                  <p className={`${pageFloatingHintClass} mb-3`}>
+                    Choose starting equipment from your class and background, or take gold to buy gear.
+                  </p>
+
+                  {startingEquipmentGroups.length > 0 && (
+                    <div className="mb-8">
+                      {cardViewMode === "cinematic" ? (
+                        startingEquipmentGroups.map((group, gi) => (
+                          <StartingEquipmentPackagePicker
+                            key={gi}
+                            title="Starting Equipment"
+                            description={`What does your ${equipmentClass?.name ?? "class"} carry?`}
+                            options={group.options ?? []}
+                            selectedIndex={startingEquipmentOptionIndex}
+                            startingGold={classStartingGold}
+                            onSelect={selectStartingEquipmentOption}
+                            equipment={equipment}
+                            categoryPicks={startingEquipmentCategoryPicks}
+                            onCategoryPick={setClassPackageCategoryPick}
+                            weaponProficiencies={effectiveWeaponProficiencies}
+                            swipeLayout={useSwipeVisualPicker}
+                          />
+                        ))
+                      ) : (
+                        <div className="space-y-3">
+                          {startingEquipmentGroups.map((group, gi) => (
+                            <div key={gi}>
+                              <p className="text-sm font-medium text-foreground mb-2">{group.description}</p>
+                              <div className="space-y-2">
+                                {(gi === 0 ? classPackageOptions : group.options ?? []).map(
+                                  (option, oi) => {
+                                  if (
+                                    gi === 0 &&
+                                    packageOptionRequiresMartialProficiency(option) &&
+                                    !canPickMartialStartingWeapon
+                                  ) {
+                                    return null
+                                  }
+                                  return (
+                                  <label
+                                    key={oi}
+                                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                                      startingEquipmentOptionIndex === oi
+                                        ? "border-primary bg-primary/10"
+                                        : "border-border bg-card hover:border-primary/50"
+                                    }`}
+                                  >
+                    <input
+                                      type="radio"
+                                      name="class-starting-equipment"
+                                      checked={startingEquipmentOptionIndex === oi}
+                                      onChange={() => selectStartingEquipmentOption(oi)}
+                                      className="mt-1"
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <p className="font-medium text-sm text-foreground">{option.label}</p>
+                                      {!isGoldOnlyOption(option, classStartingGold) ? (
+                                        <ul className="mt-1 text-xs text-muted-foreground space-y-1">
+                                          {(option.items ?? []).map((item, ii) => {
+                                            const category = equipmentCategoryKind(item.name)
+                                            if (category) {
+                                              const choices = equipmentForCategory(
+                                                category,
+                                                equipment,
+                                              )
+                                              const pickKey = `${oi}:${ii}`
+                                              return (
+                                                <li key={ii} onClick={(event) => event.preventDefault()}>
+                                                  <label className="block text-[10px] font-bold uppercase text-muted-foreground mb-1">
+                                                    {item.quantity > 1 ? `${item.quantity}× ` : ""}
+                                                    {item.name}
+                                                  </label>
+                                                  <select
+                                                    value={startingEquipmentCategoryPicks[pickKey] ?? ""}
+                                                    onChange={(event) => {
+                                                      selectStartingEquipmentOption(oi)
+                                                      setClassPackageCategoryPick(
+                                                        oi,
+                                                        ii,
+                                                        event.target.value,
+                                                      )
+                                                    }}
+                                                    className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                                                  >
+                                                    <option value="">Choose weapon…</option>
+                                                    {choices.map((row) => (
+                                                      <option key={row.id} value={row.id}>
+                                                        {row.name}
+                                                      </option>
+                                                    ))}
+                                                  </select>
+                                                </li>
+                                              )
+                                            }
+                                            return (
+                                            <li key={ii}>
+                                              {item.quantity > 1 ? `${item.quantity}× ` : ""}
+                                              {item.name}
+                                            </li>
+                                            )
+                                          })}
+                                        </ul>
+                                      ) : (
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                          {classStartingGold} GP to spend
+                                        </p>
+                                      )}
+                  </div>
+                                  </label>
+                                  )
+                                  },
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {backgroundStartingEquipmentGroups.length > 0 && selectedBackground && (
+                    <div className="mb-8 border-t border-border pt-6">
+                      {cardViewMode === "cinematic" ? (
+                        backgroundStartingEquipmentGroups.map((group, gi) => (
+                          <StartingEquipmentPackagePicker
+                            key={gi}
+                            title="Background Equipment"
+                            description={`What does your ${selectedBackground.name} background provide?`}
+                            options={group.options ?? []}
+                            selectedIndex={backgroundStartingEquipmentOptionIndex}
+                            startingGold={backgroundStartingGold}
+                            onSelect={selectBackgroundStartingEquipmentOption}
+                            equipment={equipment}
+                            categoryPicks={backgroundStartingEquipmentCategoryPicks}
+                            onCategoryPick={setBackgroundPackageCategoryPick}
+                            imageSide="alternate"
+                            swipeLayout={useSwipeVisualPicker}
+                          />
+                        ))
+                      ) : (
+                        <div className="space-y-3">
+                          {backgroundStartingEquipmentGroups.map((group, gi) => (
+                            <div key={gi}>
+                              <p className="text-sm font-medium text-foreground mb-2">{group.description}</p>
+                              <div className="space-y-2">
+                                {(group.options ?? []).map((option, oi) => (
+                      <label
+                                    key={oi}
+                                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                                      backgroundStartingEquipmentOptionIndex === oi
+                            ? "border-primary bg-primary/10"
+                            : "border-border bg-card hover:border-primary/50"
+                        }`}
+                      >
+                        <input
+                                      type="radio"
+                                      name="background-starting-equipment"
+                                      checked={backgroundStartingEquipmentOptionIndex === oi}
+                                      onChange={() => selectBackgroundStartingEquipmentOption(oi)}
+                                      className="mt-1"
+                                    />
+                        <div className="flex-1 min-w-0">
+                                      <p className="font-medium text-sm text-foreground">{option.label}</p>
+                                      {!isGoldOnlyOption(option, backgroundStartingGold) ? (
+                                        <ul className="mt-1 text-xs text-muted-foreground space-y-0.5">
+                                          {(option.items ?? []).map((item, ii) => (
+                                            <li key={ii}>
+                                              {item.quantity > 1 ? `${item.quantity}× ` : ""}
+                                              {item.name}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        <p className="mt-1 text-xs text-muted-foreground">
+                                          {backgroundStartingGold} GP to spend
+                                        </p>
+                                      )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(packageEquipment.ids.length > 0 ||
+                    inGoldShoppingMode ||
+                    additionalEquipment.ids.length > 0) && (
+                    <div className="space-y-4">
+                      {packageEquipment.ids.length > 0 && (
+                        <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                          <p className="text-xs font-bold text-primary uppercase mb-2 flex items-center gap-1.5">
+                            <Backpack className="w-3.5 h-3.5" />
+                            Included from packages
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {packageEquipment.ids.map((id) => {
+                              const item = equipment.find((e) => e.id === id)
+                              if (!item) return null
+                              const quantity = ownedEquipmentQuantity(
+                                packageEquipment.ids,
+                                packageEquipment.quantities,
+                                id,
+                              )
+                              return (
+                                <span
+                                  key={id}
+                                  className="text-xs px-2 py-1 rounded-full bg-primary/10 text-foreground"
+                                >
+                                  {quantity > 1 ? `${quantity}× ` : ""}
+                                  {item.name}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {additionalEquipment.ids.length > 0 && (
+                        <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                          <p className="text-xs font-bold text-primary uppercase mb-2 flex items-center gap-1.5">
+                            <ShoppingBag className="w-3.5 h-3.5" />
+                            Additional gear selected
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {additionalEquipment.ids.map((id) => {
+                              const item = equipment.find((e) => e.id === id)
+                              if (!item) return null
+                              const quantity = ownedEquipmentQuantity(
+                                additionalEquipment.ids,
+                                additionalEquipment.quantities,
+                                id,
+                              )
+                              return (
+                                <span
+                                  key={id}
+                                  className="text-xs px-2 py-1 rounded-full bg-secondary/80 text-foreground"
+                                >
+                                  {quantity > 1 ? `${quantity}× ` : ""}
+                                  {item.name}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {inGoldShoppingMode && (
+                        <EquipmentShoppingPanel
+                          equipment={equipment}
+                          equipmentSearch={equipmentSearch}
+                          onEquipmentSearchChange={setEquipmentSearch}
+                          equipmentFilterCategory={equipmentFilterCategory}
+                          onEquipmentFilterCategoryChange={setEquipmentFilterCategory}
+                          goldPurchasedEquipmentIds={goldPurchasedEquipmentIds}
+                          goldSpent={goldSpent}
+                          totalGoldBudget={totalGoldBudget}
+                          onTogglePurchase={toggleGoldPurchasedEquipment}
+                          onAdjustQuantity={adjustGoldPurchasedQuantity}
+                          onShowDetails={(item) => setDetailsModal({ type: "equipment", item })}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {startingEquipmentGroups.length === 0 &&
+                    backgroundStartingEquipmentGroups.length === 0 &&
+                    !inGoldShoppingMode && (
+                    <p className="text-sm text-muted-foreground italic">
+                      No starting equipment packages for this character. Add gear manually from the compendium after creation, or pick a class/background with equipment options.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Step 5: Spells (skipped when the character has no spells to choose) */}
+            {currentStep === BUILDER_STEP_IDS.SPELLS && hasSpellStep && (
+                  <div className="space-y-8">
+                    <h2 className="text-2xl font-black text-foreground mb-2">Select Spells</h2>
+
+                    {spellGrantSourceKeys.length > 0 ? (
+                      <div className="space-y-4">
+                        <p className={pageFloatingHintClass}>
+                          Feats and class features that grant specific spells (Magic Initiate,
+                          Mystic Arcanum, Contact Patron, etc.).
+                        </p>
+                        {spellGrantSourceKeys.map((sourceKey) => {
+                          const slot = spellGrantModifierSlots.find(
+                            (entry) => entry.sourceKey === sourceKey,
+                          )
+                          if (!slot) return null
+                          return (
+                            <ModifierPlayerChoicePanel
+                              key={sourceKey}
+                              sourceKey={sourceKey}
+                              sourceLabel={slot.sourceLabel}
+                              slots={modifierPlayerChoiceSlots}
+                              picks={modifierPlayerPicks}
+                              spells={spells}
+                              kinds={["spell", "spell_list_class", "spellcasting_ability"]}
+                              {...modifierExpertisePickerProps}
+                              onChange={(slotKey, selected) => {
+                                const target = modifierPlayerChoiceSlots.find(
+                                  (entry) => entry.slotKey === slotKey,
+                                )
+                                if (!target) return
+                                setModifierPlayerPicks((prev) =>
+                                  setModifierPlayerPickValue(
+                                    prev,
+                                    target,
+                                    modifierPlayerChoiceSlots,
+                                    selected,
+                                  ),
+                                )
+                              }}
+                            />
+                          )
+                        })}
+                      </div>
+                    ) : null}
+
+                    {spellcastingClasses.map((casterClass) => {
+                      const casterLevel =
+                        activeClassLevels.find((cl) => cl.classId === casterClass.id)?.level ?? 1
+                      const spellLimits = getSpellLimits(
+                        casterClass.spellcasting,
+                        casterLevel,
+                        casterClass.name,
+                      )
+                      const classSpellIds = spellPicksByClassId[casterClass.id] ?? []
+                      const spellCounts = countSelectedSpells(
+                        classSpellIds,
+                        spells,
+                        casterClass.name,
+                        casterClass.spell_list,
+                      )
+                      const maxSpellLevel = spellLimits.maxSpellLevel
+                      // Spells the character already knows from another source (feat/modifier
+                      // grants or another caster class) can't be picked again here.
+                      const otherClassPickedIds = Object.entries(spellPicksByClassId)
+                        .filter(([classId]) => classId !== casterClass.id)
+                        .flatMap(([, ids]) => ids)
+                      const alreadyKnownSpellIds = new Set<string>([
+                        ...grantedSpellIds,
+                        ...otherClassPickedIds,
+                      ])
+                      // Magical Secrets / Divine Soul etc. grant access to extra class spell
+                      // lists. These expand prepared (level 1+) spells, not cantrips.
+                      const extraSpellLists = aggregatedCharacteristics.spellListAccess
+                      const classAvailableSpells = dedupeSpellsByName(
+                        spells
+                          .filter((s) => {
+                            if (s.level === 0) {
+                              return (
+                                spellLimits.cantrips > 0 &&
+                                spellMatchesClassName(s, casterClass.name, casterClass.spell_list)
+                              )
+                            }
+                            if (s.level > maxSpellLevel) return false
+                            return (
+                              spellMatchesClassName(s, casterClass.name, casterClass.spell_list) ||
+                              s.classes?.some((c) => extraSpellLists.includes(c)) ||
+                              aggregatedCharacteristics.spellListAccessNames.some(
+                                (name) => name.replace(/[’]/g, "'").toLowerCase() === s.name.replace(/[’]/g, "'").toLowerCase(),
+                              )
+                            )
+                          })
+                          .filter(
+                            (s) => !alreadyKnownSpellIds.has(s.id) || classSpellIds.includes(s.id),
+                          ),
+                      )
+                      const schoolFilter = spellFilterSchoolByClassId[casterClass.id] ?? "all"
+                      const schoolOptions = uniqueSpellSchools(classAvailableSpells)
+                      const schoolScopedSpells = filterSpellsBySchool(
+                        classAvailableSpells,
+                        schoolFilter,
+                      )
+                      const availableSpells = searchItems(
+                        schoolScopedSpells,
+                        deferredSpellSearch,
+                        {
+                          name: (spell) => spell.name,
+                          aliases: (spell) => spellAliasLookupKeys(spell.name),
+                          fields: [
+                            { name: "school", value: (spell) => spell.school, weight: 1.3 },
+                            { name: "classes", value: (spell) => spell.classes, weight: 1.1 },
+                            { name: "description", value: (spell) => spell.description, weight: 0.35 },
+                          ],
+                        },
+                      )
+
+                      const spellsByLevel: Record<number, typeof availableSpells> = {}
+                      availableSpells.forEach((s) => {
+                        if (!spellsByLevel[s.level]) spellsByLevel[s.level] = []
+                        spellsByLevel[s.level].push(s)
+                      })
+                      
+                      const levelFilter = spellFilterLevelByClassId[casterClass.id] ?? "all"
+                      const spellLevels = Object.keys(spellsByLevel)
+                        .map(Number)
+                        .sort((a, b) => a - b)
+                      const visibleLevels =
+                        levelFilter === "all"
+                          ? spellLevels
+                          : spellLevels.filter((level) => String(level) === levelFilter)
+
+                      return (
+                        <div
+                          key={casterClass.id}
+                          className="border border-border rounded-xl p-4 bg-card/50"
+                        >
+                          <p className="font-bold text-foreground mb-1">
+                            {casterClass.name} (class level {casterLevel})
+                          </p>
+                          {extraSpellLists.length > 0 && (
+                            <p className="text-xs text-muted-foreground mb-2">
+                              Expanded spell access: prepared spells may also be chosen from the{" "}
+                              {extraSpellLists
+                                .filter((c) => c !== casterClass.name)
+                                .join(", ")}{" "}
+                              spell list{extraSpellLists.filter((c) => c !== casterClass.name).length === 1 ? "" : "s"}.
+                            </p>
+                          )}
+                          <div className="flex flex-wrap gap-3 mb-3 text-sm">
+                            {spellLimits.cantrips > 0 ? (
+                              <span className="px-2 py-1 rounded bg-secondary/10 text-foreground">
+                                Cantrips: {spellCounts.cantrips} / {spellLimits.cantrips}
+                              </span>
+                            ) : null}
+                            <span className="px-2 py-1 rounded bg-secondary/10 text-foreground">
+                              Prepared (level 1+): {spellCounts.prepared} / {spellLimits.prepared}
+                            </span>
+                            <span className="px-2 py-1 rounded bg-secondary/10 text-foreground">
+                              Max spell level: {spellLimits.maxSpellLevel || "—"}
+                            </span>
+                          </div>
+
+                          <div className="mb-3 flex flex-nowrap items-center gap-2">
+                            {spellLevels.length > 0 ? (
+                              <div className="flex shrink-0 items-center gap-2">
+                                <label
+                                  className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                                  htmlFor={`spell-level-${casterClass.id}`}
+                                >
+                                  Level
+                                </label>
+                                <select
+                                  id={`spell-level-${casterClass.id}`}
+                                  value={levelFilter}
+                                  onChange={(e) => {
+                                    setSpellFilterLevelByClassId((prev) => ({
+                                      ...prev,
+                                      [casterClass.id]: e.target.value,
+                                    }))
+                                    setSpellLevelPages({})
+                                  }}
+                                  className="rounded-xl border-2 border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                                >
+                                  <option value="all">All levels</option>
+                                  {spellLevels.map((level) => (
+                                    <option key={level} value={String(level)}>
+                                      {formatSpellListGroupLabel(level)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : null}
+                            {schoolOptions.length > 1 ? (
+                              <div className="flex shrink-0 items-center gap-2">
+                                <label
+                                  className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                                  htmlFor={`spell-school-${casterClass.id}`}
+                                >
+                                  School
+                                </label>
+                                <select
+                                  id={`spell-school-${casterClass.id}`}
+                                  value={schoolFilter}
+                                  onChange={(e) => {
+                                    setSpellFilterSchoolByClassId((prev) => ({
+                                      ...prev,
+                                      [casterClass.id]: e.target.value,
+                                    }))
+                                    setSpellLevelPages({})
+                                  }}
+                                  className="max-w-[11rem] rounded-xl border-2 border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                                  aria-label={`Filter ${casterClass.name} spells by school`}
+                                >
+                                  <option value="all">All schools</option>
+                                  {schoolOptions.map((school) => (
+                                    <option key={school} value={school}>
+                                      {school}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : null}
+                            <SearchBox
+                              value={spellSearch}
+                              onChange={(value) => {
+                                setSpellSearch(value)
+                                setSpellLevelPages({})
+                              }}
+                              suggestions={rankSearchResults(
+                                schoolScopedSpells,
+                                deferredSpellSearch,
+                                {
+                                  name: (spell) => spell.name,
+                                  aliases: (spell) => spellAliasLookupKeys(spell.name),
+                                  fields: [
+                                    { name: "school", value: (spell) => spell.school, weight: 1.3 },
+                                    { name: "classes", value: (spell) => spell.classes, weight: 1.1 },
+                                  ],
+                                  limit: 8,
+                                },
+                              ).map((match) => ({
+                                id: match.item.id,
+                                label: match.item.name,
+                                detail: `${match.item.level === 0 ? "Cantrip" : `Level ${match.item.level}`} · ${match.item.school}`,
+                                item: match.item,
+                                matchKind: match.kind,
+                              }))}
+                              onSelect={(suggestion) => {
+                                setSpellSearch(suggestion.label)
+                                setSpellLevelPages({})
+                              }}
+                              scope={`builder:spells:${casterClass.id}`}
+                              placeholder="Search spells…"
+                              ariaLabel={`Search ${casterClass.name} spells`}
+                              className="min-w-[8rem] flex-1 basis-[8rem]"
+                            />
+                          </div>
+
+                          <div className="space-y-4">
+                            {visibleLevels.map((level) => {
+                              const levelSpells = spellsByLevel[level] ?? []
+                              const pageKey = `${casterClass.id}:${level}`
+                              const page = spellLevelPages[pageKey] ?? 0
+                              const {
+                                items: pageItems,
+                                pageCount,
+                                safePage,
+                              } = paginateList(levelSpells, page, spellPickerPageSize)
+
+                              const spellPickerSwipe =
+                                cardViewMode === "cinematic" && useSwipeVisualPicker
+                              const spellsToShow = spellPickerSwipe ? levelSpells : pageItems
+
+                              return (
+                                <div key={`${casterClass.id}-${level}`}>
+                              <p className="text-xs font-bold text-primary uppercase mb-2">
+                                    {formatSpellListGroupLabel(level)}
+                                    <span className="text-muted-foreground font-normal ml-1">
+                                      ({levelSpells.length})
+                                    </span>
+                              </p>
+                              <SwipeVisualPicker
+                                enabled={spellPickerSwipe}
+                                className={
+                                  cardViewMode === "cinematic"
+                                    ? getCinematicSpellPickerContainerClass()
+                                    : getDenseSpellPickerGridClass()
+                                }
+                              >
+                                    {spellsToShow.map((spell) => {
+                                      const selected = classSpellIds.includes(spell.id)
+                                      const selectable = canSelectSpell(
+                                        spell,
+                                        classSpellIds,
+                                        spells,
+                                        spellLimits,
+                                        casterClass.name,
+                                        casterClass.spell_list,
+                                      )
+                                      const toggleSpellPick = () => {
+                                        if (!selectable && !selected) return
+                                        setSpellPicksByClassId((prev) => {
+                                          const current = prev[casterClass.id] ?? []
+                                          const next = selected
+                                            ? current.filter((id) => id !== spell.id)
+                                            : [...current, spell.id]
+                                          return { ...prev, [casterClass.id]: next }
+                                        })
+                                      }
+                                      const openSpellDetails = () =>
+                                        setDetailsModal({ type: "spell", item: spell })
+
+                                      if (
+                                        cardViewMode === "cinematic" &&
+                                        resolveSpellCardImageUrl(spell)
+                                      ) {
+                                        const accent = getCompendiumItemAccentColor(
+                                          spell as unknown as Record<string, unknown>,
+                                        )
+                                        return (
+                                          <SpellSelectionCard
+                                            key={spell.id}
+                                            spell={spell}
+                                            accentColor={accent}
+                                            selected={selected}
+                                            selectable={selectable}
+                                            onToggle={toggleSpellPick}
+                                            onDetails={openSpellDetails}
+                                          />
+                                        )
+                                      }
+
+                                      return (
+                                        <BuilderSpellCompactPick
+                                          key={spell.id}
+                                          spell={spell}
+                                          selected={selected}
+                                          selectable={selectable}
+                                          onToggle={toggleSpellPick}
+                                          onDetails={openSpellDetails}
+                                        />
+                                      )
+                                    })}
+                              </SwipeVisualPicker>
+                                  {pageCount > 1 && (
+                                    <PickerGridPagination
+                                      className={spellPickerSwipe ? "max-sm:hidden" : undefined}
+                                      page={safePage}
+                                      pageCount={pageCount}
+                                      onPrevious={() =>
+                                        setSpellLevelPages((prev) => ({
+                                          ...prev,
+                                          [pageKey]: Math.max(0, safePage - 1),
+                                        }))
+                                      }
+                                      onNext={() =>
+                                        setSpellLevelPages((prev) => ({
+                                          ...prev,
+                                          [pageKey]: Math.min(pageCount - 1, safePage + 1),
+                                        }))
+                                      }
+                                      previousLabel={`Previous ${formatSpellListGroupLabel(level)}`}
+                                      nextLabel={`Next ${formatSpellListGroupLabel(level)}`}
+                                    />
+                                  )}
+                            </div>
+                              )
+                            })}
+                          {availableSpells.length === 0 && (
+                            <p className="text-sm text-muted-foreground text-center py-4">
+                                No spells found for {casterClass.name}.
+                            </p>
+                          )}
+                          </div>
+                        </div>
+                      )
+                    })}
+              </div>
+            )}
+
+            {/* Step 6: Character Details */}
+            {currentStep === BUILDER_STEP_IDS.DETAILS && (
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                <h2 className="text-2xl font-black text-foreground mb-2">Character Details</h2>
+                    <p className={pageFloatingHintClass}>Give your character a name and personality.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={applyRandomCharacterDetails}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-border bg-card text-sm font-semibold text-foreground hover:border-primary hover:text-primary transition-colors"
+                  >
+                    <Wand2 className="w-4 h-4" />
+                    Randomly generate
+                  </button>
+                </div>
+
+                {multiclassAbilityIssues.length > 0 && (
+                  <div className="rounded-xl border border-warning/50 bg-warning/10 p-4">
+                    <p className="text-sm font-bold text-warning mb-2">Cannot save yet</p>
+                    <ul className="space-y-1 text-xs text-foreground">
+                      {multiclassAbilityIssues.map((issue) => (
+                        <li key={`details-${issue.classId}-${issue.role}`}>
+                          {formatMulticlassAbilityIssue(issue)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Portrait & banner uploads */}
+                <div className="mb-6 space-y-6">
+                  <div hidden className="w-full min-w-0 items-start gap-2 sm:gap-4">
+                    <div className="relative shrink-0">
+                    {character.portrait_url ? (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setPortraitCropSrc(character.portrait_url)}
+                          className="block"
+                          title="Adjust 1:1 crop"
+                        >
+                          {!isCompactOnly && cardViewMode === "cinematic" ? (<CompactImage
+                            src={character.portrait_url}
+                            alt="Portrait"
+                            className="h-20 w-20 rounded-xl object-cover border-4 border-border sm:h-32 sm:w-32 sm:rounded-2xl"
+                          />) : (<span className="flex min-h-20 items-center justify-center rounded-xl border border-border bg-muted p-4 text-sm">Portrait assigned</span>)}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => patchCharacter({ portrait_url: null })}
+                          className="absolute -top-2 -right-2 w-6 h-6 bg-destructive text-white rounded-full flex items-center justify-center"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                        <label className="absolute inset-x-0 -bottom-1 mx-auto w-fit cursor-pointer rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-semibold text-foreground shadow-sm ring-1 ring-border hover:text-primary">
+                          Replace
+                          <input
+                            ref={portraitInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={handlePortraitUpload}
+                            className="sr-only"
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                        <label className="flex h-20 w-20 flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted px-1.5 text-center cursor-pointer transition-colors hover:border-primary sm:h-32 sm:w-32 sm:rounded-2xl sm:px-2">
+                        <Upload className="mb-0.5 h-5 w-5 text-muted-foreground sm:mb-1 sm:h-8 sm:w-8" />
+                          <span className="text-[10px] font-medium text-foreground sm:text-xs">Portrait</span>
+                          <span className="mt-0.5 hidden text-[10px] leading-tight text-muted-foreground sm:mt-1 sm:block">
+                            {formatImageUploadHint("portrait")}
+                          </span>
+                        <input
+                          ref={portraitInputRef}
+                          type="file"
+                          accept="image/*"
+                          onChange={handlePortraitUpload}
+                          className="sr-only"
+                        />
+                      </label>
+                    )}
+                    </div>
+
+                    <div className="relative min-w-0 flex-1 sm:min-w-[200px]">
+                      {character.banner_url ? (
+                        <div className="relative">
+                          {!isCompactOnly && cardViewMode === "cinematic" ? (<CompactImage
+                            src={character.banner_url}
+                            alt="Banner"
+                            className="h-20 w-full rounded-xl object-cover border-4 border-border sm:h-32 sm:rounded-2xl"
+                          />) : (<span className="flex min-h-20 items-center justify-center rounded-xl border border-border bg-muted p-4 text-sm">Banner assigned</span>)}
+                          <button
+                            onClick={() => patchCharacter({ banner_url: null })}
+                            className="absolute -top-2 -right-2 w-6 h-6 bg-destructive text-white rounded-full flex items-center justify-center"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="flex h-20 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted px-2 text-center cursor-pointer transition-colors hover:border-primary sm:h-32 sm:rounded-2xl sm:px-4">
+                          <Upload className="mb-0.5 h-5 w-5 text-muted-foreground sm:mb-1 sm:h-8 sm:w-8" />
+                          <span className="text-[10px] font-medium text-foreground sm:text-xs">
+                            Landscape banner
+                            <span className="hidden sm:inline"> (optional)</span>
+                          </span>
+                          <span className="mt-0.5 hidden text-[10px] leading-tight text-muted-foreground sm:mt-1 sm:block">
+                            {formatImageUploadHint("banner")}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleBannerUpload}
+                            className="sr-only"
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 flex items-center gap-2">
+                      <label htmlFor="builder-details-name" className="text-sm font-medium text-foreground">Character Name *</label>
+                      <NameFontPicker name={character.name} selectedId={readNameFontId(character.appearance)}
+                        onSelect={(fontId) => patchCharacter({ appearance: withNameFont(character.appearance, fontId) })} />
+                    </div>
+                    <input
+                      id="builder-details-name"
+                      style={nameFontStyle(readNameFontId(character.appearance))}
+                      type="text"
+                      value={character.name}
+                      onChange={(e) => patchCharacter({ name: e.target.value })}
+                      placeholder="Enter character name"
+                      className="w-full px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-2">Personality Traits</label>
+                    <textarea
+                      value={character.personality_traits}
+                      onChange={(e) => patchCharacter({ personality_traits: e.target.value })}
+                      placeholder="Describe your character's personality..."
+                      rows={3}
+                      className="w-full px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-2">Ideals</label>
+                    <textarea
+                      value={character.ideals}
+                      onChange={(e) => patchCharacter({ ideals: e.target.value })}
+                      placeholder="What principles guide your character?"
+                      rows={3}
+                      className="w-full px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-2">Bonds</label>
+                    <textarea
+                      value={character.bonds}
+                      onChange={(e) => patchCharacter({ bonds: e.target.value })}
+                      placeholder="What connections matter most to your character?"
+                      rows={3}
+                      className="w-full px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-2">Flaws</label>
+                    <textarea
+                      value={character.flaws}
+                      onChange={(e) => patchCharacter({ flaws: e.target.value })}
+                      placeholder="What weaknesses does your character have?"
+                      rows={3}
+                      className="w-full px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">Backstory</label>
+                  <textarea
+                    value={character.backstory}
+                    onChange={(e) => patchCharacter({ backstory: e.target.value })}
+                    placeholder="Tell your character's story..."
+                    rows={5}
+                    className="w-full px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-none"
+                  />
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+
+            <div className="flex flex-col items-end gap-2 mt-6 pt-4 border-t border-border">
+              <BuilderStepNav
+                currentStep={currentStep}
+                canProceed={canProceed()}
+                proceedBlockers={proceedBlockers}
+                canSave={canSaveCharacter()}
+                saveBlockers={saveBlockers}
+                saving={saving}
+                onBack={goBackStep}
+                onContinue={advanceStep}
+                onSave={saveCharacter}
+                saveLabel={editingCharacterId ? "Save Character" : "Create Character"}
+                viewSheetHref={
+                  editingCharacterId ? characterSheetHref(editingCharacterId) : null
+                }
+                lastStep={lastVisibleStepId}
+                compact={cardViewMode === "dense"}
+                onJumpBlocker={jumpToBlocker}
+              />
+            </div>
+          </div>
+
+          {/* Right Column: Character Sheet Preview */}
+          <div
+            id="builder-preview"
+            className={`lg:col-span-2 ${mobilePanel === "steps" ? "hidden lg:block" : ""}`}
+          >
+            <div className="builder-preview-panel bg-card/75 backdrop-blur rounded-2xl border-2 border-border p-4 lg:sticky lg:top-24 flex flex-col min-h-[720px] lg:h-[calc(100vh-7rem)] lg:min-h-0">
+              {/* Header with name, classes and hit die */}
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-black text-foreground truncate" style={{ fontFamily: "var(--font-display)" }}>
+                  {character.name || "New Character"}
+                </h3>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-muted-foreground">Lv</span>
+                  <span className="text-xl font-black text-warning">{totalLevel}</span>
+                  {primaryClass && (
+                    <span className="px-1.5 py-0.5 bg-destructive/10 text-destructive text-[10px] font-bold rounded ml-1">
+                      d{primaryClass.hit_die}
+                    </span>
+                  )}
+                </div>
+              </div>
+              
+              {/* Class & Origin line */}
+              <div className="flex items-center gap-1 text-xs text-muted-foreground mb-3 flex-wrap">
+                {characterClasses.length > 0 ? (
+                  characterClasses.map((cls, i) => (
+                    <span key={`${cls.id ?? "class"}-${i}`}>
+                      {i > 0 && <span className="mx-1">/</span>}
+                      <span
+                        className={
+                          cls.id === resolvedPrimaryClassId
+                            ? "text-primary font-medium"
+                            : "text-secondary font-medium"
+                        }
+                      >
+                        {cls.name} {cls.level}
+                      </span>
+                    </span>
+                  ))
+                ) : primaryClass ? (
+                  <span className="text-primary font-medium">{primaryClass.name}</span>
+                ) : null}
+                {selectedSpecies && <span className="mx-1">-</span>}
+                {selectedSpecies && <span>{selectedSpecies.name}</span>}
+                {selectedBackground && <span className="mx-1">-</span>}
+                {selectedBackground && <span>{selectedBackground.name}</span>}
+              </div>
+              
+              {/* Preview Tabs */}
+              <div className="flex gap-1 mb-3 border-b border-border">
+                {[
+                  { id: "summary", label: "Summary", icon: UserCircle },
+                  { id: "features", label: "Features", icon: Sparkles },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setPreviewTab(tab.id as typeof previewTab)}
+                    className={`flex items-center gap-1 px-2 py-1.5 text-xs font-medium rounded-t-lg transition-colors ${
+                      previewTab === tab.id
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <tab.icon className="w-3 h-3" />
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              
+              <div className="flex-1 min-h-0 flex flex-col">
+              {/* Summary Tab */}
+              {previewTab === "summary" && (
+                <div className="space-y-3">
+                  {/* Ability Scores - horizontal row */}
+                  <div className="grid grid-cols-6 gap-1">
+                    {ABILITY_NAMES.map((ability) => {
+                      const score = effectiveAbilityScores[ability]
+                      const mod = abilityMods[ability]
+                      return (
+                        <div key={ability} className="text-center">
+                          <GameIcon
+                            name={ABILITY_GAME_ICONS[ability]}
+                            className="w-4 h-4 mx-auto text-primary mb-0.5"
+                          />
+                          <p className="text-[8px] text-muted-foreground uppercase font-bold">{ability.slice(0, 3)}</p>
+                          <p className="text-sm font-black text-foreground">{score}</p>
+                          <p className="text-[10px] text-primary font-bold">{mod >= 0 ? `+${mod}` : mod}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  
+                  {/* Two column layout */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Left column - Skills */}
+                    <div className="space-y-2">
+                      {/* Skills */}
+                      <div className="p-3 bg-muted/30 rounded-lg">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <GameIcon name={PREVIEW_SECTION_ICONS.skills} className="w-4 h-4 text-muted-foreground shrink-0" />
+                          <p className="text-sm text-muted-foreground uppercase font-bold">Skills</p>
+                        </div>
+                        <div className="grid grid-cols-1 gap-0.5 text-xs">
+                          {SKILLS_DATA.map((skill) => {
+                            const derivedSkill = derivedSkills.find((entry) => entry.name === skill.name)
+                            const isProficient =
+                              derivedSkill?.proficient ?? effectiveSkillProficiencies.includes(skill.name)
+                            const hasExpertise =
+                              derivedSkill?.expertise ?? effectiveSkillExpertise.includes(skill.name)
+                            const mod =
+                              derivedSkill?.bonus ??
+                              abilityMods[skill.ability] +
+                                (isProficient ? proficiencyBonus * (hasExpertise ? 2 : 1) : 0)
+                            const abilityAbbr = skill.ability.slice(0, 3).toUpperCase()
+                            return (
+                              <div key={skill.name} className={`flex justify-between ${isProficient ? "text-foreground font-bold" : "text-muted-foreground"}`}>
+                                <span>{skill.name} <span className="text-[8px] opacity-60">({abilityAbbr})</span></span>
+                                <span>{mod >= 0 ? `+${mod}` : mod}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Right column - Combat Stats */}
+                    <div className="space-y-2">
+                      {/* Top row: AC and HP */}
+                      <div className="grid grid-cols-2 gap-1">
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <Shield className="w-3 h-3 mx-auto text-secondary mb-0.5" />
+                          <p className="text-[7px] text-muted-foreground uppercase">AC</p>
+                          <p className="text-base font-black text-secondary">{armorClass}</p>
+                        </div>
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <Heart className="w-3 h-3 mx-auto text-destructive mb-0.5" />
+                          <p className="text-[7px] text-muted-foreground uppercase">HP</p>
+                          <div className="flex items-center justify-center gap-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={Number.isFinite(maxHp) ? maxHp : undefined}
+                              value={currentHp ?? maxHp}
+                              onChange={(e) => {
+                                const next = parseInt(e.target.value, 10)
+                                const cap = Number.isFinite(maxHp) ? maxHp : 999
+                                setCurrentHp(
+                                  Number.isNaN(next)
+                                    ? 0
+                                    : Math.min(cap, Math.max(0, next)),
+                                )
+                              }}
+                              className="w-12 text-center bg-background border border-border rounded px-1 py-0.5 text-sm font-bold [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                            <span className="text-[10px] text-muted-foreground">/ {maxHp}</span>
+                          </div>
+                          {tempHp > 0 && <p className="text-[8px] text-cyan">+{tempHp}</p>}
+                        </div>
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <Eye className="w-3 h-3 mx-auto text-cyan mb-0.5" />
+                          <p className="text-[7px] text-muted-foreground uppercase">Darkvision</p>
+                          <p className="text-base font-black text-cyan">{Number(darkvision) > 0 ? `${darkvision} ft` : "—"}</p>
+                        </div>
+                      </div>
+                      
+                      {/* Second row: Speed and Initiative */}
+                      <div className="grid grid-cols-2 gap-1">
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <GameIcon name={PREVIEW_STAT_ICONS.speed} className="w-3 h-3 mx-auto text-accent mb-0.5" />
+                          <p className="text-[7px] text-muted-foreground uppercase">Speed</p>
+                          {speedEntries.length > 1 ? (
+                            <div className="flex flex-col items-center gap-0.5 text-accent">
+                              {speedEntries.map((entry) => (
+                                <p
+                                  key={entry.type}
+                                  className="text-[9px] font-black leading-tight tabular-nums"
+                                >
+                                  {entry.feet} ft {entry.label}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-base font-black text-accent tabular-nums">
+                              {speedEntries[0]?.feet ?? speed} ft
+                            </p>
+                          )}
+                        </div>
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <GameIcon name={PREVIEW_STAT_ICONS.initiative} className="w-3 h-3 mx-auto text-lime mb-0.5" />
+                          <p className="text-[7px] text-muted-foreground uppercase">Initiative</p>
+                          <p className="text-base font-black text-lime">{initiative >= 0 ? `+${initiative}` : initiative}</p>
+                        </div>
+                      </div>
+                      
+                      {/* Third row: Proficiency and Passive Perception */}
+                      <div className="grid grid-cols-2 gap-1">
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <GameIcon name={PREVIEW_STAT_ICONS.proficiency} className="w-3 h-3 mx-auto text-lime mb-0.5" />
+                          <p className="text-[7px] text-muted-foreground uppercase">Proficiency</p>
+                          <p className="text-base font-black text-lime">+{proficiencyBonus}</p>
+                        </div>
+                        <div className="p-1.5 bg-muted/50 rounded-lg text-center">
+                          <GameIcon
+                            name={PREVIEW_STAT_ICONS.passivePerception}
+                            className="w-3 h-3 mx-auto text-foreground mb-0.5"
+                          />
+                          <p className="text-[7px] text-muted-foreground uppercase">Pass. Perc.</p>
+                          <p className="text-base font-black text-foreground">{passivePerception}</p>
+                        </div>
+                      </div>
+
+                      {/* Saving Throws */}
+                      <div className="p-2 bg-muted/30 rounded-lg">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <GameIcon name={PREVIEW_SECTION_ICONS.saves} className="w-4 h-4 text-muted-foreground shrink-0" />
+                          <p className="text-sm text-muted-foreground uppercase font-bold">Saves</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-2 text-[9px]">
+                          {ABILITY_NAMES.map((ability) => {
+                            const derivedSave = derivedSaves.find((entry) => entry.ability === ability)
+                            const isProficient =
+                              derivedSave?.proficient ??
+                              savingThrowProficiencies.includes(
+                                ability.charAt(0).toUpperCase() + ability.slice(1),
+                              )
+                            const mod =
+                              derivedSave?.bonus ??
+                              abilityMods[ability] + (isProficient ? proficiencyBonus : 0)
+                            return (
+                              <div key={ability} className={`flex justify-between ${isProficient ? "text-foreground font-bold" : "text-muted-foreground"}`}>
+                                <span>{ability.slice(0, 3).toUpperCase()}</span>
+                                <span>{mod >= 0 ? `+${mod}` : mod}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      {primarySpellcasting && (
+                    <div className="p-2 bg-magenta/10 rounded-lg">
+                              <p className="text-[9px] text-magenta uppercase font-bold mb-1">
+                                Spellcasting ({primarySpellcasting.abilityLabel})
+                              </p>
+                      <div className="grid grid-cols-2 gap-2 text-center">
+                        <div>
+                          <p className="text-[8px] text-muted-foreground">Spell Save DC</p>
+                                  <p className="text-lg font-black text-magenta">
+                                    {primarySpellcasting.saveDc}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[8px] text-muted-foreground">Spell Attack</p>
+                                  <p className="text-lg font-black text-magenta">
+                                    +{primarySpellcasting.attackBonus}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                      )}
+                  </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Features Tab */}
+              {previewTab === "features" && (
+                <div className="space-y-2 flex-1 min-h-0 overflow-y-auto">
+                  {/* Class Features */}
+                  {characterClasses.length > 0 ? (
+                    characterClasses.map((cls, i) => (
+                      <div key={`${cls.id ?? "class"}-${i}`}>
+                        <p className="text-[9px] text-primary uppercase font-bold mb-1">{cls.name} Features</p>
+                        <div className="space-y-1">
+                          {(cls.features ?? [])
+                            .filter((f) => f.level <= cls.level)
+                            .map((feature, i) => (
+                            <div key={i} className="p-1.5 bg-muted/30 rounded text-[10px]">
+                              <p className="font-bold text-foreground">{withChosenOptionChrome(feature.name, chosenOptionNames(feature, cls.id, featureChoicePicks))} <span className="text-muted-foreground">(Lv {feature.level})</span></p>
+                              <ClampedRichText html={feature.description} lines={2} className="text-[10px]" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  ) : primaryClass?.features ? (
+                    <div>
+                      <p className="text-[9px] text-primary uppercase font-bold mb-1">{primaryClass.name} Features</p>
+                      <div className="space-y-1">
+                        {(primaryClass.features ?? [])
+                          .filter((f) => f.level <= totalLevel)
+                          .map((feature, i) => (
+                          <div key={i} className="p-1.5 bg-muted/30 rounded text-[10px]">
+                            <p className="font-bold text-foreground">{withChosenOptionChrome(feature.name, chosenOptionNames(feature, primaryClass.id, featureChoicePicks))} <span className="text-muted-foreground">(Lv {feature.level})</span></p>
+                            <ClampedRichText html={feature.description} lines={2} className="text-[10px]" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Select a class to see features</p>
+                  )}
+                  
+                  {/* Species Traits */}
+                  {selectedSpecies?.traits && selectedSpecies.traits.length > 0 && (
+                    <div>
+                      <p className="text-[9px] text-secondary uppercase font-bold mb-1">{selectedSpecies.name} Traits</p>
+                      <div className="space-y-1">
+                        {selectedSpecies.traits.map((trait, i) => (
+                          <div key={i} className="p-1.5 bg-muted/30 rounded text-[10px]">
+                            <p className="font-bold text-foreground">{withChosenOptionChrome(trait.name, chosenOptionNames(trait, null, featureChoicePicks))}</p>
+                            <ClampedRichText html={trait.description} lines={2} className="text-[10px]" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Background Feature */}
+                  {selectedBackground?.feature && (
+                    <div>
+                      <p className="text-[9px] text-accent uppercase font-bold mb-1">Background Feature</p>
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                        <p className="font-bold text-foreground">{withChosenOptionChrome(selectedBackground.feature.name, chosenOptionNames(selectedBackground.feature, null, featureChoicePicks))}</p>
+                        <ClampedRichText
+                          html={selectedBackground.feature.description}
+                          lines={3}
+                          className="text-[10px]"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Origin feat from background */}
+                  {effectiveBackgroundFeatGranted && (
+                    <div>
+                      <p className="text-[9px] text-lime uppercase font-bold mb-1">Origin Feat</p>
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                        <p className="font-bold text-foreground">
+                          {backgroundGrantedFeat?.name ?? effectiveBackgroundFeatGranted}
+                        </p>
+                        <ClampedRichText
+                          html={backgroundGrantedFeat?.description}
+                          lines={2}
+                          className="text-[10px]"
+                          fallback="Granted by your background at 1st level."
+                        />
+                      </div>
+                </div>
+              )}
+              
+                  {/* Level-based feats */}
+                  {selectedFeatIds.filter(Boolean).length > 0 && (
+                    <div>
+                      <p className="text-[9px] text-warning uppercase font-bold mb-1">General Feats & Epic Boons</p>
+                      <div className="space-y-1">
+                        {selectedFeatIds.filter(Boolean).map((featId) => {
+                          const feat = feats.find((f) => f.id === featId)
+                          if (!feat) return null
+                          return (
+                            <div key={featId} className="p-1.5 bg-muted/30 rounded text-[10px]">
+                              <p className="font-bold text-foreground">{feat.name}</p>
+                              <ClampedRichText html={feat.description} lines={2} className="text-[10px]" />
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="text-[9px] text-muted-foreground uppercase font-bold mb-1">Proficiencies</p>
+                    <div className="space-y-1">
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                        <p className="font-bold text-foreground">Weapons</p>
+                        <p className="text-muted-foreground italic">
+                          {effectiveWeaponProficiencies.join(", ") || "None"}
+                        </p>
+                          </div>
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                        <p className="font-bold text-foreground">Armor</p>
+                        <p className="text-muted-foreground italic">
+                          {effectiveArmorProficiencies.join(", ") || "None"}
+                        </p>
+                      </div>
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px] space-y-1">
+                        <div>
+                          <p className="font-bold text-foreground">Tools</p>
+                          <p className="text-muted-foreground italic">
+                            {partitionedToolProficiencies.tools.join(", ") || "None"}
+                      </p>
+                    </div>
+                        <div>
+                          <p className="font-bold text-foreground">Instruments</p>
+                          <p className="text-muted-foreground italic">
+                            {partitionedToolProficiencies.instruments.join(", ") || "None"}
+                          </p>
+                </div>
+            </div>
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                        <p className="font-bold text-foreground">Languages</p>
+                        <p className="text-muted-foreground italic">
+                          {(character.languages ?? []).join(", ") || "None"}
+                        </p>
+          </div>
+        </div>
+              </div>
+              
+                    <div>
+                    <p className="text-[9px] text-muted-foreground uppercase font-bold mb-1">Resistances</p>
+                    <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                      <p className="text-muted-foreground italic">
+                        {resistanceDisplay.length > 0 ? resistanceDisplay.join(", ") : "None"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {immunityDisplay.length > 0 && (
+                    <div>
+                      <p className="text-[9px] text-muted-foreground uppercase font-bold mb-1">Immunities</p>
+                      <div className="p-1.5 bg-muted/30 rounded text-[10px]">
+                        <p className="text-muted-foreground italic">{immunityDisplay.join(", ")}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+                  </div>
+                          </div>
+                      </div>
+                    </div>
+      </main>
+      
+      {/* Details overlay */}
+      {detailsModal.item && detailsModal.type && (() => {
+        const item = detailsModal.item
+        const accent = getCompendiumItemAccentColor(item as unknown as Record<string, unknown>)
+        const close = () => setDetailsModal({ type: null, item: null })
+
+        if (detailsModal.type === "class") {
+          const cls = item as DndClass
+          const accentStyles = compendiumAccentColorStyles(accent)
+          const baseFeatures = getClassDetailBaseFeatures(cls)
+          const classSubclasses = getSubclassesForClass(subclasses, cls.id)
+            .sort((a, b) => a.name.localeCompare(b.name))
+          const complexityBadge = getClassComplexityHeroBadge(cls)
+          const classFlavor = getCompendiumDetailFlavor(cls, "class")
+          return (
+            <CompendiumDetailOverlay
+              enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
+              open
+              onClose={close}
+              item={cls}
+              imageCrop="top"
+              panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "portrait" : "compact"}
+              subtitle={cls.source || "Custom"}
+              tagline={getCompendiumCardBlurb(cls).toUpperCase()}
+              tags={[
+                ...(cls.primary_ability?.length
+                  ? [{ label: cls.primary_ability.join(" • ").toUpperCase(), emphasis: true }]
+                  : []),
+                ...(complexityBadge ? [complexityBadge] : []),
+                ...getClassDetailHeroBadges(cls),
+              ]}
+              accentColor={accent}
+              detailScroll
+            >
+              <div className="space-y-6">
+                <div>
+                  <p className={cn(portraitDetailEyebrow, accentStyles.cardFooterText)}>
+                    Class highlights
+                  </p>
+                  <h3 className={portraitDetailHeading}>How it feels to play</h3>
+                  {classFlavor ? (
+                    <div className={cn("mt-1 text-white/75", portraitDetailBody)}>
+                      <RichTextContent html={classFlavor} />
+                    </div>
+                  ) : (
+                    <p className={cn("mt-1 text-white/75", portraitDetailBody)}>
+                      No description listed yet.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <h3 className={portraitDetailHeading}>Class features</h3>
+                  {baseFeatures.length > 0 ? (
+                    <div className="mt-1">
+                      <ClassDetailFeatureList
+                        features={baseFeatures}
+                        accentClassName={accentStyles.cardFooterText}
+                        comfortableFromMd
+                      />
+                    </div>
+                  ) : (
+                    <p className={cn("mt-1 text-white/70", portraitDetailBody)}>No class features listed.</p>
+                  )}
+                  {classSubclasses.length > 0 ? (
+                    <ul className="mt-2 space-y-2">
+                      {classSubclasses.map((subclass) => {
+                        const pathFlavor = getCompendiumDetailFlavor(
+                          { ...subclass, class_name: cls.name },
+                          "subclass",
+                        )
+                        return (
+                        <li key={subclass.id} className="min-w-0">
+                          <p className={cn(portraitDetailTitle, "text-white/90")}>
+                            {subclass.name}
+                            <span className={cn("ml-1 text-white/45", portraitDetailBadge)}>
+                              Subclass
+                            </span>
+                          </p>
+                          {pathFlavor ? (
+                            <p className={cn(portraitDetailSummary, "text-white/60")}>
+                              {compendiumCardBlurb(pathFlavor)}
+                            </p>
+                          ) : null}
+                        </li>
+                        )
+                      })}
+                    </ul>
+                  ) : null}
+                </div>
+              </div>
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        if (detailsModal.type === "subclass") {
+          const subclass = item as Subclass
+          const accentStyles = compendiumAccentColorStyles(accent)
+          const parentClass = classes.find((row) => row.id === subclass.class_id) ?? null
+          const features = subclassFeatureTitleRows(subclass.features ?? [])
+          const subclassFlavor = getCompendiumDetailFlavor(
+            { ...subclass, class_name: parentClass?.name },
+            "subclass",
+          )
+          const cardItem = {
+            ...subclass,
+            icon:
+              subclass.icon?.trim() ||
+              getCompendiumItemIcon("subclasses", {
+                ...(subclass as unknown as Record<string, unknown>),
+                class_name: parentClass?.name,
+              }),
+          }
+          return (
+            <CompendiumDetailOverlay
+              enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
+              open
+              onClose={close}
+              item={cardItem}
+              imageCrop="top"
+              panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "portrait" : "compact"}
+              subtitle={parentClass?.name ? `${parentClass.name} Subclass` : "Subclass"}
+              tagline={getCompendiumCardBlurb(subclass).toUpperCase()}
+              accentColor={accent}
+              detailScroll
+            >
+              <div className="space-y-6">
+                <div>
+                  <p className={cn(portraitDetailEyebrow, accentStyles.cardFooterText)}>
+                    Subclass highlights
+                  </p>
+                  <h3 className={portraitDetailHeading}>What this path offers</h3>
+                  {subclassFlavor ? (
+                    <div className={cn("mt-1 text-white/75", portraitDetailBody)}>
+                      <RichTextContent html={subclassFlavor} />
+                    </div>
+                  ) : (
+                    <p className={cn("mt-1 text-white/75", portraitDetailBody)}>
+                      No description listed yet.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <h3 className={portraitDetailHeading}>Subclass features</h3>
+                  {features.length > 0 ? (
+                    <div className="mt-1">
+                      <ClassDetailFeatureList
+                        features={features}
+                        accentClassName={accentStyles.cardFooterText}
+                        comfortableFromMd
+                        showLevel
+                        accordion
+                      />
+                    </div>
+                  ) : (
+                    <p className={cn("mt-1 text-white/70", portraitDetailBody)}>
+                      No subclass features listed.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        if (detailsModal.type === "species") {
+          const sp = item as Species
+          const accentStyles = compendiumAccentColorStyles(accent)
+          const traits = sp.traits ?? []
+          return (
+            <CompendiumDetailOverlay
+              enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
+              open
+              onClose={close}
+              item={sp}
+              imageCrop="top"
+              panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "portrait-species" : "compact"}
+              subtitle={sp.source || "Custom"}
+              tagline={getCompendiumCardBlurb(sp).toUpperCase()}
+              accentColor={accent}
+            >
+              <div className="space-y-6">
+                <div>
+                  <p className={cn(portraitDetailEyebrow, accentStyles.cardFooterText)}>
+                    Species highlights
+                  </p>
+                  <h3 className={portraitDetailHeading}>What sets them apart</h3>
+                  <p className={cn("mt-1 text-white/75", portraitDetailBody)}>
+                    {getCompendiumCardBlurb(sp) || compendiumCardBlurb(sp.description)}
+                  </p>
+                  <dl className={cn("mt-3 space-y-2 text-white/65", portraitDetailMeta)}>
+                    <div className="flex gap-2">
+                      <dt className="font-bold uppercase tracking-wide text-white/45">Size</dt>
+                      <dd>{formatSpeciesSizeDisplay(sp)}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                      <dt className="font-bold uppercase tracking-wide text-white/45">Speed</dt>
+                      <dd>{formatSpeciesSpeedDisplay(sp.speed)}</dd>
+                    </div>
+                  </dl>
+                </div>
+                <div>
+                  <h3 className={portraitDetailHeading}>Traits</h3>
+                  {traits.length > 0 ? (
+                    <div className="mt-1">
+                      <SpeciesDetailTraitList traits={traits} comfortableFromMd />
+                    </div>
+                  ) : (
+                    <p className={cn("mt-1 text-white/70", portraitDetailBody)}>No traits listed.</p>
+                  )}
+                </div>
+              </div>
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        if (detailsModal.type === "background") {
+          const bg = item as Background
+          return (
+            <CompendiumDetailOverlay
+              enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
+              open
+              onClose={close}
+              item={bg}
+              heroLayout="widescreen"
+              panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "widescreen" : "compact"}
+              subtitle={bg.source || "Custom"}
+              accentColor={accent}
+              detailScroll
+            >
+              <BackgroundDetailStrip
+                background={bg}
+                feats={feats}
+                spells={spells}
+                layout="stacked"
+              />
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        if (detailsModal.type === "spell") {
+          const spell = item as Spell
+          return (
+            <CompendiumDetailOverlay
+              enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
+              open
+              onClose={close}
+              item={spell}
+              subtitle={spell.school}
+              imageCrop="top"
+              panelWidth={cardViewMode === "cinematic" && !isCompactOnly ? "portrait-spell" : "compact"}
+              tags={spellDetailOverlayTags(spell)}
+              accentColor={accent}
+            >
+              {spellCastingDetailRows(spell).length > 0 ? (
+                <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
+                  {spellCastingDetailRows(spell).map((row) => (
+                    <div key={row.label}>
+                      <span className="text-white/50">{row.label}:</span> {row.value}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {spell.material?.trim() ? (
+                <p className="mb-3 text-sm text-white/70">
+                  <span className="font-semibold text-white/50">Materials: </span>
+                  {spell.material.trim()}
+                </p>
+              ) : null}
+              <RichTextContent html={spell.description} />
+              {spell.higher_levels?.trim() ? (
+                <div className="mt-3">
+                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-white/50">
+                    At Higher Levels
+                  </p>
+                  <RichTextContent html={spell.higher_levels} />
+                </div>
+              ) : null}
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        if (detailsModal.type === "equipment") {
+          const eq = item as Equipment
+          return (
+            <CompendiumDetailOverlay
+              open
+              onClose={close}
+              item={eq}
+              enableCardImage={false}
+              subtitle={eq.category}
+              accentColor={accent}
+            >
+              {eq.description && <RichTextContent html={eq.description} className="text-sm" />}
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        if (detailsModal.type === "feat") {
+          const feat = item as Feat
+          const featSubtitleBits = [
+            feat.category?.trim() || null,
+            feat.level_requirement && feat.level_requirement > 1
+              ? `Level ${feat.level_requirement}+`
+              : null,
+            feat.repeatable ? "Repeatable" : null,
+          ].filter(Boolean)
+          return (
+            <CompendiumDetailOverlay
+              open
+              onClose={close}
+              item={feat}
+              panelWidth="compact"
+              enableCardImage={false}
+              subtitle={featSubtitleBits.join(" · ") || feat.source || "Feat"}
+              accentColor={accent}
+            >
+              {feat.description?.trim() ? (
+                <RichTextContent html={feat.description} />
+              ) : (
+                <p className="text-sm text-white/70">No description available.</p>
+              )}
+              {feat.prerequisite?.trim() && (
+                <div className="mt-4">
+                  <p className="text-xs uppercase text-white/50 mb-1">Prerequisite</p>
+                  <p className="text-sm">{feat.prerequisite}</p>
+                </div>
+              )}
+            </CompendiumDetailOverlay>
+          )
+        }
+
+        return null
+      })()}
+      <PortraitCropDialog
+        imageSrc={portraitCropSrc}
+        open={Boolean(portraitCropSrc)}
+        onOpenChange={(next) => {
+          if (!next) setPortraitCropSrc(null)
+        }}
+        onApply={(dataUrl) => {
+          patchCharacter({ portrait_url: dataUrl })
+          setPortraitCropSrc(null)
+        }}
+      />
+    </div>
+  )
+}

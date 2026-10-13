@@ -1,0 +1,5116 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { Plus, X } from "lucide-react"
+import {
+  defaultBonusByLevelEntry,
+  defaultCritByLevelEntry,
+  type BonusByLevelEntry,
+} from "@/lib/compendium/bonus-by-level"
+import { SRD_CONDITIONS } from "@/lib/srd/condition-descriptions"
+import { UsesConfigEditor } from "@/components/uses-config-editor"
+import {
+  ABILITY_SCORE_KEYS,
+  ABILITY_MODIFIER_KEYS,
+  ATTACK_ROLL_TARGETS,
+  CHARACTERISTIC_MODIFIER_TYPE_OPTIONS,
+  DAMAGE_ROLL_TARGETS,
+  DAMAGE_TYPES,
+  SKILL_NAMES,
+  SAVING_THROW_NAMES,
+  SAVING_THROW_TARGET_SCOPES,
+  SPEED_TYPES,
+  UNARMED_STRIKE_DICE,
+  VISION_TYPES,
+  SPECIAL_ATTACK_DIE_TYPES,
+  SPECIAL_ATTACK_PROFILES,
+  SPECIAL_ATTACK_AREA_SHAPES,
+  createCharacteristicModifier,
+  getSkillEntries,
+  type CharacteristicModifier,
+  type CharacteristicModifierType,
+  type ListCharacteristic,
+  type RollModifierEntry,
+  type SkillEntry,
+  type SkillsCharacteristic,
+  type SpellsKnownCharacteristic,
+  type SpellsKnownChoiceGrant,
+  type WeaponProficienciesCharacteristic,
+  type SpecialAttackCharacteristic,
+  type RestReplacementCharacteristic,
+  type MagicalSleepImmunityCharacteristic,
+  type CreatureSizeCharacteristic,
+  type MovementEffectsCharacteristic,
+  type AuraCharacteristic,
+  type BonusDamageRidersCharacteristic,
+  type BonusDamageRiderEntry,
+  type SpeedCharacteristic,
+  type SavingThrowTriggerCharacteristic,
+  type OnHitTriggerCharacteristic,
+  type TurnStartTriggerCharacteristic,
+  type FailedRollTriggerCharacteristic,
+  type OnCastSpellTriggerCharacteristic,
+  type SpellHealingModifierCharacteristic,
+  type ResourceAbilityMenuCharacteristic,
+  type ExtraTurnCharacteristic,
+  type ResourceAbilityMenuOption,
+} from "@/lib/compendium/characteristic-modifiers"
+import { NestedModifierEffectEditor } from "@/components/compendium/nested-modifier-effect-editor"
+import { SpecialAttackFieldsEditor } from "@/components/compendium/special-attack-fields-editor"
+import {
+  SavingThrowTriggerEditor,
+  OnHitTriggerEditor,
+  FailedRollTriggerEditor,
+  D20TestReactionEditor,
+  DamageHalvingReactionEditor,
+  HealingDicePoolEditor,
+  OnCreatureDeathTriggerEditor,
+  TurnStartTriggerEditor,
+  TelepathyEditor,
+  OnCastSpellTriggerEditor,
+  SpellHealingModifierEditor,
+  ResourceAbilityMenuEditor,
+  ExtraTurnEditor,
+} from "@/components/compendium/trigger-characteristic-editors"
+import type { ModifierCatalogEntry } from "@/lib/compendium/modifier-catalog"
+import type { ClassResource, UsesAtLevel } from "@/lib/types"
+import { FEAT_PICK_CATEGORIES } from "@/lib/compendium/class-feature-metadata"
+import { formatSpellOptionLabel, type SpellOption } from "@/lib/compendium/spell-options"
+import { mergeToolNameLists } from "@/lib/compendium/tool-options"
+import { SRD_MUSICAL_INSTRUMENTS } from "@/lib/compendium/srd-tools"
+import { SPECIES_SIZES } from "@/lib/compendium/constants"
+import {
+  SRD_LANGUAGES,
+  SRD_STANDARD_LANGUAGES,
+  SRD_RARE_LANGUAGES,
+} from "@/lib/compendium/srd-languages"
+import { mergeLanguageNameLists } from "@/lib/compendium/language-options"
+import { createClient } from "@/lib/db/client"
+import { STANDARD_SPELL_CLASSES } from "@/lib/import/class-spell-lists"
+import { SRD_WEAPON_NAMES } from "@/lib/compendium/weapon-proficiency-options"
+import { WEAPON_PROPERTIES } from "@/lib/compendium/equipment-properties"
+import { RollBonusEditor } from "@/components/compendium/roll-bonus-editor"
+import {
+  defaultRollBonusConfig,
+  formatRollBonusSummary,
+} from "@/lib/compendium/roll-bonus-config"
+import { ModifierLimitationsEditor } from "@/components/compendium/modifier-limitations-editor"
+import type { LimitationSource } from "@/lib/compendium/modifier-limitations"
+import { asCompendiumRow, asCompendiumRows, castCompendiumRow } from "@/lib/data/types"
+
+type CharacteristicModifiersEditorProps = {
+  value: CharacteristicModifier[]
+  onChange: (value: CharacteristicModifier[]) => void
+  otherAbilities?: { id: string; name: string }[]
+  spellOptions?: SpellOption[]
+  /** Common modifiers catalog — required for saving throw trigger effect picker. */
+  modifierCatalog?: ModifierCatalogEntry[]
+  classResources?: ClassResource[]
+  /** Hide add control and header — used when configuring a catalog-linked instance inline. */
+  configureOnly?: boolean
+  /** Catalog admin: preview how choices appear elsewhere — distinct styling, no page header. */
+  templatePreview?: boolean
+}
+
+function updateModifier(
+  mods: CharacteristicModifier[],
+  id: string,
+  next: CharacteristicModifier,
+): CharacteristicModifier[] {
+  return mods.map((mod) => (mod.id === id ? next : mod))
+}
+
+function GrantCreatureLevelTable({
+  label,
+  rows,
+  onChange,
+  step = "1",
+}: {
+  label: string
+  rows?: UsesAtLevel[]
+  onChange: (rows: UsesAtLevel[] | undefined) => void
+  step?: string
+}) {
+  const table = rows ?? []
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-foreground">{label}</label>
+        <button
+          type="button"
+          onClick={() => {
+            const last = table[table.length - 1]
+            onChange([
+              ...table,
+              { level: Math.min((last?.level ?? 1) + 1, 20), count: last?.count ?? 1 },
+            ])
+          }}
+          className="text-[11px] font-semibold text-primary hover:underline"
+        >
+          Add row
+        </button>
+      </div>
+      {table.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">No table — uses the pick count above.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {table.map((row, index) => (
+            <div key={`${row.level}-${index}`} className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={row.level}
+                onChange={(e) => {
+                  const next = [...table]
+                  next[index] = { ...row, level: Math.max(1, parseInt(e.target.value, 10) || 1) }
+                  onChange(next)
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm"
+                aria-label="Level"
+              />
+              <input
+                type="number"
+                min={0}
+                step={step}
+                value={row.count}
+                onChange={(e) => {
+                  const next = [...table]
+                  next[index] = { ...row, count: Number(e.target.value) || 0 }
+                  onChange(next)
+                }}
+                className="w-20 px-2 py-1.5 bg-background border border-border rounded-lg text-sm"
+                aria-label="Value"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const next = table.filter((_, i) => i !== index)
+                  onChange(next.length ? next : undefined)
+                }}
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TagInput({
+  values,
+  onChange,
+  suggestions,
+  placeholder,
+}: {
+  values: string[]
+  onChange: (values: string[]) => void
+  suggestions?: readonly string[]
+  placeholder: string
+}) {
+  const [draft, setDraft] = useState("")
+
+  const addValue = (raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed || values.includes(trimmed)) return
+    onChange([...values, trimmed])
+    setDraft("")
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {values.map((value) => (
+          <span
+            key={value}
+            className="inline-flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded-lg text-sm"
+          >
+            {value}
+            <button
+              type="button"
+              onClick={() => onChange(values.filter((entry) => entry !== value))}
+              className="hover:text-destructive"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        {suggestions ? (
+          <select
+            value=""
+            onChange={(e) => addValue(e.target.value)}
+            className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="">{placeholder}</option>
+            {suggestions.filter((s) => !values.includes(s)).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                addValue(draft)
+              }
+            }}
+            placeholder={placeholder}
+            className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          />
+        )}
+        {!suggestions && (
+          <button
+            type="button"
+            onClick={() => addValue(draft)}
+            className="px-3 py-2 bg-muted rounded-lg text-sm font-medium"
+          >
+            Add
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function WeaponProficienciesEditor({
+  mod,
+  onChange,
+}: {
+  mod: WeaponProficienciesCharacteristic
+  onChange: (next: WeaponProficienciesCharacteristic) => void
+}) {
+  const usedWeapons = new Set(mod.values)
+
+  const addWeapon = (name: string) => {
+    if (!name || usedWeapons.has(name)) return
+    onChange({ ...mod, values: [...mod.values, name] })
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-4">
+        <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name={`weapon-prof-mode-${mod.id}`}
+            checked={mod.mode === "martial_weapons"}
+            onChange={() => onChange({ ...mod, mode: "martial_weapons", values: [] })}
+          />
+          All martial weapons
+        </label>
+        <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name={`weapon-prof-mode-${mod.id}`}
+            checked={mod.mode === "specific"}
+            onChange={() => onChange({ ...mod, mode: "specific" })}
+          />
+          Specific weapons
+        </label>
+      </div>
+      {mod.mode === "specific" && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {mod.values.map((weapon) => (
+              <span
+                key={weapon}
+                className="inline-flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded-lg text-sm"
+              >
+                {weapon}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange({ ...mod, values: mod.values.filter((entry) => entry !== weapon) })
+                  }
+                  className="hover:text-destructive"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <select
+            value=""
+            onChange={(e) => addWeapon(e.target.value)}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="">Add weapon...</option>
+            {SRD_WEAPON_NAMES.filter((weapon) => !usedWeapons.has(weapon)).map((weapon) => (
+              <option key={weapon} value={weapon}>
+                {weapon}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const ARMOR_PROFICIENCY_OPTIONS = [
+  { value: "Light armor", label: "Light" },
+  { value: "Medium armor", label: "Medium" },
+  { value: "Heavy armor", label: "Heavy" },
+  { value: "Shields", label: "Shield" },
+] as const
+
+const ARMOR_PROFICIENCY_VALUE_SET = new Set<string>(
+  ARMOR_PROFICIENCY_OPTIONS.map((option) => option.value),
+)
+
+function ArmorProficienciesEditor({
+  values,
+  onChange,
+}: {
+  values: string[]
+  onChange: (values: string[]) => void
+}) {
+  const standard = values.filter((value) => ARMOR_PROFICIENCY_VALUE_SET.has(value))
+  const special = values.filter((value) => !ARMOR_PROFICIENCY_VALUE_SET.has(value))
+  const [specialEnabled, setSpecialEnabled] = useState(special.length > 0)
+  const [specialDraft, setSpecialDraft] = useState("")
+
+  const toggleStandard = (value: string) => {
+    const next = standard.includes(value)
+      ? values.filter((entry) => entry !== value)
+      : [...values, value]
+    onChange(next)
+  }
+
+  const addSpecial = () => {
+    const trimmed = specialDraft.trim()
+    if (!trimmed || values.includes(trimmed)) {
+      setSpecialDraft("")
+      return
+    }
+    onChange([...values, trimmed])
+    setSpecialDraft("")
+  }
+
+  const removeSpecial = (value: string) => {
+    onChange(values.filter((entry) => entry !== value))
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-4">
+        {ARMOR_PROFICIENCY_OPTIONS.map((option) => (
+          <label
+            key={option.value}
+            className="inline-flex items-center gap-1.5 text-sm cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={standard.includes(option.value)}
+              onChange={() => toggleStandard(option.value)}
+              className="accent-primary"
+            />
+            {option.label}
+          </label>
+        ))}
+        <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={specialEnabled}
+            onChange={(e) => {
+              setSpecialEnabled(e.target.checked)
+              if (!e.target.checked && special.length > 0) {
+                onChange(values.filter((entry) => ARMOR_PROFICIENCY_VALUE_SET.has(entry)))
+              }
+            }}
+            className="accent-primary"
+          />
+          Special
+        </label>
+      </div>
+
+      {specialEnabled && (
+        <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-2.5">
+          {special.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {special.map((value) => (
+                <span
+                  key={value}
+                  className="inline-flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded-lg text-sm"
+                >
+                  {value}
+                  <button
+                    type="button"
+                    onClick={() => removeSpecial(value)}
+                    className="hover:text-destructive"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={specialDraft}
+              onChange={(e) => setSpecialDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  addSpecial()
+                }
+              }}
+              placeholder="e.g. Mithral plate, Living armor..."
+              className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <button
+              type="button"
+              onClick={addSpecial}
+              className="flex items-center gap-1 px-2 py-2 text-xs bg-primary/10 text-primary rounded-lg"
+            >
+              <Plus className="w-3 h-3" />
+              Add
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CritByLevelEditor({
+  rows,
+  onChange,
+}: {
+  rows: BonusByLevelEntry[]
+  onChange: (rows: BonusByLevelEntry[]) => void
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card/50 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-semibold text-foreground">Critical hit range by level</label>
+        <button
+          type="button"
+          onClick={() => onChange([...rows, defaultCritByLevelEntry(rows.length ? rows[rows.length - 1].level + 4 : 5)])}
+          className="text-xs text-primary hover:underline"
+        >
+          + Add tier
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Lowest d20 that counts as a critical hit (e.g. 19 = crit on 19–20).
+      </p>
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No level tiers — uses default minimum above.</p>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((row, idx) => (
+            <div key={idx} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">At level</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={row.level}
+                onChange={(e) => {
+                  const next = [...rows]
+                  next[idx] = { ...row, level: parseInt(e.target.value, 10) || 1 }
+                  onChange(next)
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+              />
+              <span className="text-xs text-muted-foreground">crit on d20 ≥</span>
+              <input
+                type="number"
+                min={2}
+                max={20}
+                value={row.fixed ?? ""}
+                onChange={(e) => {
+                  const next = [...rows]
+                  next[idx] = {
+                    ...row,
+                    mode: "fixed",
+                    fixed: e.target.value ? parseInt(e.target.value, 10) : null,
+                  }
+                  onChange(next)
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+              />
+              <button
+                type="button"
+                onClick={() => onChange(rows.filter((_, i) => i !== idx))}
+                className="p-1 text-muted-foreground hover:text-destructive"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RollModifiersEditor({
+  entries,
+  targets,
+  onChange,
+  mode = "damage",
+}: {
+  entries: RollModifierEntry[]
+  targets: readonly { value: string; label: string }[]
+  onChange: (entries: RollModifierEntry[]) => void
+  mode?: "attack" | "damage"
+}) {
+  const updateEntry = (idx: number, next: RollModifierEntry) => {
+    const copy = [...entries]
+    copy[idx] = next
+    onChange(copy)
+  }
+
+  return (
+    <div className="space-y-2">
+      {entries.map((entry, idx) => (
+        <div
+          key={idx}
+          className="space-y-2 p-2 bg-background rounded-lg border border-border"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground shrink-0">
+              {mode === "attack" ? "Bonus to hit" : "Bonus damage"}
+            </span>
+            <input
+              type="number"
+              value={entry.bonus}
+              onChange={(e) =>
+                updateEntry(idx, { ...entry, bonus: parseInt(e.target.value, 10) || 0 })
+              }
+              className="w-20 px-2 py-1.5 bg-card border border-border rounded-lg text-sm text-center"
+              placeholder="+N"
+            />
+            <select
+              value={entry.target}
+              onChange={(e) => updateEntry(idx, { ...entry, target: e.target.value })}
+              className="flex-1 min-w-[160px] px-2 py-1.5 bg-card border border-border rounded-lg text-sm"
+            >
+              {targets.map((target) => (
+                <option key={target.value} value={target.value}>
+                  {target.label}
+                </option>
+              ))}
+            </select>
+            {entry.target === "custom" && (
+              <input
+                type="text"
+                value={entry.customTarget ?? ""}
+                onChange={(e) => updateEntry(idx, { ...entry, customTarget: e.target.value })}
+                className="flex-1 min-w-[120px] px-2 py-1.5 bg-card border border-border rounded-lg text-sm"
+                placeholder="Custom target"
+              />
+            )}
+            <button
+              type="button"
+              onClick={() => onChange(entries.filter((_, i) => i !== idx))}
+              className="p-1 text-muted-foreground hover:text-destructive"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {mode === "attack" ? (
+            <div className="flex flex-wrap items-center gap-3 pl-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">Crit on d20 ≥</span>
+                <input
+                  type="number"
+                  min={2}
+                  max={20}
+                  value={entry.criticalHitMinimum ?? ""}
+                  onChange={(e) =>
+                    updateEntry(idx, {
+                      ...entry,
+                      criticalHitMinimum: e.target.value ? parseInt(e.target.value, 10) : null,
+                    })
+                  }
+                  className="w-20 px-2 py-1.5 bg-card border border-border rounded-lg text-sm text-center"
+                  placeholder="20"
+                />
+                <span className="text-xs text-muted-foreground">(blank = 20 only)</span>
+              </div>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(entry.ignoreHalfCover)}
+                  onChange={(e) =>
+                    updateEntry(idx, { ...entry, ignoreHalfCover: e.target.checked })
+                  }
+                  className="accent-primary"
+                />
+                <span className="text-muted-foreground">Ignore half cover</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(entry.treatThreeQuartersCoverAsHalf)}
+                  onChange={(e) =>
+                    updateEntry(idx, {
+                      ...entry,
+                      treatThreeQuartersCoverAsHalf: e.target.checked,
+                    })
+                  }
+                  className="accent-primary"
+                />
+                <span className="text-muted-foreground">3/4 cover counts as half</span>
+              </label>
+            </div>
+          ) : null}
+          {mode === "attack" && (entry.criticalHitMinimumByLevel?.length ?? 0) > 0 ? (
+            <CritByLevelEditor
+              rows={entry.criticalHitMinimumByLevel ?? []}
+              onChange={(rows) => updateEntry(idx, { ...entry, criticalHitMinimumByLevel: rows })}
+            />
+          ) : null}
+          {mode === "attack" ? (
+            <button
+              type="button"
+              onClick={() =>
+                updateEntry(idx, {
+                  ...entry,
+                  criticalHitMinimumByLevel: [
+                    ...(entry.criticalHitMinimumByLevel ?? []),
+                    defaultCritByLevelEntry(
+                      (entry.criticalHitMinimumByLevel?.at(-1)?.level ?? 1) + 4,
+                      (entry.criticalHitMinimum ?? 19) - 1,
+                    ),
+                  ],
+                })
+              }
+              className="text-xs text-primary hover:underline"
+            >
+              + Add crit range by level (this attack type)
+            </button>
+          ) : null}
+          {mode === "damage" ? (
+            <div className="space-y-2 border-t border-border/60 pt-2">
+              <label className="flex items-center gap-2 text-xs text-foreground">
+                <input
+                  type="checkbox"
+                  checked={Boolean(entry.grantAbilityModifierWhenMissing)}
+                  onChange={(e) =>
+                    updateEntry(idx, { ...entry, grantAbilityModifierWhenMissing: e.target.checked })
+                  }
+                />
+                Add ability modifier to damage when weapon attack would not normally include it
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">Extra dice when modifier already added</span>
+                <input
+                  type="text"
+                  value={entry.bonusDiceWhenModifierIncluded ?? ""}
+                  onChange={(e) =>
+                    updateEntry(idx, {
+                      ...entry,
+                      bonusDiceWhenModifierIncluded: e.target.value || null,
+                    })
+                  }
+                  className="w-24 px-2 py-1.5 bg-card border border-border rounded-lg text-sm"
+                  placeholder="1d8"
+                />
+                <label className="flex items-center gap-1.5 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(entry.bonusDiceUsesWeaponDamageType)}
+                    onChange={(e) =>
+                      updateEntry(idx, {
+                        ...entry,
+                        bonusDiceUsesWeaponDamageType: e.target.checked,
+                      })
+                    }
+                  />
+                  Use weapon damage type
+                </label>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...entries, { bonus: 1, target: targets[0]?.value ?? "all" }])}
+        className="flex items-center gap-1 px-2 py-1 text-xs bg-primary/10 text-primary rounded-lg"
+      >
+        <Plus className="w-3 h-3" />
+        Add modifier entry
+      </button>
+    </div>
+  )
+}
+
+function SharedChoiceGroupEditor({
+  groupId,
+  groupCount,
+  onChange,
+  description,
+}: {
+  groupId?: string
+  groupCount?: number
+  onChange: (next: { sharedChoiceGroup?: string; sharedChoiceCount?: number; choiceCount?: number | null }) => void
+  description: string
+}) {
+  const enabled = !!(groupId && (groupCount ?? 0) > 0)
+  return (
+    <div className="space-y-2 p-3 rounded-lg border border-primary/20 bg-primary/5">
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => {
+            if (e.target.checked) {
+              onChange({
+                sharedChoiceGroup: groupId || "shared_picks",
+                sharedChoiceCount: groupCount || 1,
+                choiceCount: 0,
+              })
+            } else {
+              onChange({ sharedChoiceGroup: undefined, sharedChoiceCount: undefined })
+            }
+          }}
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">{description}</span>
+      </label>
+      {enabled && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Group id</span>
+          <input
+            type="text"
+            value={groupId ?? ""}
+            onChange={(e) =>
+              onChange({
+                sharedChoiceGroup: e.target.value.trim() || "shared_picks",
+                sharedChoiceCount: groupCount ?? 1,
+                choiceCount: 0,
+              })
+            }
+            placeholder="skilled_proficiencies"
+            className="flex-1 min-w-[160px] px-2 py-1 bg-background border border-border rounded text-sm"
+          />
+          <span className="text-muted-foreground">Total picks</span>
+          <input
+            type="number"
+            min={1}
+            max={18}
+            value={groupCount ?? 1}
+            onChange={(e) =>
+              onChange({
+                sharedChoiceGroup: groupId || "shared_picks",
+                sharedChoiceCount: Math.max(1, parseInt(e.target.value, 10) || 1),
+                choiceCount: 0,
+              })
+            }
+            className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SkillsEditor({
+  mod,
+  onChange,
+}: {
+  mod: SkillsCharacteristic
+  onChange: (next: SkillsCharacteristic) => void
+}) {
+  const entries = mod.entries ?? []
+  const usedSkills = new Set(entries.map((entry) => entry.skill))
+  const choiceEnabled = (mod.choiceCount ?? 0) > 0
+  const sharedEnabled = !!(mod.sharedChoiceGroup && (mod.sharedChoiceCount ?? 0) > 0)
+
+  const addSkill = (skill: string) => {
+    if (!skill || usedSkills.has(skill)) return
+    onChange({ ...mod, entries: [...entries, { skill, expertise: false }] })
+  }
+
+  const updateEntry = (idx: number, next: SkillEntry) => {
+    const copy = [...entries]
+    copy[idx] = next
+    onChange({ ...mod, entries: copy })
+  }
+
+  return (
+    <div className="space-y-3">
+      <SharedChoiceGroupEditor
+        groupId={mod.sharedChoiceGroup}
+        groupCount={mod.sharedChoiceCount}
+        description="Share a pick pool with another modifier (e.g. mix skills and tools)"
+        onChange={(patch) => onChange({ ...mod, ...patch })}
+      />
+      {!sharedEnabled && (
+        <>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!mod.grantExpertise}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  grantExpertise: e.target.checked,
+                  expertiseIfProficient: e.target.checked ? false : mod.expertiseIfProficient,
+                })
+              }
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">Grant Expertise (not just proficiency)</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!mod.expertiseIfProficient}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  expertiseIfProficient: e.target.checked,
+                  grantExpertise: e.target.checked ? false : mod.grantExpertise,
+                })
+              }
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">
+              Expertise if already proficient (otherwise proficiency) — Keen Mind / Observant
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!mod.allowAnySkill}
+              onChange={(e) => onChange({ ...mod, allowAnySkill: e.target.checked })}
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">Allow &quot;any skill&quot; (player picks at build time)</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={choiceEnabled}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  choiceCount: e.target.checked ? Math.max(1, mod.choiceCount ?? 1) : null,
+                })
+              }
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">Choose number among listed skills</span>
+          </label>
+          {choiceEnabled && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Pick</span>
+              <input
+                type="number"
+                min={1}
+                max={18}
+                value={mod.choiceCount ?? 1}
+                onChange={(e) =>
+                  onChange({ ...mod, choiceCount: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                }
+                className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+              />
+              <span className="text-muted-foreground">skill(s)</span>
+            </div>
+          )}
+        </>
+      )}
+      {!sharedEnabled && (
+        <>
+          {entries.map((entry, idx) => (
+        <div
+          key={`${entry.skill}-${idx}`}
+          className="flex flex-wrap items-center gap-2 p-2 bg-background rounded-lg border border-border"
+        >
+          <span className="text-sm font-medium flex-1 min-w-[120px]">{entry.skill}</span>
+          <label className="inline-flex items-center gap-1.5 text-sm">
+            <input
+              type="radio"
+              name={`skill-level-${idx}`}
+              checked={!entry.expertise}
+              onChange={() => updateEntry(idx, { ...entry, expertise: false })}
+            />
+            Proficiency
+          </label>
+          <label className="inline-flex items-center gap-1.5 text-sm">
+            <input
+              type="radio"
+              name={`skill-level-${idx}`}
+              checked={entry.expertise}
+              onChange={() => updateEntry(idx, { ...entry, expertise: true })}
+            />
+            Expertise
+          </label>
+          <button
+            type="button"
+            onClick={() => onChange({ ...mod, entries: entries.filter((_, i) => i !== idx) })}
+            className="p-1 text-muted-foreground hover:text-destructive"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+      <select
+        value=""
+        onChange={(e) => addSkill(e.target.value)}
+        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+      >
+        <option value="">Add skill to pool...</option>
+        {SKILL_NAMES.filter((skill) => !usedSkills.has(skill)).map((skill) => (
+          <option key={skill} value={skill}>
+            {skill}
+          </option>
+        ))}
+      </select>
+        </>
+      )}
+    </div>
+  )
+}
+
+function useToolSuggestions(): string[] {
+  const [suggestions, setSuggestions] = useState<string[]>(() => mergeToolNameLists())
+
+  useEffect(() => {
+    const db = createClient()
+    void db
+      .from("tools")
+      .select("name")
+      .then(({ data }) => {
+        const rows = asCompendiumRows<{ name: string }>(data)
+        if (rows.length) {
+          setSuggestions(mergeToolNameLists(rows))
+        }
+      })
+  }, [])
+
+  return suggestions
+}
+
+function ToolProficienciesEditor({
+  mod,
+  onChange,
+}: {
+  mod: ListCharacteristic
+  onChange: (next: ListCharacteristic) => void
+}) {
+  const choiceEnabled = (mod.choiceCount ?? 0) > 0
+  const sharedEnabled = !!(mod.sharedChoiceGroup && (mod.sharedChoiceCount ?? 0) > 0)
+  const toolSuggestions = useToolSuggestions()
+
+  return (
+    <div className="space-y-3">
+      <SharedChoiceGroupEditor
+        groupId={mod.sharedChoiceGroup}
+        groupCount={mod.sharedChoiceCount}
+        description="Share a pick pool with another modifier (use the same group id on both)"
+        onChange={(patch) => onChange({ ...mod, ...patch })}
+      />
+      {!sharedEnabled && (
+      <>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={choiceEnabled}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              choiceCount: e.target.checked ? Math.max(1, mod.choiceCount ?? 1) : null,
+            })
+          }
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Player picks tools at build time</span>
+      </label>
+      {choiceEnabled && (() => {
+        const poolValues = mod.choiceOptions ?? []
+        const restricted = poolValues.length > 0 || !!mod.toolChoicePool
+        return (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Pick</span>
+              <input
+                type="number"
+                min={1}
+                max={18}
+                value={mod.choiceCount ?? 1}
+                onChange={(e) =>
+                  onChange({ ...mod, choiceCount: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                }
+                className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+              />
+              <span className="text-muted-foreground">
+                tool(s) from{" "}
+                {mod.toolChoicePool
+                  ? `the ${mod.toolChoicePool} group`
+                  : restricted
+                    ? "the list below"
+                    : "the standard list"}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Pick pool:</span>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...mod,
+                    toolChoicePool: "musical",
+                    choiceOptions: null,
+                  })
+                }
+                className="text-xs px-2 py-1 rounded border border-border bg-background hover:border-primary"
+              >
+                Musical instruments
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...mod,
+                    toolChoicePool: "artisans",
+                    choiceOptions: null,
+                  })
+                }
+                className="text-xs px-2 py-1 rounded border border-border bg-background hover:border-primary"
+              >
+                Artisan&apos;s tools
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...mod,
+                    choiceOptions: [...SRD_MUSICAL_INSTRUMENTS],
+                    toolChoicePool: null,
+                  })
+                }
+                className="text-xs px-2 py-1 rounded border border-border bg-background hover:border-primary"
+              >
+                Custom list
+              </button>
+              {restricted && (
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...mod, choiceOptions: null, toolChoicePool: null })}
+                  className="text-xs px-2 py-1 rounded border border-border bg-background hover:border-destructive text-muted-foreground"
+                >
+                  Clear (use all tools)
+                </button>
+              )}
+            </div>
+            {poolValues.length > 0 && (
+              <TagInput
+                values={poolValues}
+                onChange={(values) =>
+                  onChange({ ...mod, choiceOptions: values, toolChoicePool: null })
+                }
+                suggestions={toolSuggestions}
+                placeholder="Add options to the pick list..."
+              />
+            )}
+          </div>
+        )
+      })()}
+      {!choiceEnabled && (
+        <TagInput
+          values={mod.values}
+          onChange={(values) => onChange({ ...mod, values })}
+          suggestions={toolSuggestions}
+          placeholder="Add tool proficiencies..."
+        />
+      )}
+      </>
+      )}
+    </div>
+  )
+}
+
+function useLanguageSuggestions(): string[] {
+  const [suggestions, setSuggestions] = useState<string[]>(() => [...SRD_LANGUAGES])
+
+  useEffect(() => {
+    const db = createClient()
+    void db
+      .from("languages")
+      .select("name")
+      .then(({ data }) => {
+        const rows = asCompendiumRows<{ name: string }>(data)
+        if (rows.length) {
+          setSuggestions(mergeLanguageNameLists(rows))
+        }
+      })
+  }, [])
+
+  return suggestions
+}
+
+function LanguagesEditor({
+  mod,
+  onChange,
+}: {
+  mod: ListCharacteristic
+  onChange: (next: ListCharacteristic) => void
+}) {
+  const languageSuggestions = useLanguageSuggestions()
+  const choiceEnabled = (mod.choiceCount ?? 0) > 0
+  const pool = mod.choicePool ?? "standard"
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-xs font-semibold text-muted-foreground mb-1">
+          Languages always known
+        </label>
+        <TagInput
+          values={mod.values}
+          onChange={(values) => onChange({ ...mod, values })}
+          suggestions={languageSuggestions}
+          placeholder="Add a language (e.g. Common)..."
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          Pick from the compendium Languages list (SRD Standard &amp; Rare tables), or type a custom language.
+        </p>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={choiceEnabled}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              choiceCount: e.target.checked ? Math.max(1, mod.choiceCount ?? 1) : null,
+            })
+          }
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Player also chooses languages at build time</span>
+      </label>
+
+      {choiceEnabled && (
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Choose</span>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={mod.choiceCount ?? 1}
+              onChange={(e) =>
+                onChange({ ...mod, choiceCount: Math.max(1, parseInt(e.target.value, 10) || 1) })
+              }
+              className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+            />
+            <span className="text-muted-foreground">language(s) from the</span>
+            <select
+              value={pool}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  choicePool: e.target.value as "standard" | "standard_and_rare",
+                })
+              }
+              className="px-2 py-1 bg-background border border-border rounded"
+            >
+              <option value="standard">Standard Languages table</option>
+              <option value="standard_and_rare">Standard &amp; Rare Languages</option>
+            </select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Standard: {SRD_STANDARD_LANGUAGES.join(", ")}.
+            {pool === "standard_and_rare" && ` Rare: ${SRD_RARE_LANGUAGES.join(", ")}.`} The player
+            can also enter a custom language. Example: grant Common above, then let the player choose
+            2 more from the Standard table (Dwarf).
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SpellsKnownEditor({
+  mod,
+  onChange,
+  spellOptions,
+}: {
+  mod: SpellsKnownCharacteristic
+  onChange: (next: SpellsKnownCharacteristic) => void
+  spellOptions: SpellOption[]
+}) {
+  const choiceGrants = mod.choiceGrants ?? []
+  const classOptions = mod.spellListClassOptions ?? []
+
+  const updateGrant = (index: number, next: SpellsKnownChoiceGrant) => {
+    const grants = [...choiceGrants]
+    grants[index] = next
+    onChange({ ...mod, choiceGrants: grants })
+  }
+
+  const toggleClassOption = (className: string) => {
+    const next = classOptions.includes(className)
+      ? classOptions.filter((entry) => entry !== className)
+      : [...classOptions, className]
+    onChange({ ...mod, spellListClassOptions: next })
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted-foreground">
+        Grant fixed spells and/or let the player choose spells from a class list at build time.
+      </p>
+      <div>
+        <label className="block text-sm font-semibold mb-1">Spellcasting ability</label>
+        <select
+          value={mod.castingAbility ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              castingAbility: e.target.value
+                ? (e.target.value as typeof mod.castingAbility)
+                : undefined,
+            })
+          }
+          className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        >
+          <option value="">Use class default</option>
+          {ABILITY_SCORE_KEYS.map((ability) => (
+            <option key={ability} value={ability}>
+              {ability.charAt(0).toUpperCase() + ability.slice(1)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!mod.alwaysPrepared}
+            onChange={(e) => onChange({ ...mod, alwaysPrepared: e.target.checked })}
+            className="accent-primary"
+          />
+          <span className="text-muted-foreground">Always prepared (domain / oath / patron spells)</span>
+        </label>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!mod.playerPicksSpellList}
+            onChange={(e) => onChange({ ...mod, playerPicksSpellList: e.target.checked })}
+            className="accent-primary"
+          />
+          <span className="text-muted-foreground">Player picks a class spell list first</span>
+        </label>
+        {mod.playerPicksSpellList && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {STANDARD_SPELL_CLASSES.map((className) => (
+              <label key={className} className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={classOptions.includes(className)}
+                  onChange={() => toggleClassOption(className)}
+                  className="accent-primary"
+                />
+                {className}
+              </label>
+            ))}
+          </div>
+        )}
+        {choiceGrants.map((grant, idx) => (
+          <div
+            key={idx}
+            className="flex flex-wrap items-center gap-2 p-2 bg-background rounded-lg border border-border"
+          >
+            <span className="text-sm text-muted-foreground">Choose</span>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={grant.count}
+              onChange={(e) =>
+                updateGrant(idx, {
+                  ...grant,
+                  count: Math.max(1, parseInt(e.target.value, 10) || 1),
+                })
+              }
+              className="w-14 px-2 py-1 bg-card border border-border rounded text-center text-sm"
+            />
+            <span className="text-sm text-muted-foreground">spell(s) at level</span>
+            <input
+              type="number"
+              min={0}
+              max={9}
+              value={grant.level}
+              onChange={(e) =>
+                updateGrant(idx, {
+                  ...grant,
+                  level: Math.max(0, parseInt(e.target.value, 10) || 0),
+                })
+              }
+              className="w-14 px-2 py-1 bg-card border border-border rounded text-center text-sm"
+            />
+            <label className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={grant.alwaysPrepared ?? !!mod.alwaysPrepared}
+                onChange={(e) => updateGrant(idx, { ...grant, alwaysPrepared: e.target.checked })}
+              />
+              Always prepared
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  ...mod,
+                  choiceGrants: choiceGrants.filter((_, grantIndex) => grantIndex !== idx),
+                })
+              }
+              className="p-1 text-muted-foreground hover:text-destructive"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            onChange({
+              ...mod,
+              choiceGrants: [...choiceGrants, { level: 0, count: 1 }],
+            })
+          }
+          className="flex items-center gap-1 px-2 py-1 text-xs bg-primary/10 text-primary rounded-lg"
+        >
+          <Plus className="w-3 h-3" />
+          Add player spell choice
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-sm font-semibold">Fixed spells</p>
+        {mod.spells.map((entry, idx) => (
+          <div
+            key={idx}
+            className="flex flex-wrap items-center gap-2 p-2 bg-background rounded-lg border border-border"
+          >
+            <select
+              value={entry.spellId}
+              onChange={(e) => {
+                const spells = [...mod.spells]
+                spells[idx] = { ...entry, spellId: e.target.value }
+                onChange({ ...mod, spells })
+              }}
+              className="flex-1 min-w-[160px] px-2 py-1.5 bg-card border border-border rounded-lg text-sm"
+            >
+              <option value="">Select spell...</option>
+              {entry.spellId &&
+              !spellOptions.some((spell) => spell.id === entry.spellId) ? (
+                <option value={entry.spellId}>
+                  {entry.spellId.startsWith("import_spell_name:")
+                    ? `Unresolved: ${entry.spellId.slice("import_spell_name:".length)}`
+                    : `Missing: ${entry.spellId}`}
+                </option>
+              ) : null}
+              {spellOptions.map((spell) => (
+                <option key={spell.id} value={spell.id}>
+                  {formatSpellOptionLabel(spell)}
+                </option>
+              ))}
+            </select>
+            <label className="inline-flex items-center gap-1.5 text-sm whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={entry.alwaysPrepared ?? entry.prepared !== false}
+                onChange={(e) => {
+                  const spells = [...mod.spells]
+                  spells[idx] = { ...entry, alwaysPrepared: e.target.checked, prepared: true }
+                  onChange({ ...mod, spells })
+                }}
+              />
+              Always prepared
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-sm whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={!!entry.castAsRitual}
+                onChange={(e) => {
+                  const spells = [...mod.spells]
+                  spells[idx] = { ...entry, castAsRitual: e.target.checked }
+                  onChange({ ...mod, spells })
+                }}
+              />
+              Cast as Ritual
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-sm whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={entry.prepared !== false}
+                onChange={(e) => {
+                  const spells = [...mod.spells]
+                  spells[idx] = { ...entry, prepared: e.target.checked }
+                  onChange({ ...mod, spells })
+                }}
+              />
+              Prepared
+            </label>
+            <button
+              type="button"
+              onClick={() => onChange({ ...mod, spells: mod.spells.filter((_, i) => i !== idx) })}
+              className="p-1 text-muted-foreground hover:text-destructive"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => onChange({ ...mod, spells: [...mod.spells, { spellId: "", prepared: true }] })}
+          className="flex items-center gap-1 px-2 py-1 text-xs bg-primary/10 text-primary rounded-lg"
+        >
+          <Plus className="w-3 h-3" />
+          Add fixed spell
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ModifierFields({
+  mod,
+  onChange,
+  otherAbilities,
+  spellOptions,
+  modifierCatalog = [],
+  classResources = [],
+}: {
+  mod: CharacteristicModifier
+  onChange: (next: CharacteristicModifier) => void
+  otherAbilities: { id: string; name: string }[]
+  spellOptions: SpellOption[]
+  modifierCatalog?: ModifierCatalogEntry[]
+  classResources?: ClassResource[]
+}) {
+  switch (mod.type) {
+    case "ability_scores":
+      return (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name={`ability-scores-mode-${mod.id}`}
+                checked={mod.mode !== "asi_pool"}
+                onChange={() =>
+                  onChange({
+                    ...mod,
+                    mode: "fixed",
+                    points: undefined,
+                  })
+                }
+                className="accent-primary"
+              />
+              <span className="text-foreground">Fixed amounts</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name={`ability-scores-mode-${mod.id}`}
+                checked={mod.mode === "asi_pool"}
+                onChange={() =>
+                  onChange({
+                    ...mod,
+                    mode: "asi_pool",
+                    points: mod.points ?? 2,
+                    bonuses: {},
+                  })
+                }
+                className="accent-primary"
+              />
+              <span className="text-foreground">Player choice (ASI-style)</span>
+            </label>
+          </div>
+
+          {mod.mode === "asi_pool" ? (
+            <div className="space-y-2">
+              <label className="block text-sm">
+                <span className="block text-muted-foreground mb-1">Points to allocate</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={mod.points ?? 2}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      points: Math.max(1, parseInt(e.target.value, 10) || 2),
+                    })
+                  }
+                  className="w-full max-w-[8rem] px-3 py-2 bg-background border border-border rounded-lg"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground">
+                In the builder, the player spends these points like an Ability Score Improvement:
+                +2 to one ability, or +1 to two abilities (for 2 points).
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {ABILITY_SCORE_KEYS.map((ability) => (
+                <label key={ability} className="text-sm">
+                  <span className="block text-muted-foreground capitalize mb-1">{ability}</span>
+                  <input
+                    type="number"
+                    value={mod.bonuses[ability] ?? ""}
+                    onChange={(e) =>
+                      onChange({
+                        ...mod,
+                        bonuses: {
+                          ...mod.bonuses,
+                          [ability]: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg"
+                    placeholder="+0"
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+
+    case "skills":
+      return (
+        <SkillsEditor
+          mod={mod}
+          onChange={onChange}
+        />
+      )
+
+    case "saving_throws":
+      return (
+        <TagInput
+          values={mod.values}
+          onChange={(values) => onChange({ ...mod, values })}
+          suggestions={SAVING_THROW_NAMES}
+          placeholder="Add saving throw..."
+        />
+      )
+
+    case "skill_check_alternate_ability":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Allows the listed skills&apos; ability checks to use a different ability modifier. Shows
+            up as a special action on the character sheet.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Use ability modifier</label>
+            <select
+              value={mod.ability}
+              onChange={(e) =>
+                onChange({ ...mod, ability: e.target.value as typeof mod.ability })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              {ABILITY_SCORE_KEYS.map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability.charAt(0).toUpperCase() + ability.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">
+              Skills (leave empty to allow any skill)
+            </p>
+            <TagInput
+              values={mod.skills}
+              onChange={(skills) => onChange({ ...mod, skills })}
+              suggestions={[...SKILL_NAMES]}
+              placeholder="Add skill..."
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Condition (optional)
+            </label>
+            <input
+              type="text"
+              value={mod.conditionLabel ?? ""}
+              onChange={(e) =>
+                onChange({ ...mod, conditionLabel: e.target.value || undefined })
+              }
+              placeholder="e.g. While your Rage is active"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      )
+
+    case "saving_throw_alternate_ability":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Remaps which ability modifier you use for the listed saving throws (e.g. Intelligence
+            instead of Wisdom).
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Use ability modifier</label>
+            <select
+              value={mod.ability}
+              onChange={(e) =>
+                onChange({ ...mod, ability: e.target.value as typeof mod.ability })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              {ABILITY_SCORE_KEYS.map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability.charAt(0).toUpperCase() + ability.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">
+              Saves to remap (leave empty for all saves)
+            </p>
+            <TagInput
+              values={mod.saves}
+              onChange={(saves) => onChange({ ...mod, saves })}
+              suggestions={SAVING_THROW_NAMES}
+              placeholder="Add save..."
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Condition (optional)
+            </label>
+            <input
+              type="text"
+              value={mod.conditionLabel ?? ""}
+              onChange={(e) =>
+                onChange({ ...mod, conditionLabel: e.target.value || undefined })
+              }
+              placeholder="e.g. While concentrating"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      )
+
+    case "forced_save_ability_remap":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            When your features force a saving throw of one ability, remaps it to another (targets
+            make the remapped save).
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">From</label>
+            <select
+              value={mod.fromAbility}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  fromAbility: e.target.value as typeof mod.fromAbility,
+                })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="any">Any</option>
+              {(["STR", "DEX", "CON", "INT", "WIS", "CHA"] as const).map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability}
+                </option>
+              ))}
+            </select>
+            <label className="text-sm text-muted-foreground">To</label>
+            <select
+              value={mod.toAbility}
+              onChange={(e) =>
+                onChange({ ...mod, toAbility: e.target.value as typeof mod.toAbility })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              {(["STR", "DEX", "CON", "INT", "WIS", "CHA"] as const).map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Scope</label>
+            <select
+              value={mod.scope}
+              onChange={(e) =>
+                onChange({ ...mod, scope: e.target.value as typeof mod.scope })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="your_features">Your features</option>
+              <option value="your_spells">Your spells</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+        </div>
+      )
+
+    case "weapon_ability_override":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Substitutes the ability used for weapon attack and/or damage rolls (Hex Warrior,
+            Shillelagh). This replaces STR/DEX — it does not add a second ability bonus.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Ability</label>
+            <select
+              value={mod.ability}
+              onChange={(e) =>
+                onChange({ ...mod, ability: e.target.value as typeof mod.ability })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              {ABILITY_SCORE_KEYS.map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability.charAt(0).toUpperCase() + ability.slice(1)}
+                </option>
+              ))}
+            </select>
+            <label className="text-sm text-muted-foreground">Applies to</label>
+            <select
+              value={mod.appliesTo}
+              onChange={(e) =>
+                onChange({ ...mod, appliesTo: e.target.value as typeof mod.appliesTo })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="both">Attack &amp; damage</option>
+              <option value="attack">Attack only</option>
+              <option value="damage">Damage only</option>
+            </select>
+            <label className="text-sm text-muted-foreground">Weapons</label>
+            <select
+              value={mod.scope}
+              onChange={(e) =>
+                onChange({ ...mod, scope: e.target.value as typeof mod.scope })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="all">All weapons</option>
+              <option value="melee">Melee</option>
+              <option value="ranged">Ranged</option>
+              <option value="finesse">Finesse</option>
+              <option value="specific">Named weapons</option>
+            </select>
+          </div>
+          {mod.scope === "specific" && (
+            <TagInput
+              values={mod.weaponNames ?? []}
+              onChange={(weaponNames) => onChange({ ...mod, weaponNames })}
+              placeholder="Add weapon name..."
+            />
+          )}
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.treatAsFinesse)}
+              onChange={(e) => onChange({ ...mod, treatAsFinesse: e.target.checked })}
+            />
+            Treat as Finesse (higher of Strength or Dexterity)
+          </label>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Only when damage die is
+            </label>
+            <TagInput
+              values={mod.whenDamageDice ?? []}
+              onChange={(whenDamageDice) => onChange({ ...mod, whenDamageDice })}
+              placeholder="Add die (1d4, 1d6)…"
+            />
+          </div>
+          <label className="block text-xs text-muted-foreground">Exclude weapon properties</label>
+          <TagInput values={mod.excludedWeaponProperties ?? []} onChange={(excludedWeaponProperties) => onChange({ ...mod, excludedWeaponProperties })} placeholder="Heavy, Special…" />
+        </div>
+      )
+
+    case "weapon_sheet_badge":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Shows a named badge with an info tip on matching Combat weapon cards. Use this for
+            optional riders (Deadly D4s, similar) that should be visible on the weapon without
+            rewriting its printed die.
+          </p>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Badge label</label>
+            <input
+              value={mod.label ?? ""}
+              onChange={(e) => onChange({ ...mod, label: e.target.value })}
+              placeholder="Dervish Fighting"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Overlay description
+            </label>
+            <textarea
+              value={mod.description ?? ""}
+              onChange={(e) => onChange({ ...mod, description: e.target.value })}
+              rows={3}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Only when damage die is
+            </label>
+            <TagInput
+              values={mod.whenDamageDice ?? []}
+              onChange={(whenDamageDice) => onChange({ ...mod, whenDamageDice })}
+              placeholder="Add die (1d4, 1d6, 2d4)…"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.includeUnarmed)}
+              onChange={(e) => onChange({ ...mod, includeUnarmed: e.target.checked })}
+            />
+            Include Unarmed Strike
+          </label>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.requireFirearm)}
+              onChange={(e) => onChange({ ...mod, requireFirearm: e.target.checked })}
+            />
+            Firearms only
+          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Weapons</label>
+            <select
+              value={mod.appliesTo ?? "all"}
+              onChange={(e) =>
+                onChange({ ...mod, appliesTo: e.target.value as typeof mod.appliesTo })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="all">All matching</option>
+              <option value="melee">Melee</option>
+              <option value="ranged">Ranged</option>
+              <option value="finesse">Finesse</option>
+              <option value="specific">Named weapons</option>
+            </select>
+          </div>
+          {mod.appliesTo === "specific" ? (
+            <TagInput
+              values={mod.weaponNames ?? []}
+              onChange={(weaponNames) => onChange({ ...mod, weaponNames })}
+              placeholder="Add weapon name..."
+            />
+          ) : null}
+        </div>
+      )
+
+    case "custom_skill":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Grants a named skill calculated like a standard SRD skill: ability modifier plus
+            proficiency bonus (doubled with expertise).
+          </p>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Skill name</label>
+            <input
+              type="text"
+              value={mod.name}
+              onChange={(e) => onChange({ ...mod, name: e.target.value })}
+              placeholder="e.g. Psionics, Tactics, Lore"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Ability modifier</label>
+            <select
+              value={mod.ability}
+              onChange={(e) =>
+                onChange({ ...mod, ability: e.target.value as typeof mod.ability })
+              }
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              {ABILITY_SCORE_KEYS.map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability.charAt(0).toUpperCase() + ability.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={mod.expertise ?? false}
+              onChange={(e) => onChange({ ...mod, expertise: e.target.checked })}
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">Expertise (double proficiency bonus)</span>
+          </label>
+        </div>
+      )
+
+    case "languages":
+      return <LanguagesEditor mod={mod} onChange={onChange} />
+
+    case "armor_proficiencies":
+      return (
+        <ArmorProficienciesEditor
+          values={mod.values}
+          onChange={(values) => onChange({ ...mod, values })}
+        />
+      )
+
+    case "tool_proficiencies":
+      return (
+        <ToolProficienciesEditor mod={mod} onChange={onChange} />
+      )
+
+    case "weapon_proficiencies":
+      return (
+        <WeaponProficienciesEditor
+          mod={mod}
+          onChange={(next) => onChange(next)}
+        />
+      )
+
+    case "ac":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-semibold mb-1">AC Modification</label>
+            <select
+              value={mod.mode}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  mode: e.target.value as typeof mod.mode,
+                })
+              }
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="flat_bonus">Flat bonus (+N to AC)</option>
+              <option value="set_fixed">Set to fixed AC</option>
+              <option value="ability_modifiers">Base + ability modifiers (up to 2)</option>
+              <option value="add_proficiency">Add proficiency bonus</option>
+            </select>
+          </div>
+          {mod.mode === "flat_bonus" && (
+            <div className="flex flex-wrap gap-2">
+            <input
+              type="number"
+              value={mod.flatBonus ?? 0}
+              onChange={(e) => onChange({ ...mod, flatBonus: parseInt(e.target.value, 10) || 0 })}
+              className="w-32 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Bonus"
+            />
+            <select aria-label="AC bonus ability" value={mod.flatBonusAbility ?? ""} onChange={(e) => onChange({ ...mod, flatBonusAbility: (e.target.value || undefined) as typeof mod.flatBonusAbility })} className="px-3 py-2 bg-background border border-border rounded-lg text-sm">
+              <option value="">No ability bonus</option>
+              {ABILITY_MODIFIER_KEYS.map(key => <option key={key} value={key}>Add {key} modifier</option>)}
+            </select>
+            {mod.flatBonusAbility && <input aria-label="Minimum ability AC bonus" type="number" value={mod.flatBonusMinimum ?? ""} placeholder="Minimum" onChange={(e) => onChange({ ...mod, flatBonusMinimum: e.target.value === "" ? undefined : Number(e.target.value) })} className="w-28 px-3 py-2 bg-background border border-border rounded-lg text-sm" />}
+            </div>
+          )}
+          {mod.mode === "set_fixed" && (
+            <input
+              type="number"
+              min={1}
+              value={mod.fixedAc ?? 10}
+              onChange={(e) => onChange({ ...mod, fixedAc: parseInt(e.target.value, 10) || 10 })}
+              className="w-32 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          )}
+          {mod.mode === "ability_modifiers" && (
+            <div className="space-y-2">
+              <input
+                type="number"
+                min={0}
+                value={mod.base ?? 10}
+                onChange={(e) => onChange({ ...mod, base: parseInt(e.target.value, 10) || 10 })}
+                className="w-32 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                placeholder="Base AC"
+              />
+              <div className="flex flex-wrap gap-2">
+                {ABILITY_MODIFIER_KEYS.map((key) => {
+                  const selected = mod.abilities?.includes(key) ?? false
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      disabled={!selected && (mod.abilities?.length ?? 0) >= 2}
+                      onClick={() => {
+                        const current = mod.abilities ?? []
+                        const next = selected
+                          ? current.filter((entry) => entry !== key)
+                          : [...current, key].slice(0, 2)
+                        onChange({ ...mod, abilities: next })
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${
+                        selected
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background border-border text-muted-foreground disabled:opacity-40"
+                      }`}
+                    >
+                      {key}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">Select up to two ability modifiers</p>
+            </div>
+          )}
+        </div>
+      )
+
+    case "hit_points":
+      return (
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={mod.mode}
+            onChange={(e) =>
+              onChange({ ...mod, mode: e.target.value as typeof mod.mode })
+            }
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="flat">Flat bonus to max HP</option>
+            <option value="per_level">Per level</option>
+          </select>
+          {mod.mode === "per_level" && <select aria-label="HP level scope" value={mod.levelScope ?? "character"} onChange={(e) => onChange({ ...mod, levelScope: e.target.value as "character" | "owning_class" })} className="px-3 py-2 bg-background border border-border rounded-lg text-sm">
+            <option value="character">Character level (e.g. Tough)</option>
+            <option value="owning_class">Granting class level</option>
+          </select>}
+          <input
+            type="number"
+            value={mod.value}
+            onChange={(e) => onChange({ ...mod, value: parseInt(e.target.value, 10) || 0 })}
+            className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            placeholder="HP"
+          />
+          <span className="text-xs text-muted-foreground">
+            {mod.mode === "per_level" ? "HP per level" : "Total HP bonus"}
+          </span>
+        </div>
+      )
+
+    case "initiative":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-semibold mb-1">Initiative Modification</label>
+            <select
+              value={mod.mode}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  mode: e.target.value as typeof mod.mode,
+                })
+              }
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="flat_bonus">Flat bonus (+N to initiative)</option>
+              <option value="add_proficiency">Add proficiency bonus</option>
+              <option value="ability_modifier">Ability modifier + bonus</option>
+            </select>
+          </div>
+          {mod.mode === "flat_bonus" && (
+            <input
+              type="number"
+              value={mod.flatBonus ?? 0}
+              onChange={(e) => onChange({ ...mod, flatBonus: parseInt(e.target.value, 10) || 0 })}
+              className="w-32 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Bonus"
+            />
+          )}
+          {mod.mode === "ability_modifier" && (
+            <div className="flex flex-wrap items-center gap-3">
+              <select
+                value={mod.ability ?? "DEX"}
+                onChange={(e) =>
+                  onChange({
+                    ...mod,
+                    ability: e.target.value as typeof mod.ability,
+                  })
+                }
+                className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              >
+                {ABILITY_MODIFIER_KEYS.map((key) => (
+                  <option key={key} value={key}>
+                    {key}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                value={mod.bonus ?? 0}
+                onChange={(e) => onChange({ ...mod, bonus: parseInt(e.target.value, 10) || 0 })}
+                className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                placeholder="Bonus"
+              />
+              <span className="text-xs text-muted-foreground">
+                Uses selected ability mod + bonus instead of DEX
+              </span>
+            </div>
+          )}
+        </div>
+      )
+
+    case "vision":
+      return (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <select
+            value={mod.visionType}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                visionType: e.target.value as typeof mod.visionType,
+              })
+            }
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            {VISION_TYPES.map((type) => (
+              <option key={type.value} value={type.value}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min={0}
+            value={mod.rangeFeet}
+            onChange={(e) => onChange({ ...mod, rangeFeet: parseInt(e.target.value, 10) || 0 })}
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            placeholder="Range (ft)"
+          />
+          {mod.visionType === "custom" && (
+            <input
+              type="text"
+              value={mod.customType ?? ""}
+              onChange={(e) => onChange({ ...mod, customType: e.target.value })}
+              className="md:col-span-2 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Custom vision type"
+            />
+          )}
+        </div>
+      )
+
+    case "speed":
+      return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <select
+            value={mod.speedType}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                speedType: e.target.value as typeof mod.speedType,
+              })
+            }
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            {SPEED_TYPES.map((type) => (
+              <option key={type.value} value={type.value}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={mod.mode}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                mode: e.target.value as SpeedCharacteristic["mode"],
+              })
+            }
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="add">Add to existing</option>
+            <option value="set">Set to value</option>
+            <option value="equal_to_walk">Equal to walk speed</option>
+          </select>
+          {mod.mode !== "equal_to_walk" ? (
+            <input
+              type="number"
+              min={0}
+              value={mod.value}
+              onChange={(e) => onChange({ ...mod, value: parseInt(e.target.value, 10) || 0 })}
+              className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Feet"
+            />
+          ) : (
+            <span className="text-sm text-muted-foreground px-3 py-2">Matches walking speed</span>
+          )}
+          {mod.speedType === "custom" && (
+            <input
+              type="text"
+              value={mod.customType ?? ""}
+              onChange={(e) => onChange({ ...mod, customType: e.target.value })}
+              className="md:col-span-3 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Custom speed type"
+            />
+          )}
+        </div>
+      )
+
+    case "attack_roll_modifiers":
+      return (
+        <div className="space-y-3">
+          <RollModifiersEditor
+            entries={mod.entries}
+            targets={ATTACK_ROLL_TARGETS}
+            onChange={(entries) => onChange({ ...mod, entries })}
+            mode="attack"
+          />
+          <div className="rounded-lg border border-border bg-card/50 p-3 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm text-muted-foreground">Default crit on d20 ≥</label>
+              <input
+                type="number"
+                min={2}
+                max={20}
+                value={mod.criticalHitMinimum ?? ""}
+                onChange={(e) =>
+                  onChange({
+                    ...mod,
+                    criticalHitMinimum: e.target.value ? parseInt(e.target.value, 10) : null,
+                  })
+                }
+                className="w-20 px-3 py-2 bg-background border border-border rounded-lg text-sm text-center"
+                placeholder="20"
+              />
+              <span className="text-xs text-muted-foreground">(all attacks unless entry overrides)</span>
+            </div>
+            <CritByLevelEditor
+              rows={mod.criticalHitMinimumByLevel ?? []}
+              onChange={(rows) => onChange({ ...mod, criticalHitMinimumByLevel: rows })}
+            />
+          </div>
+        </div>
+      )
+
+    case "damage_roll_modifiers":
+      return (
+        <RollModifiersEditor
+          entries={mod.entries}
+          targets={DAMAGE_ROLL_TARGETS}
+          onChange={(entries) => onChange({ ...mod, entries })}
+          mode="damage"
+        />
+      )
+
+    case "unarmed_strike_damage":
+      return (
+        <UnarmedStrikeDamageEditor mod={mod} onChange={onChange} />
+      )
+
+    case "weapon_damage_die_override":
+      return (
+        <div className="space-y-2">
+          <label className="block text-sm text-muted-foreground">
+            Die sides
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={mod.dieSides ?? 4}
+              onChange={(e) =>
+                onChange({ ...mod, dieSides: parseInt(e.target.value, 10) || 4 })
+              }
+              className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="block text-sm text-muted-foreground">
+            Scope
+            <select
+              value={mod.scope ?? "weapons"}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  scope: e.target.value as typeof mod.scope,
+                })
+              }
+              className="mt-1 w-full rounded border bg-background px-2 py-1 text-sm"
+            >
+              <option value="weapons">All weapons</option>
+              <option value="all">All</option>
+              <option value="melee">Melee</option>
+              <option value="ranged">Ranged</option>
+              <option value="unarmed">Unarmed only</option>
+              <option value="specific">Specific weapon names</option>
+            </select>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Rewrites NdX damage dice to Nd(sides). Used by Deadly D4s and similar features.
+          </p>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input type="checkbox" checked={Boolean(mod.onlyIncrease)} onChange={(e) => onChange({ ...mod, onlyIncrease: e.target.checked })} />
+            Only increase a single weapon die
+          </label>
+          <label className="block text-xs text-muted-foreground">Exclude weapon properties</label>
+          <TagInput values={mod.excludedWeaponProperties ?? []} onChange={(excludedWeaponProperties) => onChange({ ...mod, excludedWeaponProperties })} placeholder="Heavy, Special…" />
+        </div>
+      )
+
+    case "special_attack":
+      return <SpecialAttackFieldsEditor mod={mod} onChange={onChange} />
+
+    case "rest_replacement":
+      return (
+        <RestReplacementEditor mod={mod} onChange={onChange} />
+      )
+
+    case "hit_dice_restore":
+      return (
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold text-foreground">
+            Hit Point Dice regained
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={mod.amount}
+              onChange={(e) => onChange({ ...mod, amount: parseInt(e.target.value, 10) || 1 })}
+              className="mt-1 w-24 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-foreground">
+            Restore when finishing
+            <select
+              value={mod.restoreOn ?? "short_rest"}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  restoreOn: e.target.value === "long_rest" ? "long_rest" : "short_rest",
+                })
+              }
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="short_rest">A Short Rest</option>
+              <option value="long_rest">A Long Rest</option>
+            </select>
+          </label>
+          <div className="rounded-lg border border-border bg-card/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-foreground">Amount by class level</label>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...mod,
+                    amountByLevel: [
+                      ...(mod.amountByLevel ?? []),
+                      defaultBonusByLevelEntry((mod.amountByLevel?.at(-1)?.level ?? 8) + 4),
+                    ],
+                  })
+                }
+                className="text-xs text-primary hover:underline"
+              >
+                + Add tier
+              </button>
+            </div>
+            {(mod.amountByLevel ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground">No extra tiers — uses the base amount.</p>
+            ) : (
+              <div className="space-y-2">
+                {(mod.amountByLevel ?? []).map((row, idx) => (
+                  <div key={idx} className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-muted-foreground">At level</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={row.level}
+                      onChange={(e) => {
+                        const amountByLevel = [...(mod.amountByLevel ?? [])]
+                        amountByLevel[idx] = { ...row, level: parseInt(e.target.value, 10) || 1 }
+                        onChange({ ...mod, amountByLevel })
+                      }}
+                      className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+                    />
+                    <span className="text-xs text-muted-foreground">regain</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={row.fixed ?? 0}
+                      onChange={(e) => {
+                        const amountByLevel = [...(mod.amountByLevel ?? [])]
+                        amountByLevel[idx] = {
+                          ...row,
+                          mode: "fixed",
+                          fixed: parseInt(e.target.value, 10) || 1,
+                        }
+                        onChange({ ...mod, amountByLevel })
+                      }}
+                      className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onChange({
+                          ...mod,
+                          amountByLevel: (mod.amountByLevel ?? []).filter((_, i) => i !== idx),
+                        })
+                      }
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )
+
+    case "magical_sleep_immunity":
+      return (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            The character cannot be put to sleep by magic.
+          </p>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.noSleepRequired)}
+              onChange={(e) => onChange({ ...mod, noSleepRequired: e.target.checked })}
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">Does not need sleep</span>
+          </label>
+          <TagInput
+            values={mod.immuneToNamedSpells ?? []}
+            onChange={(immuneToNamedSpells) => onChange({ ...mod, immuneToNamedSpells })}
+            placeholder="Immune to named spells (e.g. Dream)..."
+          />
+        </div>
+      )
+
+    case "creature_size":
+      return (
+        <CreatureSizeEditor mod={mod} onChange={onChange} />
+      )
+
+    case "movement_effects":
+      return (
+        <MovementEffectsEditor mod={mod} onChange={onChange} />
+      )
+
+    case "damage_resistance":
+    case "damage_immunity":
+      return (
+        <DamageCharacteristicEditor mod={mod} onChange={onChange} />
+      )
+
+    case "condition_immunity":
+      return (
+        <div className="space-y-3">
+          <TagInput
+            values={mod.conditions}
+            onChange={(conditions) => onChange({ ...mod, conditions })}
+            suggestions={SRD_CONDITIONS.map((entry) => entry.name)}
+            placeholder="Add condition immunity..."
+          />
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">
+              Exhaustion source exclusions (optional)
+            </label>
+            <TagInput
+              values={mod.exhaustionSourceExclusions ?? []}
+              onChange={(exhaustionSourceExclusions) =>
+                onChange({ ...mod, exhaustionSourceExclusions })
+              }
+              suggestions={["dehydration", "malnutrition", "suffocation"]}
+              placeholder="Sources that do not cause exhaustion..."
+            />
+          </div>
+        </div>
+      )
+
+    case "extra_wield_slots":
+      return (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm text-muted-foreground">Extra slots</label>
+          <input
+            type="number"
+            min={1}
+            max={4}
+            value={mod.extraSlots ?? 1}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                extraSlots: parseInt(e.target.value, 10) || 1,
+              })
+            }
+            className="w-16 px-2 py-1 bg-background border border-border rounded text-center text-sm"
+          />
+          <label className="text-sm text-muted-foreground">Allowed properties</label>
+          <input
+            type="text"
+            value={(mod.allowedProperties ?? []).join(", ")}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                allowedProperties: e.target.value
+                  .split(",")
+                  .map((entry) => entry.trim())
+                  .filter(Boolean),
+              })
+            }
+            className="min-w-[10rem] flex-1 px-2 py-1 bg-background border border-border rounded text-sm"
+            placeholder="light (empty = any)"
+          />
+        </div>
+      )
+
+    case "attunement_slots":
+      return (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm text-muted-foreground">Total attunement slots</label>
+          <input
+            type="number"
+            min={0}
+            max={10}
+            value={mod.totalSlots ?? ""}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                totalSlots: e.target.value ? parseInt(e.target.value, 10) : null,
+              })
+            }
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-center text-sm"
+            placeholder="3"
+          />
+          <span className="text-sm text-muted-foreground">or +</span>
+          <input
+            type="number"
+            min={0}
+            max={5}
+            value={mod.bonusSlots ?? 0}
+            onChange={(e) =>
+              onChange({ ...mod, bonusSlots: parseInt(e.target.value, 10) || 0 })
+            }
+            className="w-16 px-2 py-1 bg-background border border-border rounded text-center text-sm"
+          />
+          <span className="text-sm text-muted-foreground">bonus slots</span>
+        </div>
+      )
+
+    case "aura":
+      return <AuraCharacteristicEditor mod={mod} onChange={onChange} />
+
+    case "saving_throw_trigger":
+      return (
+        <SavingThrowTriggerEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "on_hit_trigger":
+      return (
+        <OnHitTriggerEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "failed_roll_trigger":
+      return (
+        <FailedRollTriggerEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "d20_test_reaction":
+      return (
+        <D20TestReactionEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "damage_halving_reaction":
+      return <DamageHalvingReactionEditor mod={mod} onChange={onChange} />
+
+    case "healing_dice_pool":
+      return <HealingDicePoolEditor mod={mod} onChange={onChange} />
+
+    case "on_creature_death_trigger":
+      return (
+        <OnCreatureDeathTriggerEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "turn_start_trigger":
+      return (
+        <TurnStartTriggerEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "telepathy":
+      return <TelepathyEditor mod={mod} onChange={onChange} />
+
+    case "on_cast_spell_trigger":
+      return (
+        <OnCastSpellTriggerEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "spell_healing_modifier":
+      return <SpellHealingModifierEditor mod={mod} onChange={onChange} />
+
+    case "resource_ability_menu":
+      return (
+        <ResourceAbilityMenuEditor
+          mod={mod}
+          onChange={onChange}
+          modifierCatalog={modifierCatalog}
+          classResources={classResources}
+        />
+      )
+
+    case "extra_turn":
+      return <ExtraTurnEditor mod={mod} onChange={onChange} />
+
+    case "bonus_damage_riders":
+      return <BonusDamageRidersCharacteristicEditor mod={mod} onChange={onChange} />
+
+    case "damage_reduction":
+      return (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-muted-foreground">Reduce damage by</label>
+            <input
+              type="number"
+              min={1}
+              value={mod.amount}
+              onChange={(e) => onChange({ ...mod, amount: parseInt(e.target.value, 10) || 0 })}
+              className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">
+              Damage types (leave empty for all types)
+            </p>
+            <TagInput
+              values={mod.damageTypes ?? []}
+              onChange={(damageTypes) => onChange({ ...mod, damageTypes })}
+              suggestions={DAMAGE_TYPES}
+              placeholder="Add damage type..."
+            />
+          </div>
+        </div>
+      )
+
+    case "spells":
+      return (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Modifies the spell slot table (extra slots per spell level).
+          </p>
+          {mod.grants.map((grant, idx) => (
+            <div
+              key={idx}
+              className="flex flex-wrap items-center gap-2 p-2 bg-background rounded-lg border border-border"
+            >
+              <select
+                value={grant.level}
+                onChange={(e) => {
+                  const grants = [...mod.grants]
+                  grants[idx] = { ...grant, level: parseInt(e.target.value, 10) }
+                  onChange({ ...mod, grants })
+                }}
+                className="px-2 py-1.5 bg-card border border-border rounded-lg text-sm"
+              >
+                <option value={0}>Cantrip</option>
+                {Array.from({ length: 9 }, (_, i) => i + 1).map((lvl) => (
+                  <option key={lvl} value={lvl}>
+                    Level {lvl}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={1}
+                value={grant.count}
+                onChange={(e) => {
+                  const grants = [...mod.grants]
+                  grants[idx] = { ...grant, count: parseInt(e.target.value, 10) || 1 }
+                  onChange({ ...mod, grants })
+                }}
+                className="w-20 px-2 py-1.5 bg-card border border-border rounded-lg text-sm text-center"
+              />
+              <span className="text-sm text-muted-foreground">slot(s)</span>
+              <button
+                type="button"
+                onClick={() => onChange({ ...mod, grants: mod.grants.filter((_, i) => i !== idx) })}
+                className="p-1 text-muted-foreground hover:text-destructive"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => onChange({ ...mod, grants: [...mod.grants, { level: 1, count: 1 }] })}
+            className="flex items-center gap-1 px-2 py-1 text-xs bg-primary/10 text-primary rounded-lg"
+          >
+            <Plus className="w-3 h-3" />
+            Add spell slot grant
+          </button>
+        </div>
+      )
+
+    case "spells_known":
+      return (
+        <SpellsKnownEditor mod={mod} onChange={onChange} spellOptions={spellOptions} />
+      )
+
+    case "spell_list_access":
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Expand an existing casting list with another class&apos;s list or individual spells. This does not prepare spells or grant slots.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {STANDARD_SPELL_CLASSES.map((className) => {
+              const selected = mod.classNames.includes(className)
+              return (
+                <label
+                  key={className}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-border bg-card text-xs cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={(e) => {
+                      const classNames = e.target.checked
+                        ? [...mod.classNames, className]
+                        : mod.classNames.filter((entry) => entry !== className)
+                      onChange({ ...mod, classNames })
+                    }}
+                    className="accent-primary"
+                  />
+                  {className}
+                </label>
+              )
+            })}
+          </div>
+          <label className="block space-y-1 text-sm">
+            <span>Additional spell names (comma-separated)</span>
+            <input
+              value={(mod.spellNames ?? []).join(", ")}
+              onChange={(e) => onChange({ ...mod, spellNames: e.target.value.split(",").map((name) => name.trim()) })}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2"
+            />
+          </label>
+        </div>
+      )
+
+    case "spellcasting_ability":
+      return (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm text-muted-foreground">Use ability modifier</label>
+          <select
+            value={mod.ability}
+            onChange={(e) =>
+              onChange({ ...mod, ability: e.target.value as typeof mod.ability })
+            }
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            {ABILITY_SCORE_KEYS.map((ability) => (
+              <option key={ability} value={ability}>
+                {ability.charAt(0).toUpperCase() + ability.slice(1)}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-muted-foreground">
+            Overrides spellcasting ability for feat-granted spells
+          </span>
+        </div>
+      )
+
+    case "uses":
+      return (
+        <UsesConfigEditor
+          value={mod.uses}
+          onChange={(uses) => onChange({ ...mod, uses })}
+          otherAbilities={otherAbilities}
+        />
+      )
+
+    case "grant_feat":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Feat categories</label>
+            <div className="flex flex-wrap gap-2">
+              {FEAT_PICK_CATEGORIES.map((category) => {
+                const selected = mod.featCategories?.includes(category) ?? false
+                return (
+                  <label
+                    key={category}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-border bg-card text-xs cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={(e) => {
+                        const current = mod.featCategories ?? []
+                        const next = e.target.checked
+                          ? [...current, category]
+                          : current.filter((entry) => entry !== category)
+                        onChange({
+                          ...mod,
+                          featCategories: next.length ? next : ["General"],
+                        })
+                      }}
+                      className="accent-primary"
+                    />
+                    {category}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Number of feats</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={mod.count ?? 1}
+              onChange={(e) =>
+                onChange({ ...mod, count: Math.max(1, parseInt(e.target.value, 10) || 1) })
+              }
+              className="w-full max-w-[8rem] px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      )
+    case "grant_creature":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Creature names (Creatures &amp; Companions)
+            </label>
+            <textarea
+              value={(mod.creatureNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  creatureNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder={"Wolf\nBasilisk Companion"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              One name per line (or comma-separated). Names must match Creatures &amp; Companions
+              entries.
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Choice options (optional)
+            </label>
+            <textarea
+              value={(mod.choiceOptions ?? []).join("\n")}
+              onChange={(e) => {
+                const next = e.target.value
+                  .split(/[\n,]/)
+                  .map((entry) => entry.trim())
+                  .filter(Boolean)
+                onChange({
+                  ...mod,
+                  choiceOptions: next.length ? next : undefined,
+                })
+              }}
+              rows={2}
+              placeholder="Leave blank to grant all named creatures"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-1">Pick count</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={mod.count ?? 1}
+                onChange={(e) =>
+                  onChange({ ...mod, count: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                }
+                className="w-full max-w-[8rem] px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer pb-2">
+              <input
+                type="checkbox"
+                checked={Boolean(mod.polymorph)}
+                onChange={(e) => onChange({ ...mod, polymorph: e.target.checked || undefined })}
+                className="accent-primary"
+              />
+              Polymorph form (Wild Shape)
+            </label>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Offer pick on rest
+            </label>
+            <select
+              value={mod.pickOnRest ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  pickOnRest:
+                    e.target.value === "short_rest" ||
+                    e.target.value === "long_rest" ||
+                    e.target.value === "short_or_long_rest"
+                      ? e.target.value
+                      : undefined,
+                })
+              }
+              className="w-full max-w-xs px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="">Companions tab only</option>
+              <option value="short_rest">Short Rest</option>
+              <option value="long_rest">Long Rest</option>
+              <option value="short_or_long_rest">Short or Long Rest</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Picker title (optional)
+            </label>
+            <input
+              type="text"
+              value={mod.pickerTitle ?? ""}
+              onChange={(e) =>
+                onChange({ ...mod, pickerTitle: e.target.value.trim() || undefined })
+              }
+              placeholder="Defaults to the feature name"
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <GrantCreatureLevelTable
+            label="Pick count by level"
+            rows={mod.countByLevel}
+            onChange={(countByLevel) => onChange({ ...mod, countByLevel })}
+          />
+          <GrantCreatureLevelTable
+            label="Combined CR cap by level"
+            rows={mod.combinedCrByLevel}
+            step="0.25"
+            onChange={(combinedCrByLevel) => onChange({ ...mod, combinedCrByLevel })}
+          />
+        </div>
+      )
+
+    case "equipment_and_magic_items":
+      return (
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold text-foreground">
+            Item options
+            <textarea
+              value={(mod.itemOptions ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  itemOptions: e.target.value
+                    .split("\n")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={4}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder={"Bag\nCloak\nBackpack"}
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="text-xs font-semibold text-foreground">
+              Choice count
+              <input
+                type="number"
+                min={1}
+                value={mod.choiceCount ?? 1}
+                onChange={(e) =>
+                  onChange({ ...mod, choiceCount: Math.max(1, Number(e.target.value) || 1) })
+                }
+                className="ml-2 w-20 rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs font-semibold text-foreground">
+              <input
+                type="checkbox"
+                checked={mod.allowCustom === true}
+                onChange={(e) => onChange({ ...mod, allowCustom: e.target.checked })}
+              />
+              Allow another item name
+            </label>
+          </div>
+        </div>
+      )
+
+    case "player_note":
+      return (
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold text-foreground">
+            Prompt
+            <input
+              type="text"
+              value={mod.prompt}
+              onChange={(e) => onChange({ ...mod, prompt: e.target.value })}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder="Linked item"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-foreground">
+            Placeholder
+            <input
+              type="text"
+              value={mod.placeholder ?? ""}
+              onChange={(e) => onChange({ ...mod, placeholder: e.target.value })}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder="Describe the item and its contents…"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-foreground">
+            Show on
+            <select
+              value={mod.target}
+              onChange={(e) =>
+                onChange({ ...mod, target: e.target.value as "feature" | "equipment" })
+              }
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="feature">Feature / action</option>
+              <option value="equipment">Equipment item</option>
+            </select>
+          </label>
+        </div>
+      )
+
+    case "inventory_container":
+      return (
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold text-foreground">
+            Container name
+            <input
+              type="text"
+              value={mod.containerName ?? ""}
+              onChange={(e) => onChange({ ...mod, containerName: e.target.value || null })}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder="Dead Space"
+            />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-xs font-semibold text-foreground">
+              Capacity mode
+              <select
+                value={mod.capacityMode}
+                onChange={(e) =>
+                  onChange({
+                    ...mod,
+                    capacityMode: e.target.value as typeof mod.capacityMode,
+                  })
+                }
+                className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="slot_count">Slot count</option>
+                <option value="cubic_feet">Cubic feet</option>
+                <option value="weight_lb">Weight (lb)</option>
+                <option value="unbounded">Unbounded</option>
+              </select>
+            </label>
+            <label className="block text-xs font-semibold text-foreground">
+              Capacity amount
+              <input
+                type="number"
+                min={0}
+                value={mod.capacityAmount ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value.trim()
+                  onChange({
+                    ...mod,
+                    capacityAmount: raw ? Math.max(0, Number(raw) || 0) : null,
+                  })
+                }}
+                className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                placeholder="12"
+              />
+            </label>
+          </div>
+          <label className="block text-xs font-semibold text-foreground">
+            Capacity label
+            <input
+              type="text"
+              value={mod.capacityLabel ?? ""}
+              onChange={(e) => onChange({ ...mod, capacityLabel: e.target.value || null })}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder="12 Medium or smaller corpses…"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-foreground">
+            Content kinds (one per line)
+            <textarea
+              value={(mod.contentKinds ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  contentKinds: e.target.value
+                    .split("\n")
+                    .map((value) => value.trim())
+                    .filter((value): value is typeof mod.contentKinds[number] =>
+                      ["equipment", "corpse", "companion", "freeform"].includes(value),
+                    ),
+                })
+              }
+              rows={3}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder={"corpse\ncompanion\nfreeform"}
+            />
+          </label>
+          <label className="block text-xs font-semibold text-foreground">
+            Max creature size
+            <select
+              value={mod.maxCreatureSize ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  maxCreatureSize: (e.target.value || null) as typeof mod.maxCreatureSize,
+                })
+              }
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Any / not size-limited</option>
+              {["Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan"].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs font-semibold text-foreground">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.linkHostItem)}
+              onChange={(e) => onChange({ ...mod, linkHostItem: e.target.checked })}
+              className="accent-primary"
+            />
+            Link to player-chosen host item (shows in Gear)
+          </label>
+          <label className="block text-xs font-semibold text-foreground">
+            Attach to equipment names (one per line)
+            <textarea
+              value={(mod.attachToEquipmentNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  attachToEquipmentNames: e.target.value
+                    .split("\n")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={2}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder={"Bag of Holding\nPortable Hole"}
+            />
+          </label>
+        </div>
+      )
+
+    case "replace_feature":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Features this replaces
+            </label>
+            <textarea
+              value={(mod.replacedFeatureNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  replacedFeatureNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder={"Sacrificial Strike"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Named features are hidden on Features and Combat/Abilities. This feature becomes
+              the sheet action instead of a rider note.
+            </p>
+          </div>
+        </div>
+      )
+
+    case "power_rider":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Parent power / action names
+            </label>
+            <textarea
+              value={(mod.parentPowerNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  parentPowerNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder={"Guardian Tactics\nSurvive"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Parent menu option names (optional)
+            </label>
+            <textarea
+              value={(mod.parentMenuOptionNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  parentMenuOptionNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={2}
+              placeholder={"Block\nChallenge\nGrasp"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              When set, the alert only attaches if the parent action&apos;s resource menu lists a
+              matching option.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.selectable)}
+              onChange={(e) => onChange({ ...mod, selectable: e.target.checked })}
+            />
+            Optional add-on on the parent action
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.weaponDamageMenu)}
+              onChange={(e) => onChange({ ...mod, weaponDamageMenu: e.target.checked })}
+            />
+            Weapon DMG ··· menu rider (optional extra damage)
+          </label>
+          {mod.weaponDamageMenu ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">Bonus dice</label>
+                <input
+                  type="text"
+                  value={mod.bonusDice ?? ""}
+                  onChange={(e) => onChange({ ...mod, bonusDice: e.target.value || undefined })}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="1d8"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">Ability bonus</label>
+                <select
+                  value={mod.ability ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      ability: (e.target.value || undefined) as typeof mod.ability,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                >
+                  <option value="">None</option>
+                  {ABILITY_SCORE_KEYS.map((ability) => (
+                    <option key={ability} value={ability}>
+                      {ability}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Class resource die
+                </label>
+                <input
+                  type="text"
+                  value={mod.classResourceKey ?? ""}
+                  onChange={(e) =>
+                    onChange({ ...mod, classResourceKey: e.target.value || undefined })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="finisher"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Single dice of that resource
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={mod.classResourceDieCount ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      classResourceDieCount: e.target.value === "" ? undefined : Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="Blank = pool column (Finisher)"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Spend from resource when rolled
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={mod.spendClassResourceAmount ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      spendClassResourceAmount: e.target.value === "" ? undefined : Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">Action cost</label>
+                <select
+                  value={mod.riderActionKind ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      riderActionKind: (e.target.value || undefined) as typeof mod.riderActionKind,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                >
+                  <option value="">None</option>
+                  <option value="bonus">Bonus Action</option>
+                  <option value="reaction">Reaction</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">Weapons</label>
+                <select
+                  value={mod.weaponScope ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      weaponScope: (e.target.value || undefined) as typeof mod.weaponScope,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                >
+                  <option value="">Any weapon</option>
+                  <option value="melee">Melee + Unarmed Strike</option>
+                  <option value="ranged">Ranged</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Add unused ability of
+                </label>
+                <select
+                  value={mod.complementaryAbilities?.length ? "strength_dexterity" : ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      complementaryAbilities: e.target.value ? ["strength", "dexterity"] : undefined,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                >
+                  <option value="">None</option>
+                  <option value="strength_dexterity">Strength or Dexterity (whichever not used)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Ability bonus minimum
+                </label>
+                <input
+                  type="number"
+                  value={mod.abilityBonusMinimum ?? ""}
+                  onChange={(e) =>
+                    onChange({
+                      ...mod,
+                      abilityBonusMinimum: e.target.value === "" ? undefined : Number(e.target.value),
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Extra dice damage type
+                </label>
+                <input
+                  type="text"
+                  value={mod.bonusDiceType ?? ""}
+                  onChange={(e) => onChange({ ...mod, bonusDiceType: e.target.value || undefined })}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="Same as weapon"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Default on when toggle
+                </label>
+                <input
+                  type="text"
+                  value={mod.defaultSelectedWhenToggle ?? ""}
+                  onChange={(e) =>
+                    onChange({ ...mod, defaultSelectedWhenToggle: e.target.value || undefined })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="below_half_hp"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Menu condition label
+                </label>
+                <input
+                  type="text"
+                  value={mod.menuConditionLabel ?? ""}
+                  onChange={(e) =>
+                    onChange({ ...mod, menuConditionLabel: e.target.value || undefined })
+                  }
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  placeholder="Bloodied"
+                />
+              </div>
+            </div>
+          ) : null}
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Replace parent HP spend when selected
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={mod.spendHitPoints ?? ""}
+              onChange={(e) => {
+                const next = e.target.value === "" ? undefined : Number(e.target.value)
+                onChange({
+                  ...mod,
+                  spendHitPoints: next != null && Number.isFinite(next) && next > 0 ? next : undefined,
+                })
+              }}
+              className="w-full max-w-xs px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="10"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Alert summary</label>
+            <input
+              type="text"
+              value={mod.alertSummary ?? ""}
+              onChange={(e) => onChange({ ...mod, alertSummary: e.target.value || undefined })}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Short rider reminder shown on the related action"
+            />
+          </div>
+        </div>
+      )
+
+    case "ability_score_override":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Source ability</label>
+            <select
+              value={mod.sourceAbility}
+              onChange={(e) =>
+                onChange({ ...mod, sourceAbility: e.target.value as typeof mod.sourceAbility })
+              }
+              className="w-full max-w-xs px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              {ABILITY_SCORE_KEYS.map((ability) => (
+                <option key={ability} value={ability}>
+                  {ability}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Target abilities</label>
+            <div className="flex flex-wrap gap-2">
+              {ABILITY_SCORE_KEYS.map((ability) => {
+                const selected = mod.targets?.includes(ability) ?? false
+                return (
+                  <label
+                    key={ability}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-border bg-card text-xs cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={(e) => {
+                        const current = mod.targets ?? []
+                        const next = e.target.checked
+                          ? [...current, ability]
+                          : current.filter((entry) => entry !== ability)
+                        onChange({ ...mod, targets: next.length ? next : [ability] })
+                      }}
+                      className="accent-primary"
+                    />
+                    {ability}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.chooseOneTarget)}
+              onChange={(e) => onChange({ ...mod, chooseOneTarget: e.target.checked || undefined })}
+              className="accent-primary"
+            />
+            Player chooses one target
+          </label>
+        </div>
+      )
+
+    case "healing_received_modifier":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Multiplier</label>
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={mod.multiplier ?? 0.5}
+              onChange={(e) =>
+                onChange({ ...mod, multiplier: Math.max(0, parseFloat(e.target.value) || 0) })
+              }
+              className="w-full max-w-[8rem] px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+            <input
+              type="checkbox"
+              checked={mod.magicalOnly !== false}
+              onChange={(e) => onChange({ ...mod, magicalOnly: e.target.checked })}
+              className="accent-primary"
+            />
+            Magical healing only
+          </label>
+          <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+            <input
+              type="checkbox"
+              checked={Boolean(mod.includePotions)}
+              onChange={(e) => onChange({ ...mod, includePotions: e.target.checked || undefined })}
+              className="accent-primary"
+            />
+            Include potions
+          </label>
+        </div>
+      )
+
+    case "grant_custom_ability":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Custom ability names
+            </label>
+            <textarea
+              value={(mod.abilityNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  abilityNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder={"Telekinetic Weapons"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      )
+
+    case "grant_equipment":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Equipment / magic item names
+            </label>
+            <textarea
+              value={(mod.equipmentNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  equipmentNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder={"Fogstone Periapt\nGlass Medallion"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Added to the inventory once when this feature unlocks. Names must match compendium
+              equipment.
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Copies of each item
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={mod.quantityPerItem ?? 1}
+              onChange={(e) =>
+                onChange({ ...mod, quantityPerItem: Number(e.target.value) || 1 })
+              }
+              className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      )
+
+    case "modify_custom_ability":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Custom ability names to upgrade
+            </label>
+            <textarea
+              value={(mod.abilityNames ?? []).join("\n")}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  abilityNames: e.target.value
+                    .split(/[\n,]/)
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder={"Phase Rift"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Names must match exactly. This upgrades an ability the character already knows rather
+              than granting a new one.
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Upgrade text
+            </label>
+            <textarea
+              value={mod.addendum ?? ""}
+              onChange={(e) => onChange({ ...mod, addendum: e.target.value || null })}
+              rows={3}
+              placeholder="Your Phase Rift no longer has to travel in a straight line."
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Appended wherever the ability&apos;s description is shown.
+            </p>
+          </div>
+          <label className="flex gap-2 text-sm">
+            <input type="checkbox" checked={mod.removeUseLimit ?? false}
+              onChange={(e) => onChange({ ...mod, removeUseLimit: e.target.checked })} />
+            Remove independent use limit (keep resource cost)
+          </label>
+          <label className="block text-sm">Replace check bonus die
+            <select className="ml-2 rounded border bg-background p-2" value={mod.checkBonusDieOverride ?? ""}
+              onChange={(e) => onChange({ ...mod, checkBonusDieOverride: (e.target.value || null) as typeof mod.checkBonusDieOverride })}>
+              <option value="">Keep existing</option>
+              {["d4", "d6", "d8", "d10", "d12", "d20"].map((die) => <option key={die} value={die}>{die}</option>)}
+            </select>
+          </label>
+          <label className="flex gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(mod.usesOverride)}
+              onChange={(e) => onChange({ ...mod, usesOverride: e.target.checked ? { type: "fixed", fixedAmount: 1 } : null })} />
+            Replace use pool and recovery
+          </label>
+          {mod.usesOverride ? <UsesConfigEditor value={mod.usesOverride} onChange={(usesOverride) => onChange({ ...mod, usesOverride })} /> : null}
+          <label className="flex gap-2 text-sm">
+            <input type="checkbox" checked={Boolean(mod.abilityFilter)}
+              onChange={(e) => onChange({ ...mod, abilityFilter: e.target.checked ? { role: "knack" } : null })} />
+            Also match a library by role and prerequisite level
+          </label>
+          {mod.abilityFilter ? (
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <label>Ability role<input className="w-full rounded border p-2 bg-background" value={mod.abilityFilter.role}
+                onChange={(e) => onChange({ ...mod, abilityFilter: { ...mod.abilityFilter!, role: e.target.value } })} /></label>
+              <label>Eligible classes (comma separated)<input className="w-full rounded border p-2 bg-background" value={mod.abilityFilter.eligibleClassNames?.join(", ") ?? ""}
+                onChange={(e) => onChange({ ...mod, abilityFilter: { ...mod.abilityFilter!, eligibleClassNames: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) } })} /></label>
+              {(["minLevel", "maxLevel"] as const).map((key) => (
+                <label key={key}>{key === "minLevel" ? "Minimum" : "Maximum"} prerequisite level
+                  <input type="number" min={1} max={20} className="w-full rounded border p-2 bg-background" value={mod.abilityFilter?.[key] ?? ""}
+                    onChange={(e) => onChange({ ...mod, abilityFilter: { ...mod.abilityFilter!, [key]: e.target.value ? Number(e.target.value) : undefined } })} />
+                </label>
+              ))}
+            </div>
+          ) : null}
+          <label className="block text-xs font-semibold">
+            Optional resource waiver condition
+            <input className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              value={mod.resourceCostWaiver ?? ""}
+              onChange={(e) => onChange({ ...mod, resourceCostWaiver: e.target.value || null })}
+              placeholder="Once per round" />
+          </label>
+          <label className="block text-xs font-semibold">Resource cost reduction
+            <input type="number" min={0} className="mt-1 w-full rounded border bg-background p-2" value={mod.resourceCostReduction ?? 0}
+              onChange={(e) => onChange({ ...mod, resourceCostReduction: Math.max(0, Number(e.target.value) || 0) })} />
+          </label>
+        </div>
+      )
+
+    case "feature_choice_count_bonus":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Target feature name
+            </label>
+            <input
+              type="text"
+              value={mod.targetFeatureName ?? ""}
+              onChange={(e) =>
+                onChange({ ...mod, targetFeatureName: e.target.value || null })
+              }
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Boundless Imagination"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Choice category (optional)
+            </label>
+            <input
+              type="text"
+              value={mod.choiceCategory ?? ""}
+              onChange={(e) => onChange({ ...mod, choiceCategory: e.target.value || null })}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">Flat bonus</label>
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={mod.bonus ?? 1}
+              onChange={(e) =>
+                onChange({ ...mod, bonus: Math.max(0, parseInt(e.target.value, 10) || 0) })
+              }
+              className="w-full max-w-[8rem] px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Or scale from proficiency
+            </label>
+            <select
+              value={mod.bonusFrom ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...mod,
+                  bonusFrom: (e.target.value || null) as typeof mod.bonusFrom,
+                })
+              }
+              className="w-full max-w-xs px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            >
+              <option value="">Flat bonus only</option>
+              <option value="half_proficiency">Half proficiency</option>
+              <option value="proficiency">Full proficiency</option>
+            </select>
+          </div>
+        </div>
+      )
+
+    case "feature_choice_option_grant":
+      return (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Target feature name
+            </label>
+            <input
+              type="text"
+              value={mod.targetFeatureName ?? ""}
+              onChange={(e) =>
+                onChange({ ...mod, targetFeatureName: e.target.value || null })
+              }
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+              placeholder="Boundless Imagination"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Choice category (optional)
+            </label>
+            <input
+              type="text"
+              value={mod.choiceCategory ?? ""}
+              onChange={(e) => onChange({ ...mod, choiceCategory: e.target.value || null })}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-foreground mb-1">
+              Granted options (name, then description; separate options with ---)
+            </label>
+            <textarea
+              value={(mod.options ?? [])
+                .map((option) => `${option.name}\n${option.description ?? ""}`.trim())
+                .join("\n---\n")}
+              onChange={(e) => {
+                const blocks = e.target.value.split(/\n---\n/)
+                onChange({
+                  ...mod,
+                  options: blocks
+                    .map((block) => {
+                      const [nameLine, ...rest] = block.trim().split("\n")
+                      const name = (nameLine ?? "").trim()
+                      if (!name) return null
+                      return {
+                        name,
+                        description: rest.join("\n").trim(),
+                      }
+                    })
+                    .filter((entry): entry is { name: string; description: string } => Boolean(entry)),
+                })
+              }}
+              rows={6}
+              placeholder={"Horrifying Nightmare\nChosen creatures…"}
+              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+            />
+          </div>
+        </div>
+      )
+
+    case "subclass_unlock":
+      return (
+        <p className="text-xs text-muted-foreground">
+          The containing class feature&apos;s level controls when subclass selection appears in the
+          builder.
+        </p>
+      )
+  }
+}
+
+export function CharacteristicModifiersEditor({
+  value,
+  onChange,
+  otherAbilities = [],
+  spellOptions = [],
+  modifierCatalog = [],
+  classResources = [],
+  configureOnly = false,
+  templatePreview = false,
+}: CharacteristicModifiersEditorProps) {
+  const addModifier = (type: CharacteristicModifierType) => {
+    onChange([...value, createCharacteristicModifier(type)])
+  }
+
+  const showPageHeader = !configureOnly && !templatePreview
+  const outerClass = configureOnly
+    ? "space-y-3"
+    : templatePreview
+      ? "space-y-4"
+      : "bg-card-lighter border-2 border-primary/30 rounded-xl p-4 space-y-4"
+  const modCardClass = configureOnly
+    ? "space-y-3"
+    : templatePreview
+      ? "p-4 bg-background/70 border border-dashed border-secondary/40 rounded-xl space-y-3"
+      : "p-4 bg-background border border-border rounded-xl space-y-3"
+
+  return (
+    <div className={outerClass}>
+      {showPageHeader && (
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="font-semibold text-foreground">Characteristic Modifiers</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Mechanical effects from feats and features — ability scores, proficiencies, combat stats,
+              spell grants, and limited-use resources.
+            </p>
+          </div>
+          <select
+            value=""
+            onChange={(e) => {
+              if (e.target.value) addModifier(e.target.value as CharacteristicModifierType)
+            }}
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm font-medium"
+          >
+            <option value="">Add modifier...</option>
+            {CHARACTERISTIC_MODIFIER_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {templatePreview && (
+        <div className="flex justify-end">
+          <select
+            value=""
+            onChange={(e) => {
+              if (e.target.value) addModifier(e.target.value as CharacteristicModifierType)
+            }}
+            className="px-3 py-2 bg-background border border-dashed border-secondary/40 rounded-lg text-sm font-medium"
+          >
+            <option value="">Add modifier type…</option>
+            {CHARACTERISTIC_MODIFIER_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {value.length === 0 ? (
+        configureOnly ? null : (
+          <p
+            className={
+              templatePreview
+                ? "text-sm text-muted-foreground italic py-4 text-center border border-dashed border-secondary/40 rounded-lg"
+                : "text-sm text-muted-foreground italic py-4 text-center border border-dashed border-border rounded-lg"
+            }
+          >
+            {templatePreview
+              ? "No template modifier types yet. Add types to define what can be configured when this entry is linked."
+              : "No characteristic modifiers yet. Add one to define mechanical benefits."}
+          </p>
+        )
+      ) : (
+        <div className="space-y-3">
+          {value.map((mod) => {
+            const typeLabel =
+              CHARACTERISTIC_MODIFIER_TYPE_OPTIONS.find((option) => option.value === mod.type)?.label ??
+              mod.type
+            return (
+              <div key={mod.id} className={modCardClass}>
+                {!configureOnly && (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-bold text-primary">{typeLabel}</span>
+                      <input
+                        type="text"
+                        value={mod.label ?? ""}
+                        onChange={(e) => onChange(updateModifier(value, mod.id, { ...mod, label: e.target.value }))}
+                        placeholder="Optional label"
+                        className="px-2 py-1 bg-card border border-border rounded text-xs"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onChange(value.filter((entry) => entry.id !== mod.id))}
+                      className="p-1 text-muted-foreground hover:text-destructive"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                <ModifierFields
+                  mod={mod}
+                  onChange={(next) => onChange(updateModifier(value, mod.id, next))}
+                  otherAbilities={otherAbilities}
+                  spellOptions={spellOptions}
+                  modifierCatalog={modifierCatalog}
+                  classResources={classResources}
+                />
+                <ModifierLimitationsEditor
+                  value={mod as LimitationSource}
+                  onChange={(patch) => onChange(updateModifier(value, mod.id, { ...mod, ...patch }))}
+                />
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WeaponPropertiesChecklist({
+  selected,
+  onChange,
+}: {
+  selected: string[]
+  onChange: (properties: string[]) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-3">
+      {WEAPON_PROPERTIES.map((prop) => (
+        <label key={prop} className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={selected.includes(prop)}
+            onChange={(e) => {
+              onChange(
+                e.target.checked ? [...selected, prop] : selected.filter((entry) => entry !== prop),
+              )
+            }}
+            className="accent-primary"
+          />
+          <span className="text-muted-foreground">{prop}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function SpecialAttackDamageByLevelEditor({
+  rows,
+  onChange,
+}: {
+  rows: BonusByLevelEntry[]
+  onChange: (rows: BonusByLevelEntry[]) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-semibold text-foreground">Damage by character level</label>
+        <button
+          type="button"
+          onClick={() => onChange([...rows, { level: 1, mode: "dice", dieCount: 1, dieType: "d6" }])}
+          className="text-xs text-primary hover:underline"
+        >
+          + Add row
+        </button>
+      </div>
+      {rows.map((row, idx) => (
+        <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/50 p-2">
+          <span className="text-xs text-muted-foreground">Level</span>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={row.level}
+            onChange={(e) => {
+              const next = [...rows]
+              next[idx] = { ...row, level: parseInt(e.target.value, 10) || 1 }
+              onChange(next)
+            }}
+            className="w-16 px-2 py-1.5 bg-background border border-border rounded text-sm text-center"
+          />
+          <span className="text-xs text-muted-foreground">Dice</span>
+          <input
+            type="number"
+            min={1}
+            value={row.dieCount ?? 1}
+            onChange={(e) => {
+              const next = [...rows]
+              next[idx] = { ...row, mode: "dice", dieCount: parseInt(e.target.value, 10) || 1 }
+              onChange(next)
+            }}
+            className="w-16 px-2 py-1.5 bg-background border border-border rounded text-sm text-center"
+          />
+          <select
+            value={row.dieType ?? "d6"}
+            onChange={(e) => {
+              const next = [...rows]
+              next[idx] = {
+                ...row,
+                mode: "dice",
+                dieType: e.target.value as BonusByLevelEntry["dieType"],
+              }
+              onChange(next)
+            }}
+            className="px-2 py-1.5 bg-background border border-border rounded text-sm"
+          >
+            {SPECIAL_ATTACK_DIE_TYPES.map((die) => (
+              <option key={die} value={die}>
+                {die}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => onChange(rows.filter((_, rowIdx) => rowIdx !== idx))}
+            className="p-1 text-muted-foreground hover:text-destructive"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RestReplacementEditor({
+  mod,
+  onChange,
+}: {
+  mod: RestReplacementCharacteristic
+  onChange: (next: RestReplacementCharacteristic) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm text-muted-foreground">Rest duration (hours)</label>
+        <input
+          type="number"
+          min={1}
+          max={24}
+          value={mod.restHours}
+          onChange={(e) => onChange({ ...mod, restHours: parseInt(e.target.value, 10) || 4 })}
+          className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        />
+      </div>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={mod.replacesLongRest ?? true}
+          onChange={(e) => onChange({ ...mod, replacesLongRest: e.target.checked })}
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Counts as a long rest</span>
+      </label>
+      <div>
+        <label className="block text-xs text-muted-foreground mb-1">Description / notes</label>
+        <textarea
+          value={mod.description ?? ""}
+          onChange={(e) => onChange({ ...mod, description: e.target.value })}
+          placeholder="e.g. Trance meditation — retain consciousness during rest"
+          rows={3}
+          className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm resize-y min-h-[4rem]"
+        />
+      </div>
+    </div>
+  )
+}
+
+function CreatureSizeEditor({
+  mod,
+  onChange,
+}: {
+  mod: CreatureSizeCharacteristic
+  onChange: (next: CreatureSizeCharacteristic) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm text-muted-foreground">Size</label>
+        <select
+          value={mod.size}
+          onChange={(e) =>
+            onChange({ ...mod, size: e.target.value as CreatureSizeCharacteristic["size"] })
+          }
+          className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        >
+          {SPECIES_SIZES.map((size) => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm text-muted-foreground">Mode</label>
+        <select
+          value={mod.mode}
+          onChange={(e) =>
+            onChange({ ...mod, mode: e.target.value as CreatureSizeCharacteristic["mode"] })
+          }
+          className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        >
+          <option value="passive">Always this size</option>
+          <option value="activatable">Can assume this size temporarily</option>
+        </select>
+      </div>
+      {mod.mode === "activatable" && (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm text-muted-foreground">Duration (minutes)</label>
+          <input
+            type="number"
+            min={1}
+            value={mod.durationMinutes ?? 10}
+            onChange={(e) =>
+              onChange({ ...mod, durationMinutes: parseInt(e.target.value, 10) || 10 })
+            }
+            className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MovementEffectsEditor({
+  mod,
+  onChange,
+}: {
+  mod: MovementEffectsCharacteristic
+  onChange: (next: MovementEffectsCharacteristic) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-4 text-sm">
+        {(
+          [
+            ["movementDash", "Dash"],
+            ["movementDisengage", "Disengage"],
+            ["movementHide", "Hide"],
+            ["movementMoveThroughLargerSpaces", "Move through larger creatures' spaces"],
+            ["movementHideBehindLargerCreatures", "Hide behind larger creatures"],
+            ["moveWithoutOpportunityAttacks", "Doesn't provoke Opportunity Attacks"],
+            ["ignoreDifficultTerrain", "Ignore Difficult Terrain"],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!mod[key]}
+              onChange={(e) => onChange({ ...mod, [key]: e.target.checked })}
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">{label}</span>
+          </label>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={Boolean(mod.spiderClimb)}
+          onChange={(e) => onChange({ ...mod, spiderClimb: e.target.checked })}
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Spider climb (climb speed equal to walk)</span>
+      </label>
+      {mod.spiderClimb ? (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Available from level</span>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={mod.spiderClimbMinLevel ?? ""}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                spiderClimbMinLevel: e.target.value ? parseInt(e.target.value, 10) : null,
+              })
+            }
+            className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+            placeholder="1"
+          />
+        </div>
+      ) : null}
+      <MovementTypesCheckboxGroup
+        value={mod.movementTypes ?? []}
+        onChange={(movementTypes) => onChange({ ...mod, movementTypes })}
+      />
+    </div>
+  )
+}
+
+function MovementTypesCheckboxGroup({
+  value,
+  onChange,
+}: {
+  value: import("@/lib/types").MovementType[]
+  onChange: (types: import("@/lib/types").MovementType[]) => void
+}) {
+  const options = [
+    { value: "walk", label: "Walk" },
+    { value: "fly", label: "Fly" },
+    { value: "swim", label: "Swim" },
+    { value: "climb", label: "Climb" },
+    { value: "burrow", label: "Burrow" },
+    { value: "jump", label: "Jump" },
+  ] as const
+
+  const toggle = (type: import("@/lib/types").MovementType) => {
+    if (value.includes(type)) onChange(value.filter((entry) => entry !== type))
+    else onChange([...value, type])
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-foreground mb-1">Movement types</label>
+      <p className="text-xs text-muted-foreground mb-2">Leave all unchecked for any movement type.</p>
+      <div className="flex flex-wrap gap-3 text-sm">
+        {options.map(({ value: type, label }) => (
+          <label key={type} className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={value.includes(type)}
+              onChange={() => toggle(type)}
+              className="accent-primary"
+            />
+            <span className="text-muted-foreground">{label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function UnarmedStrikeDamageEditor({
+  mod,
+  onChange,
+}: {
+  mod: import("@/lib/compendium/characteristic-modifiers").UnarmedStrikeDamageCharacteristic
+  onChange: (next: import("@/lib/compendium/characteristic-modifiers").UnarmedStrikeDamageCharacteristic) => void
+}) {
+  const dieByLevel = mod.dieByLevel ?? []
+  const useLevelTable = dieByLevel.length > 0
+
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={useLevelTable}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              dieByLevel: e.target.checked
+                ? [{ level: 1, mode: "dice", dieCount: 1, dieType: "d6" }]
+                : [],
+            })
+          }
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Scale die by character level (Martial Arts table)</span>
+      </label>
+
+      {useLevelTable ? (
+        <div className="space-y-2">
+          {dieByLevel.map((row, idx) => (
+            <div key={idx} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">At level</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={row.level}
+                onChange={(e) => {
+                  const next = [...dieByLevel]
+                  next[idx] = { ...row, level: parseInt(e.target.value, 10) || 1 }
+                  onChange({ ...mod, dieByLevel: next })
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm"
+              />
+              <span className="text-xs text-muted-foreground">die</span>
+              <select
+                value={row.dieType ?? "d6"}
+                onChange={(e) => {
+                  const next = [...dieByLevel]
+                  next[idx] = {
+                    ...row,
+                    mode: "dice",
+                    dieCount: 1,
+                    dieType: e.target.value as typeof row.dieType,
+                  }
+                  onChange({ ...mod, dieByLevel: next })
+                }}
+                className="px-2 py-1.5 bg-background border border-border rounded-lg text-sm"
+              >
+                {["d4", "d6", "d8", "d10", "d12"].map((die) => (
+                  <option key={die} value={die}>
+                    1{die}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({ ...mod, dieByLevel: dieByLevel.filter((_, i) => i !== idx) })
+                }
+                className="text-xs text-destructive hover:underline"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...mod,
+                dieByLevel: [
+                  ...dieByLevel,
+                  {
+                    level: dieByLevel.length ? Math.min(20, Math.max(...dieByLevel.map((r) => r.level)) + 1) : 1,
+                    mode: "dice",
+                    dieCount: 1,
+                    dieType: "d8",
+                  },
+                ],
+              })
+            }
+            className="text-xs text-primary hover:underline"
+          >
+            Add level tier
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm text-muted-foreground">Fixed damage die</label>
+          <select
+            value={mod.die ?? "1d6"}
+            onChange={(e) => onChange({ ...mod, die: e.target.value as typeof mod.die })}
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            {UNARMED_STRIKE_DICE.map((die) => (
+              <option key={die} value={die}>
+                {die === "1" ? "1 (flat damage)" : die}
+              </option>
+            ))}
+          </select>
+          <label className="text-sm text-muted-foreground">Damage type</label>
+          <select
+            value={mod.damageType ?? ""}
+            onChange={(e) => onChange({ ...mod, damageType: e.target.value || null })}
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="">Bludgeoning (default)</option>
+            {DAMAGE_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+          <label className="text-sm text-muted-foreground">Ability</label>
+          <select
+            value={mod.ability ?? ""}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                ability: (e.target.value || null) as typeof mod.ability,
+              })
+            }
+            className="px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="">Strength (default)</option>
+            {ABILITY_SCORE_KEYS.map((ability) => (
+              <option key={ability} value={ability}>
+                {ability.charAt(0).toUpperCase() + ability.slice(1)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <label className="text-sm text-muted-foreground">
+        Empty-handed die
+        <select
+          value={mod.emptyHandedDie ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              emptyHandedDie: (e.target.value || null) as typeof mod.emptyHandedDie,
+            })
+          }
+          className="mt-1 block px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        >
+          <option value="">Same as fixed / scaled die</option>
+          {UNARMED_STRIKE_DICE.filter((die) => die !== "1").map((die) => (
+            <option key={die} value={die}>
+              {die} (no weapon or shield)
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  )
+}
+
+function DamageCharacteristicEditor({
+  mod,
+  onChange,
+}: {
+  mod: import("@/lib/compendium/characteristic-modifiers").DamageCharacteristic
+  onChange: (next: import("@/lib/compendium/characteristic-modifiers").DamageCharacteristic) => void
+}) {
+  const choiceEnabled = (mod.choiceCount ?? 0) > 0
+
+  return (
+    <div className="space-y-3">
+      <TagInput
+        values={mod.damageTypes}
+        onChange={(damageTypes) => onChange({ ...mod, damageTypes })}
+        suggestions={DAMAGE_TYPES}
+        placeholder={`Add fixed ${mod.type === "damage_resistance" ? "resistance" : "immunity"}...`}
+      />
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={choiceEnabled}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              choiceCount: e.target.checked ? Math.max(1, mod.choiceCount ?? 1) : null,
+            })
+          }
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Player picks damage type(s) at build time</span>
+      </label>
+      {choiceEnabled ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Pick</span>
+            <input
+              type="number"
+              min={1}
+              max={13}
+              value={mod.choiceCount ?? 1}
+              onChange={(e) =>
+                onChange({ ...mod, choiceCount: Math.max(1, parseInt(e.target.value, 10) || 1) })
+              }
+              className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+            />
+            <span className="text-muted-foreground">from the list below</span>
+          </div>
+          <TagInput
+            values={mod.choiceOptions ?? []}
+            onChange={(choiceOptions) => onChange({ ...mod, choiceOptions })}
+            suggestions={DAMAGE_TYPES}
+            placeholder="Damage type options..."
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function AuraCharacteristicEditor({
+  mod,
+  onChange,
+}: {
+  mod: AuraCharacteristic
+  onChange: (next: AuraCharacteristic) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm text-muted-foreground">Radius (ft.)</label>
+        <input
+          type="number"
+          min={5}
+          value={mod.radiusFeet}
+          onChange={(e) => onChange({ ...mod, radiusFeet: parseInt(e.target.value, 10) || 10 })}
+          className="w-24 px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        />
+      </div>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={mod.affectsSelf !== false}
+          onChange={(e) => onChange({ ...mod, affectsSelf: e.target.checked })}
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Affects you</span>
+      </label>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={mod.affectsAllies !== false}
+          onChange={(e) => onChange({ ...mod, affectsAllies: e.target.checked })}
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Affects allies</span>
+      </label>
+      <label className="flex items-center gap-2 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!mod.halfCover}
+          onChange={(e) => onChange({ ...mod, halfCover: e.target.checked })}
+          className="accent-primary"
+        />
+        <span className="text-muted-foreground">Grants half cover</span>
+      </label>
+      <div>
+        <p className="text-xs text-muted-foreground mb-2">Save bonus (e.g. Aura of Protection)</p>
+        <select
+          value={mod.saveBonusConfig?.ability ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...mod,
+              saveBonusConfig: e.target.value
+                ? { mode: "ability_modifier", ability: e.target.value as "CHA" }
+                : null,
+            })
+          }
+          className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+        >
+          <option value="">None</option>
+          {ABILITY_MODIFIER_KEYS.map((key) => (
+            <option key={key} value={key}>
+              {key} modifier
+            </option>
+          ))}
+        </select>
+      </div>
+      <TagInput
+        values={mod.conditionImmunities ?? []}
+        onChange={(conditionImmunities) => onChange({ ...mod, conditionImmunities })}
+        suggestions={SRD_CONDITIONS.map((entry) => entry.name)}
+        placeholder="Condition immunities in aura..."
+      />
+    </div>
+  )
+}
+
+function BonusDamageRidersCharacteristicEditor({
+  mod,
+  onChange,
+}: {
+  mod: BonusDamageRidersCharacteristic
+  onChange: (next: BonusDamageRidersCharacteristic) => void
+}) {
+  const riders = mod.riders ?? []
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs text-muted-foreground mb-1">Trigger</label>
+          <select
+            value={mod.triggerOn ?? "on_hit"}
+            onChange={(e) =>
+              onChange({
+                ...mod,
+                triggerOn: e.target.value as BonusDamageRidersCharacteristic["triggerOn"],
+              })
+            }
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          >
+            <option value="on_hit">On hit (optional riders)</option>
+            <option value="on_crit">On critical hit</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-muted-foreground mb-1">Applies to</label>
+          <input
+            type="text"
+            value={mod.appliesTo ?? ""}
+            onChange={(e) => onChange({ ...mod, appliesTo: e.target.value || null })}
+            placeholder="e.g. weapon attacks, Sneak Attack"
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+          />
+        </div>
+      </div>
+      <div className="rounded-lg border border-border bg-card/50 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-foreground">Automatic bonus</span>
+          {mod.automaticBonus ? (
+            <span className="text-xs text-muted-foreground">
+              {formatRollBonusSummary(mod.automaticBonus)}
+            </span>
+          ) : null}
+        </div>
+        <RollBonusEditor
+          value={mod.automaticBonus ?? defaultRollBonusConfig("fixed")}
+          onChange={(automaticBonus) => onChange({ ...mod, automaticBonus })}
+          label="Bonus on trigger (leave fixed 0 to disable)"
+        />
+        <button
+          type="button"
+          onClick={() => onChange({ ...mod, automaticBonus: null })}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Clear automatic bonus
+        </button>
+      </div>
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-muted-foreground">Max optional riders per use</span>
+        <input
+          type="number"
+          min={1}
+          max={5}
+          value={mod.maxRidersPerUse ?? 1}
+          onChange={(e) =>
+            onChange({ ...mod, maxRidersPerUse: parseInt(e.target.value, 10) || 1 })
+          }
+          className="w-16 px-2 py-1 bg-background border border-border rounded text-center"
+        />
+        <span className="text-xs text-muted-foreground">(fallback when no level tiers)</span>
+      </div>
+      <div className="rounded-lg border border-border bg-card/50 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-semibold text-foreground">Max riders by level</label>
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...mod,
+                maxRidersPerUseByLevel: [
+                  ...(mod.maxRidersPerUseByLevel ?? []),
+                  {
+                    level:
+                      (mod.maxRidersPerUseByLevel?.at(-1)?.level ?? mod.maxRidersPerUseByLevel?.[0]?.level ?? 1) +
+                      4,
+                    count: mod.maxRidersPerUse ?? 1,
+                  },
+                ],
+              })
+            }
+            className="text-xs text-primary hover:underline"
+          >
+            + Add tier
+          </button>
+        </div>
+        {(mod.maxRidersPerUseByLevel ?? []).length === 0 ? (
+          <p className="text-xs text-muted-foreground">Uses max riders per use above at all levels.</p>
+        ) : (
+          (mod.maxRidersPerUseByLevel ?? []).map((row, idx) => (
+            <div key={idx} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">At level</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={row.level}
+                onChange={(e) => {
+                  const next = [...(mod.maxRidersPerUseByLevel ?? [])]
+                  next[idx] = { ...row, level: parseInt(e.target.value, 10) || 1 }
+                  onChange({ ...mod, maxRidersPerUseByLevel: next })
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+              />
+              <span className="text-xs text-muted-foreground">max</span>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={row.count}
+                onChange={(e) => {
+                  const next = [...(mod.maxRidersPerUseByLevel ?? [])]
+                  next[idx] = { ...row, count: parseInt(e.target.value, 10) || 1 }
+                  onChange({ ...mod, maxRidersPerUseByLevel: next })
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...mod,
+                    maxRidersPerUseByLevel: (mod.maxRidersPerUseByLevel ?? []).filter((_, i) => i !== idx),
+                  })
+                }
+                className="p-1 text-muted-foreground hover:text-destructive"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="rounded-lg border border-border bg-card/50 p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-semibold text-foreground">Automatic bonus by level</label>
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...mod,
+                automaticBonusByLevel: [
+                  ...(mod.automaticBonusByLevel ?? []),
+                  defaultBonusByLevelEntry(
+                    (mod.automaticBonusByLevel?.at(-1)?.level ?? 1) + 4,
+                  ),
+                ],
+              })
+            }
+            className="text-xs text-primary hover:underline"
+          >
+            + Add tier
+          </button>
+        </div>
+        {(mod.automaticBonusByLevel ?? []).length === 0 ? (
+          <p className="text-xs text-muted-foreground">No level-scaled automatic bonus (e.g. Brutal Strike +1d10).</p>
+        ) : (
+          (mod.automaticBonusByLevel ?? []).map((row, idx) => (
+            <div key={idx} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">At level</span>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={row.level}
+                onChange={(e) => {
+                  const next = [...(mod.automaticBonusByLevel ?? [])]
+                  next[idx] = { ...row, level: parseInt(e.target.value, 10) || 1 }
+                  onChange({ ...mod, automaticBonusByLevel: next })
+                }}
+                className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+              />
+              <select
+                value={row.mode}
+                onChange={(e) => {
+                  const next = [...(mod.automaticBonusByLevel ?? [])]
+                  next[idx] = {
+                    ...row,
+                    mode: e.target.value as BonusByLevelEntry["mode"],
+                  }
+                  onChange({ ...mod, automaticBonusByLevel: next })
+                }}
+                className="px-2 py-1.5 bg-background border border-border rounded-lg text-sm"
+              >
+                <option value="fixed">Fixed</option>
+                <option value="dice">Dice</option>
+              </select>
+              {row.mode === "dice" ? (
+                <>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={row.dieCount ?? 1}
+                    onChange={(e) => {
+                      const next = [...(mod.automaticBonusByLevel ?? [])]
+                      next[idx] = { ...row, dieCount: parseInt(e.target.value, 10) || 1 }
+                      onChange({ ...mod, automaticBonusByLevel: next })
+                    }}
+                    className="w-14 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+                  />
+                  <select
+                    value={row.dieType ?? "d6"}
+                    onChange={(e) => {
+                      const next = [...(mod.automaticBonusByLevel ?? [])]
+                      next[idx] = {
+                        ...row,
+                        dieType: e.target.value as BonusByLevelEntry["dieType"],
+                      }
+                      onChange({ ...mod, automaticBonusByLevel: next })
+                    }}
+                    className="px-2 py-1.5 bg-background border border-border rounded-lg text-sm"
+                  >
+                    {["d4", "d6", "d8", "d10", "d12"].map((die) => (
+                      <option key={die} value={die}>
+                        {die}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <input
+                  type="number"
+                  value={row.fixed ?? 0}
+                  onChange={(e) => {
+                    const next = [...(mod.automaticBonusByLevel ?? [])]
+                    next[idx] = { ...row, fixed: parseInt(e.target.value, 10) || 0 }
+                    onChange({ ...mod, automaticBonusByLevel: next })
+                  }}
+                  className="w-16 px-2 py-1.5 bg-background border border-border rounded-lg text-sm text-center"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...mod,
+                    automaticBonusByLevel: (mod.automaticBonusByLevel ?? []).filter((_, i) => i !== idx),
+                  })
+                }
+                className="p-1 text-muted-foreground hover:text-destructive"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      {riders.map((rider, idx) => (
+        <div key={`${rider.name}-${idx}`} className="space-y-2 p-2 bg-background rounded-lg border border-border">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={rider.name}
+              onChange={(e) => {
+                const next = [...riders]
+                next[idx] = { ...rider, name: e.target.value }
+                onChange({ ...mod, riders: next })
+              }}
+              placeholder="Rider name"
+              className="flex-1 px-2 py-1.5 bg-card border border-border rounded text-sm"
+            />
+            <input
+              type="text"
+              value={rider.costDice ?? ""}
+              onChange={(e) => {
+                const next = [...riders]
+                next[idx] = { ...rider, costDice: e.target.value || null }
+                onChange({ ...mod, riders: next })
+              }}
+              placeholder="1d6"
+              className="w-20 px-2 py-1.5 bg-card border border-border rounded text-sm"
+            />
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={rider.unlocksAtLevel ?? ""}
+              onChange={(e) => {
+                const next = [...riders]
+                next[idx] = {
+                  ...rider,
+                  unlocksAtLevel: e.target.value ? parseInt(e.target.value, 10) : null,
+                }
+                onChange({ ...mod, riders: next })
+              }}
+              placeholder="Lv"
+              title="Unlocks at class level"
+              className="w-14 px-2 py-1.5 bg-card border border-border rounded text-sm text-center"
+            />
+            <button
+              type="button"
+              onClick={() => onChange({ ...mod, riders: riders.filter((_, i) => i !== idx) })}
+              className="p-1 text-muted-foreground hover:text-destructive"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <input
+            type="text"
+            value={rider.description ?? ""}
+            onChange={(e) => {
+              const next = [...riders]
+              next[idx] = { ...rider, description: e.target.value || null }
+              onChange({ ...mod, riders: next })
+            }}
+            placeholder="Description"
+            className="w-full px-2 py-1.5 bg-card border border-border rounded text-sm"
+          />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input
+              type="text"
+              value={rider.costResourceKey ?? ""}
+              onChange={(e) => {
+                const next = [...riders]
+                next[idx] = { ...rider, costResourceKey: e.target.value || null }
+                onChange({ ...mod, riders: next })
+              }}
+              placeholder="Cost resource key (e.g. sneak_attack)"
+              className="w-full px-2 py-1.5 bg-card border border-border rounded text-sm"
+            />
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={rider.costResourceAmount ?? ""}
+              onChange={(e) => {
+                const next = [...riders]
+                next[idx] = {
+                  ...rider,
+                  costResourceAmount: e.target.value ? parseInt(e.target.value, 10) : null,
+                }
+                onChange({ ...mod, riders: next })
+              }}
+              placeholder="Resource amount"
+              className="w-full px-2 py-1.5 bg-card border border-border rounded text-sm"
+            />
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() =>
+          onChange({
+            ...mod,
+            riders: [...riders, { name: "", costDice: null, description: null, unlocksAtLevel: null }],
+          })
+        }
+        className="flex items-center gap-1 px-2 py-1 text-xs bg-primary/10 text-primary rounded-lg"
+      >
+        <Plus className="w-3 h-3" />
+        Add rider
+      </button>
+    </div>
+  )
+}

@@ -1,0 +1,3874 @@
+/**
+ * Passive, character-wide effects live here and flow through `aggregateCharacteristics()` into
+ * `DerivedCharacter`. Actionable effects (new actions, limited uses, per-weapon/target scoping)
+ * belong on `FeatureEffect` (`lib/types.ts`) instead — see
+ * `docs/modifier-vs-feature-effect.md` for the full decision rule.
+ */
+import type { UsesAtLevel, UsesConfig } from "@/lib/types"
+import type { BonusByLevelEntry } from "@/lib/compendium/bonus-by-level"
+import { resolveFixedValueAtLevel } from "@/lib/compendium/bonus-by-level"
+import { normalizeBonusByLevel } from "@/lib/compendium/bonus-by-level"
+import {
+  mergeBonusDamageRiders,
+  resolveBonusDamageRidersAtLevel,
+} from "@/lib/compendium/resolve-bonus-damage-riders"
+import { SPECIES_SIZES } from "@/lib/compendium/constants"
+import type { SheetToggleKey } from "@/lib/compendium/sheet-toggle-registry"
+import {
+  MARTIAL_WEAPONS_LABEL,
+  type WeaponProficiencyMode,
+} from "@/lib/compendium/weapon-proficiency-options"
+import { resolveSpecialAttackIcon } from "@/lib/compendium/special-attack-icons-defaults"
+import { hasExcludedWeaponProperty } from "@/lib/compendium/weapon-modifier-scope"
+
+export const ABILITY_SCORE_KEYS = [
+  "strength",
+  "dexterity",
+  "constitution",
+  "intelligence",
+  "wisdom",
+  "charisma",
+] as const
+
+export type AbilityScoreKey = (typeof ABILITY_SCORE_KEYS)[number]
+
+export const ABILITY_MODIFIER_KEYS = ["STR", "DEX", "CON", "INT", "WIS", "CHA"] as const
+export type AbilityModifierKey = (typeof ABILITY_MODIFIER_KEYS)[number]
+
+export const SKILL_NAMES = [
+  "Acrobatics",
+  "Animal Handling",
+  "Arcana",
+  "Athletics",
+  "Deception",
+  "History",
+  "Insight",
+  "Intimidation",
+  "Investigation",
+  "Medicine",
+  "Nature",
+  "Perception",
+  "Performance",
+  "Persuasion",
+  "Religion",
+  "Sleight of Hand",
+  "Stealth",
+  "Survival",
+] as const
+
+export const SAVING_THROW_NAMES = [
+  "Strength",
+  "Dexterity",
+  "Constitution",
+  "Intelligence",
+  "Wisdom",
+  "Charisma",
+] as const
+
+export const DAMAGE_TYPES = [
+  "Acid",
+  "Bludgeoning",
+  "Cold",
+  "Fire",
+  "Force",
+  "Lightning",
+  "Necrotic",
+  "Piercing",
+  "Poison",
+  "Psychic",
+  "Radiant",
+  "Slashing",
+  "Thunder",
+] as const
+
+export const VISION_TYPES = [
+  { value: "darkvision", label: "Darkvision" },
+  { value: "blindsight", label: "Blindsight" },
+  { value: "tremorsense", label: "Tremorsense" },
+  { value: "truesight", label: "Truesight" },
+  { value: "custom", label: "Custom" },
+] as const
+
+export const SPEED_TYPES = [
+  { value: "walk", label: "Walking" },
+  { value: "fly", label: "Flying" },
+  { value: "swim", label: "Swimming" },
+  { value: "climb", label: "Climbing" },
+  { value: "burrow", label: "Burrowing" },
+  { value: "custom", label: "Custom" },
+] as const
+
+export const ATTACK_ROLL_TARGETS = [
+  { value: "all", label: "All attack rolls" },
+  { value: "spell", label: "Spell attacks" },
+  { value: "melee", label: "Melee weapon attacks" },
+  { value: "ranged", label: "Ranged weapon attacks" },
+  { value: "unarmed", label: "Unarmed strikes" },
+  { value: "simple_melee", label: "Simple melee weapons" },
+  { value: "simple_ranged", label: "Simple ranged weapons" },
+  { value: "martial_melee", label: "Martial melee weapons" },
+  { value: "martial_ranged", label: "Martial ranged weapons" },
+  { value: "one_handed_melee", label: "One-handed melee weapons (Dueling)" },
+  { value: "custom", label: "Custom" },
+] as const
+
+export const DAMAGE_ROLL_TARGETS = [
+  { value: "all", label: "All damage rolls" },
+  { value: "melee", label: "Melee weapon damage" },
+  { value: "ranged", label: "Ranged weapon damage" },
+  { value: "unarmed", label: "Unarmed strike damage" },
+  { value: "one_handed_melee", label: "One-handed melee weapons (Dueling)" },
+  ...DAMAGE_TYPES.map((type) => ({ value: type.toLowerCase(), label: `${type} damage` })),
+  { value: "custom", label: "Custom" },
+] as const
+
+export const UNARMED_STRIKE_DICE = ["1", "1d4", "1d6", "1d8", "1d10", "1d12"] as const
+export type UnarmedStrikeDie = (typeof UNARMED_STRIKE_DICE)[number]
+
+export const SPECIAL_ATTACK_DIE_TYPES = ["d4", "d6", "d8", "d10", "d12"] as const
+export type SpecialAttackDieType = (typeof SPECIAL_ATTACK_DIE_TYPES)[number]
+
+export const SPECIAL_ATTACK_PROFILES = [
+  { value: "melee", label: "Melee attack" },
+  { value: "ranged", label: "Ranged attack" },
+  { value: "emanation", label: "Emanation / aura" },
+  { value: "force_save", label: "Area — saving throw" },
+] as const
+
+export const SPECIAL_ATTACK_AREA_SHAPES = [
+  { value: "cone", label: "Cone" },
+  { value: "line", label: "Line" },
+  { value: "sphere", label: "Sphere" },
+  { value: "cylinder", label: "Cylinder" },
+  { value: "cube", label: "Cube" },
+  { value: "cone_or_line", label: "Cone or line (choose each use)" },
+] as const
+
+export const SPECIAL_ATTACK_TARGET_MODES = [
+  { value: "single", label: "Single target" },
+  { value: "multi", label: "Multiple targets (e.g. Volley)" },
+  { value: "area", label: "Area (all in zone)" },
+] as const
+
+export const SAVING_THROW_TARGET_SCOPES = [
+  { value: "self", label: "Self" },
+  { value: "target_creature", label: "Target creature" },
+  { value: "allied_creature", label: "Allied creature" },
+  { value: "targets_in_area", label: "Targets in area" },
+  { value: "allies_in_area", label: "Allies in area" },
+  { value: "enemies_in_area", label: "Enemies in area" },
+] as const
+
+export type SavingThrowTargetScope = (typeof SAVING_THROW_TARGET_SCOPES)[number]["value"]
+
+export type CreatureSizeValue = (typeof SPECIES_SIZES)[number]
+
+export const CHARACTERISTIC_MODIFIER_TYPE_OPTIONS = [
+  { value: "ability_scores", label: "Ability Scores" },
+  { value: "skills", label: "Skills (Proficiency / Expertise)", hint: "Fixed skills, player picks, or expertise-if-proficient (Keen Mind)" },
+  { value: "languages", label: "Languages" },
+  { value: "armor_proficiencies", label: "Armor Proficiencies" },
+  { value: "weapon_proficiencies", label: "Weapon Proficiencies" },
+  { value: "tool_proficiencies", label: "Tool Proficiencies" },
+  { value: "saving_throws", label: "Saving Throw Proficiencies" },
+  { value: "ac", label: "Armor Class (AC)" },
+  { value: "hit_points", label: "Hit Point Maximum" },
+  { value: "initiative", label: "Initiative" },
+  { value: "vision", label: "Vision" },
+  { value: "speed", label: "Speed" },
+  { value: "attack_roll_modifiers", label: "Attack Roll and Crit Modifiers" },
+  { value: "damage_roll_modifiers", label: "Weapon Damage Modifiers" },
+  { value: "unarmed_strike_damage", label: "Unarmed Strike Damage Die" },
+  { value: "weapon_damage_die_override", label: "Weapon Damage Die Override" },
+  { value: "special_attack", label: "Special Attack" },
+  { value: "damage_resistance", label: "Damage Resistances" },
+  { value: "damage_immunity", label: "Damage Immunities" },
+  { value: "condition_immunity", label: "Condition Immunities" },
+  { value: "damage_reduction", label: "Damage Reduction" },
+  { value: "spells", label: "Spells per Level (Spell Slots)" },
+  { value: "spells_known", label: "Spells Known / Prepared" },
+  { value: "craftable_items", label: "Craftable Items Known" },
+  { value: "held_items_cap", label: "Held Craftable Items Cap" },
+  {
+    value: "extra_wield_slots",
+    label: "Extra Wield Slots",
+    hint: "Additional hands that can hold a weapon (Thri-kreen Secondary Arms). Lifts the exclusive two-handed + shield restriction.",
+  },
+  { value: "spell_list_access", label: "Access to Class Spell List" },
+  { value: "spellcasting_ability", label: "Spellcasting Ability Modifier" },
+  { value: "uses", label: "Uses (Limited Ability / Resource)" },
+  { value: "attunement_slots", label: "Magic Item Attunement Slots" },
+  { value: "aura", label: "Aura / Emanation" },
+  {
+    value: "bonus_damage_riders",
+    label: "Attack Damage Riders (Hit/Crit)",
+    hint: "Optional cost riders (Sneak Attack) or automatic bonus on hit/crit (Devastating Critical)",
+  },
+  { value: "saving_throw_trigger", label: "Saving Throw Trigger" },
+  {
+    value: "on_hit_trigger",
+    label: "On Hit / Crit Trigger",
+    hint: "Nested effect or maximize damage when an attack hits or crits",
+  },
+  { value: "failed_roll_trigger", label: "Failed Roll Trigger" },
+  {
+    value: "d20_test_reaction",
+    label: "D20 Test Reaction",
+    hint: "Add or subtract dice to any creature's D20 Test (Cosmic Omen, initiative bonuses)",
+  },
+  {
+    value: "damage_halving_reaction",
+    label: "Damage Halving Reaction",
+    hint: "Halve incoming attack damage (Sentinel at Death's Door, Beguiling Defenses)",
+  },
+  {
+    value: "healing_dice_pool",
+    label: "Healing Dice Pool",
+    hint: "Pool of dice spent to heal (Healing Light, Warrior of the Gods)",
+  },
+  {
+    value: "on_creature_death_trigger",
+    label: "On Creature Death Trigger",
+    hint: "React when a creature dies nearby (Keeper of Souls)",
+  },
+  {
+    value: "turn_start_trigger",
+    label: "Turn Start Trigger",
+    hint: "Passive effect at the start of your turn (Legendary Champion regen, etc.)",
+  },
+  { value: "telepathy", label: "Telepathy", hint: "Passive telepathic communication range" },
+  { value: "on_cast_spell_trigger", label: "On Cast Spell Trigger", hint: "When you cast a matching spell, apply a nested effect (e.g. Empowered Evocation bonus damage)" },
+  { value: "spell_healing_modifier", label: "Spell Healing Modifier" },
+  { value: "resource_ability_menu", label: "Resource Ability Menu" },
+  { value: "extra_turn", label: "Extra Turn" },
+  { value: "grant_feat", label: "Gain a Feat" },
+  {
+    value: "grant_creature",
+    label: "Grant Creature / Companion",
+    hint: "Adds a Creatures & Companions entry to the Companions tab; optional rest picker and combined CR cap",
+  },
+  {
+    value: "power_rider",
+    label: "Power / Ability Rider Alert",
+    hint: "Shows an alert on related sheet actions (e.g. Flickering Escape on Phase Rift)",
+  },
+  {
+    value: "replace_feature",
+    label: "Replace Prior Feature",
+    hint: "Hide a named earlier feature and use this one as the sheet action instead (Improved Sacrificial Strike)",
+  },
+  {
+    value: "ability_score_override",
+    label: "Ability Score Override",
+    hint: "Set one or more ability scores equal to another (Physical Surge)",
+  },
+  {
+    value: "healing_received_modifier",
+    label: "Healing Received Modifier",
+    hint: "Multiply magical healing you receive (Magical Anathema half healing)",
+  },
+  {
+    value: "grant_custom_ability",
+    label: "Grant Custom Ability",
+    hint: "Know / unlock a named custom ability (e.g. Telekinetic Weapons power)",
+  },
+  {
+    value: "grant_equipment",
+    label: "Grant Equipment",
+    hint: "Add named equipment / magic items to the inventory when this unlocks (e.g. Investigator Trinkets)",
+  },
+  {
+    value: "modify_custom_ability",
+    label: "Modify Custom Ability",
+    hint: "Upgrade a named custom ability you already know (e.g. Phase Dancer improving Phase Rift)",
+  },
+  {
+    value: "feature_choice_count_bonus",
+    label: "Feature Choice Count Bonus",
+    hint: "Extra picks for a named feature or choice category (Unlimited Imagination, Skill Thief)",
+  },
+  {
+    value: "feature_choice_option_grant",
+    label: "Feature Choice Option Grant",
+    hint: "Add named options to a feature choice pool (Projected Nightmares → Boundless Imagination)",
+  },
+  {
+    value: "subclass_unlock",
+    label: "Subclass Selection",
+    hint: "Marks the class feature level when the builder must choose a subclass or archetype",
+  },
+  {
+    value: "equipment_and_magic_items",
+    label: "Equipment & Magic Items",
+    hint: "Create mundane gear or replicate magic item plans (Artificer)",
+  },
+  {
+    value: "player_note",
+    label: "Player Note",
+    hint: "Editable character-sheet note tied to this feature or equipment item",
+  },
+  {
+    value: "inventory_container",
+    label: "Inventory Container",
+    hint: "Extradimensional or nested storage opened from Gear (Dead Space, Bag of Holding, Portable Hole)",
+  },
+  {
+    value: "catalog_option",
+    label: "Catalog Option",
+    hint: "Selected entry from a system option catalog (Metamagic, Eldritch Invocation)",
+  },
+  { value: "rest_replacement", label: "Alternate Rest Duration" },
+  {
+    value: "hit_dice_restore",
+    label: "Restore Hit Point Dice",
+    hint: "Regain expended Hit Point Dice when you finish a rest (Divine Respite)",
+  },
+  { value: "magical_sleep_immunity", label: "Magical Sleep Immunity" },
+  { value: "creature_size", label: "Change Size" },
+  { value: "movement_effects", label: "Movement-Related Effects (Passive)" },
+  {
+    value: "weapon_reach_modifier",
+    label: "Weapon Reach Modifier",
+    hint: "Bonus reach on matching weapons/Unarmed Strikes (Elemental Attunement, etc.)",
+  },
+  {
+    value: "skill_check_alternate_ability",
+    label: "Alternate Ability for Skill Checks",
+    hint: "Let certain skill checks use a different ability (e.g. Primal Knowledge: STR while raging)",
+  },
+  {
+    value: "saving_throw_alternate_ability",
+    label: "Alternate Ability for Saving Throws",
+    hint: "Use a different ability for listed saves (e.g. use Intelligence instead of Wisdom)",
+  },
+  {
+    value: "forced_save_ability_remap",
+    label: "Remap Forced Save Ability",
+    hint: "When your features force a save of one ability, use another instead (e.g. Int instead of Wis)",
+  },
+  {
+    value: "weapon_ability_override",
+    label: "Weapon Attack/Damage Ability",
+    hint: "Use a chosen ability for weapon attack and/or damage rolls (Hex Warrior, Shillelagh)",
+  },
+  {
+    value: "weapon_sheet_badge",
+    label: "Weapon Sheet Badge",
+    hint: "Named info badge on matching equipped weapons (optional damage riders, Extra Finesse–style notes)",
+  },
+  {
+    value: "custom_skill",
+    label: "Custom Skill",
+    hint: "Named skill with chosen ability and optional expertise (not in the SRD list)",
+  },
+] as const
+
+export type CharacteristicModifierType =
+  (typeof CHARACTERISTIC_MODIFIER_TYPE_OPTIONS)[number]["value"]
+
+export type ListCharacteristicType =
+  | "languages"
+  | "armor_proficiencies"
+  | "tool_proficiencies"
+  | "saving_throws"
+
+import type {
+  LimitationEvaluationContext,
+  LimitationSource,
+  ModifierLimitation,
+} from "@/lib/compendium/modifier-limitations"
+import { modifierLimitationsMet } from "@/lib/compendium/modifier-limitations"
+import { isWeaponBoundSpellBuffModifier } from "@/lib/character/weapon-spell-buff"
+import { isUngatedSituationalSpeedGrant } from "@/lib/compendium/situational-speed-grant"
+
+export type { LimitationEvaluationContext, ModifierLimitation } from "@/lib/compendium/modifier-limitations"
+
+export interface CharacteristicModifierBase extends LimitationSource {
+  id: string
+  label?: string
+  /** Share one pick pool across multiple modifiers on the same source (e.g. Skilled: 3 skills or tools). */
+  sharedChoiceGroup?: string
+  /** Total picks allowed across all modifiers in the group. */
+  sharedChoiceCount?: number
+  /** @deprecated Use limitations with requires_active sheet_toggle rule. */
+  requiresSheetToggle?: SheetToggleKey
+}
+
+export type { SheetToggleKey } from "@/lib/compendium/sheet-toggle-registry"
+
+export type AcFormulaOption = {
+  id: string
+  label: string
+  kind: "ability_modifiers" | "set_fixed"
+  base?: number
+  abilities?: AbilityModifierKey[]
+  fixedAc?: number
+  includeProficiency?: boolean
+}
+
+export type AggregateCharacteristicsOptions = LimitationEvaluationContext & {
+  selectedAcFormulaId?: string | null
+  characterLevel?: number
+  /** Current Class Cap / pool sizes by resource_key (Masterwork Bonus, etc.). */
+  classResourceCounts?: Record<string, number>
+}
+
+export type AbilityScoresMode = "fixed" | "asi_pool"
+
+export interface AbilityScoresCharacteristic extends CharacteristicModifierBase {
+  type: "ability_scores"
+  /** fixed = set amounts on specific abilities; asi_pool = player allocates points (SRD ASI rules). */
+  mode: AbilityScoresMode
+  bonuses: Partial<Record<AbilityScoreKey, number>>
+  /** Points to spend when mode is asi_pool (default 2 per SRD ASI). */
+  points?: number
+  /**
+   * When mode is asi_pool, restrict which abilities may receive points
+   * (e.g. Athlete: Strength or Dexterity only). Omit for any ability.
+   */
+  allowedAbilities?: AbilityScoreKey[]
+}
+
+export interface SkillEntry {
+  skill: string
+  expertise: boolean
+}
+
+export interface SkillsCharacteristic extends CharacteristicModifierBase {
+  type: "skills"
+  entries: SkillEntry[]
+  /** Player picks any skill (e.g. Skilled feat). */
+  allowAnySkill?: boolean
+  /**
+   * Player picks from the granting class's level-1 skill list (e.g. Barbarian Primal Knowledge).
+   * Resolved against the class's `skill_choices.options` when slots are built.
+   */
+  fromClassSkillList?: boolean
+  /** When set, player chooses this many skills from entries / any-skill pool. */
+  choiceCount?: number | null
+  /**
+   * Extra picks that unlock later on the same feature (e.g. Investigator Expertise
+   * grants two more at class level 9). Added to `choiceCount` when collecting slots.
+   */
+  choiceCountUnlocks?: { unlocksAtClassLevel: number; count: number }[]
+  /** When true, chosen or listed skills grant Expertise instead of proficiency. */
+  grantExpertise?: boolean
+  /**
+   * Keen Mind / Observant style: if the character already has proficiency in the
+   * chosen skill, grant Expertise instead; otherwise grant proficiency.
+   */
+  expertiseIfProficient?: boolean
+  /**
+   * When false, skill entries / player picks do not grant proficiency — only drive
+   * which skill a paired bonus applies to (e.g. Thaumaturge Arcana or Religion).
+   */
+  grantsProficiency?: boolean
+  /** @deprecated legacy — migrated to entries on load */
+  values?: string[]
+}
+
+export interface SkillCheckAlternateAbilityCharacteristic extends CharacteristicModifierBase {
+  type: "skill_check_alternate_ability"
+  /** Ability whose modifier may be substituted for the listed skills' ability checks. */
+  ability: AbilityScoreKey
+  /** Skills whose ability checks can be made with the alternate ability (empty = any skill). */
+  skills: string[]
+  /** Optional condition gating the substitution (e.g. "While your Rage is active"). */
+  conditionLabel?: string
+}
+
+export interface SavingThrowAlternateAbilityCharacteristic extends CharacteristicModifierBase {
+  type: "saving_throw_alternate_ability"
+  /** Ability whose modifier replaces the listed saves' governing ability. */
+  ability: AbilityScoreKey
+  /**
+   * Saves to remapped (ability score keys or display names). Empty = all saves use this ability.
+   * Example: ["wisdom"] with ability "intelligence" → Int instead of Wis for Wisdom saves.
+   */
+  saves: string[]
+  conditionLabel?: string
+}
+
+export interface ForcedSaveAbilityRemapCharacteristic extends CharacteristicModifierBase {
+  type: "forced_save_ability_remap"
+  /** Save ability your features normally force (empty / "any" = all forced saves). */
+  fromAbility: AbilityModifierKey | "any"
+  /** Ability the target uses instead. */
+  toAbility: AbilityModifierKey
+  /** What effects this remaps. */
+  scope: "your_spells" | "your_features" | "all"
+  conditionLabel?: string
+}
+
+export type WeaponAbilityAppliesTo = "attack" | "damage" | "both"
+export type WeaponAbilityScope = "all" | "melee" | "ranged" | "finesse" | "specific"
+
+export interface WeaponAbilityOverrideCharacteristic extends CharacteristicModifierBase {
+  type: "weapon_ability_override"
+  ability: AbilityScoreKey
+  appliesTo: WeaponAbilityAppliesTo
+  scope: WeaponAbilityScope
+  /** When scope is "specific", match these weapon names (case-insensitive). */
+  weaponNames?: string[]
+  /**
+   * Use the Finesse rule (higher of Strength or Dexterity) instead of a fixed `ability`.
+   * Extra Finesse–style grants set this with `whenDamageDice`.
+   */
+  treatAsFinesse?: boolean
+  /** When set, the override only applies if the weapon's leading damage die is one of these (`1d4`, `1d6`). */
+  whenDamageDice?: string[]
+  /** Exclude weapons with any of these properties, such as Heavy or Special. */
+  excludedWeaponProperties?: string[]
+  conditionLabel?: string
+}
+
+/** Informational badge on matching Combat weapon cards (optional riders, not a numeric rewrite). */
+export interface WeaponSheetBadgeCharacteristic extends CharacteristicModifierBase {
+  type: "weapon_sheet_badge"
+  /** Overlay body; `label` is the badge text. */
+  description?: string
+  /** When set, only weapons whose printed die is one of these (`1d4`, `1d6`, `2d4`). */
+  whenDamageDice?: string[]
+  /** Also match Unarmed Strike even when its printed damage is a flat 1. */
+  includeUnarmed?: boolean
+  /** Only Firearm weapons (property tag or Firearm subcategory). */
+  requireFirearm?: boolean
+  appliesTo?: WeaponAbilityScope
+  weaponNames?: string[]
+}
+
+export interface CustomSkillCharacteristic extends CharacteristicModifierBase {
+  type: "custom_skill"
+  /** Display name for the custom skill (shown on the sheet and in check modifiers). */
+  name: string
+  ability: AbilityScoreKey
+  expertise?: boolean
+}
+
+export type CustomSkillDefinition = {
+  name: string
+  ability: AbilityScoreKey
+  expertise: boolean
+}
+
+export interface ListCharacteristic extends CharacteristicModifierBase {
+  type: ListCharacteristicType
+  values: string[]
+  /** Player picks this many tools/languages when values are open-ended. */
+  choiceCount?: number | null
+  /**
+   * For `languages` choices, which SRD table the player picks from.
+   * Defaults to the Standard Languages table. Players may always add a
+   * custom user-defined language regardless of pool.
+   */
+  choicePool?: "standard" | "standard_and_rare" | null
+  /**
+   * For `tool_proficiencies` choices, which SRD tool group the player picks from.
+   * When empty, all standard proficiency tools are offered. `choiceOptions` overrides this.
+   */
+  toolChoicePool?: "all" | "artisans" | "musical" | "gaming" | "other" | "vehicle" | null
+  /**
+   * For `tool_proficiencies` choices, the explicit pool the player picks from
+   * (e.g. specific musical instruments). When empty, `toolChoicePool` or all SRD tools are offered.
+   */
+  choiceOptions?: string[] | null
+  /** When true, listed tools (or all class-granted tools when values empty) grant expertise. */
+  grantExpertise?: boolean
+}
+
+export interface WeaponProficienciesCharacteristic extends CharacteristicModifierBase {
+  type: "weapon_proficiencies"
+  mode: WeaponProficiencyMode
+  /** Specific weapon names when mode is "specific". */
+  values: string[]
+}
+
+export type AcCharacteristicMode =
+  | "flat_bonus"
+  | "set_fixed"
+  | "ability_modifiers"
+  | "add_proficiency"
+
+export interface AcCharacteristic extends CharacteristicModifierBase {
+  type: "ac"
+  mode: AcCharacteristicMode
+  flatBonus?: number
+  /** Add an ability modifier to existing AC, rather than replacing its formula. */
+  flatBonusAbility?: AbilityModifierKey
+  flatBonusMinimum?: number
+  fixedAc?: number
+  /** Up to two ability modifiers (e.g. DEX + CON for unarmored defense) */
+  abilities?: AbilityModifierKey[]
+  /** Base AC when using ability_modifiers mode (default 10) */
+  base?: number
+  includeProficiency?: boolean
+  /** When true, flat_bonus only applies while wearing armor (Fighting Style: Defense). */
+  requiresArmor?: boolean
+  /**
+   * When set, flatBonus is ignored and the current Class Cap / pool size for this
+   * resource_key is used (e.g. Masterwork armor → ⌈Masterwork Bonus / 2⌉).
+   */
+  flatBonusFromClassResourceKey?: string | null
+  flatBonusClassResourceScale?: "full" | "half_ceil" | null
+}
+
+export type HitPointsCharacteristicMode = "flat" | "per_level"
+
+export interface HitPointsCharacteristic extends CharacteristicModifierBase {
+  type: "hit_points"
+  mode: HitPointsCharacteristicMode
+  value: number
+  /** Class/subclass features may count only their granting class's levels. */
+  levelScope?: "character" | "owning_class"
+}
+
+export type InitiativeCharacteristicMode =
+  | "flat_bonus"
+  | "add_proficiency"
+  | "ability_modifier"
+  /** Adds another ability's modifier on top of (not instead of) the normal DEX-based roll. */
+  | "add_ability_modifier"
+
+export interface InitiativeCharacteristic extends CharacteristicModifierBase {
+  type: "initiative"
+  mode: InitiativeCharacteristicMode
+  flatBonus?: number
+  ability?: AbilityModifierKey
+  bonus?: number
+}
+
+export interface VisionCharacteristic extends CharacteristicModifierBase {
+  type: "vision"
+  visionType: (typeof VISION_TYPES)[number]["value"]
+  rangeFeet: number
+  /** Level-scaled vision range (fixed = range in feet). */
+  rangeFeetByLevel?: BonusByLevelEntry[]
+  customType?: string
+}
+
+export interface SpeedCharacteristic extends CharacteristicModifierBase {
+  type: "speed"
+  speedType: (typeof SPEED_TYPES)[number]["value"]
+  mode: "set" | "add" | "equal_to_walk"
+  value: number
+  valueByLevel?: BonusByLevelEntry[]
+  customType?: string
+}
+
+export interface WeaponReachModifierCharacteristic extends CharacteristicModifierBase {
+  type: "weapon_reach_modifier"
+  reachBonusFeet: number
+  /**
+   * Weapon properties this bonus is scoped to (e.g. ["Reach"]). Empty/omitted = applies to
+   * all weapons and Unarmed Strikes the source's own gating (appliesToUnarmedStrike) allows.
+   */
+  weaponPropertyFilter?: string[]
+  /** Explicitly includes Unarmed Strikes even though they carry no weapon properties. */
+  appliesToUnarmedStrike?: boolean
+}
+
+export interface RollModifierEntry {
+  bonus: number
+  target: string
+  customTarget?: string
+  /** Bonus applies only when the target creature has one of these types. */
+  onlyVsCreatureTypes?: string[]
+  /** Target must be at or below half its hit point maximum (Bloodied). */
+  onlyIfTargetBelowHalfHp?: boolean
+  /** Target must be at least this size (Large+ prone riders, etc.). */
+  onlyIfTargetMinSize?: import("@/lib/compendium/characteristic-modifiers").CreatureSizeValue | null
+  /** Lowest d20 total that counts as a critical hit for this attack type (default 20). */
+  criticalHitMinimum?: number | null
+  /** Level-scaled critical hit minimum (fixed = lowest d20 that crits). */
+  criticalHitMinimumByLevel?: BonusByLevelEntry[]
+  /** Add ability modifier to weapon damage when the attack would not normally include it. */
+  grantAbilityModifierWhenMissing?: boolean
+  /** Extra damage dice when ability modifier is already included on the damage roll (e.g. 1d8). */
+  bonusDiceWhenModifierIncluded?: string | null
+  /** When true, bonus dice use the weapon's damage type. */
+  bonusDiceUsesWeaponDamageType?: boolean
+  /** Archery: ranged attacks ignore half cover. */
+  ignoreHalfCover?: boolean
+  /** Archery (extended): three-quarters cover counts as half cover. */
+  treatThreeQuartersCoverAsHalf?: boolean
+  /**
+   * When set, `bonus` is ignored and the current Class Cap / pool size for this
+   * resource_key is used (Masterwork Bonus, etc.).
+   */
+  bonusFromClassResourceKey?: string | null
+  /** How to scale bonusFromClassResourceKey (default full). */
+  bonusClassResourceScale?: "full" | "half_ceil" | null
+}
+
+export interface AttackRollModifiersCharacteristic extends CharacteristicModifierBase {
+  type: "attack_roll_modifiers"
+  entries: RollModifierEntry[]
+  /** Lowest d20 total that counts as a critical hit (default 20). E.g. 19 = Improved Critical. */
+  criticalHitMinimum?: number | null
+  /** Level-scaled critical hit minimum when not set per attack entry. */
+  criticalHitMinimumByLevel?: BonusByLevelEntry[]
+  /** Tactical Master: replace weapon mastery with these properties. */
+  weaponMasteryOverrides?: string[]
+  /** Studied Attacks: advantage on next attack vs same target after a miss. */
+  advantageVsTargetAfterMiss?: boolean
+}
+
+export interface DamageRollModifiersCharacteristic extends CharacteristicModifierBase {
+  type: "damage_roll_modifiers"
+  entries: RollModifierEntry[]
+}
+
+export interface UnarmedStrikeDamageCharacteristic extends CharacteristicModifierBase {
+  type: "unarmed_strike_damage"
+  /** Fixed die when dieByLevel is empty. */
+  die?: UnarmedStrikeDie
+  /** Martial Arts-style die progression by character level. */
+  dieByLevel?: import("@/lib/compendium/bonus-by-level").BonusByLevelEntry[]
+  /** Higher die while not wielding a weapon or shield (Unarmed Fighting 1d8). */
+  emptyHandedDie?: UnarmedStrikeDie | null
+  /** Damage type for natural weapons (default Bludgeoning). */
+  damageType?: string | null
+  /** Ability modifier added to damage (default strength). */
+  ability?: AbilityScoreKey | null
+}
+
+export type WeaponDamageDieOverrideScope =
+  | "all"
+  | "melee"
+  | "ranged"
+  | "unarmed"
+  | "weapons"
+  | "specific"
+
+/**
+ * Replace weapon (or unarmed) damage die sides — Deadly D4s, Monk-adjacent weapon ladders, etc.
+ * Does not add flat damage; rewrites NdX → NdY (same count).
+ */
+export interface WeaponDamageDieOverrideCharacteristic extends CharacteristicModifierBase {
+  type: "weapon_damage_die_override"
+  /** Fixed die sides when dieByLevel is empty (e.g. 4 for Deadly D4s). */
+  dieSides?: number | null
+  /** Level-scaled die sides (fixed = sides). */
+  dieSidesByLevel?: import("@/lib/compendium/bonus-by-level").BonusByLevelEntry[]
+  scope?: WeaponDamageDieOverrideScope
+  /** When scope is "specific", match these weapon names (case-insensitive). */
+  weaponNames?: string[]
+  excludedWeaponProperties?: string[]
+  /** Upgrade a single printed die only; never downgrade it or multiply a multi-die weapon. */
+  onlyIncrease?: boolean
+  conditionLabel?: string
+}
+
+export interface SpecialAttackCharacteristic extends CharacteristicModifierBase {
+  type: "special_attack"
+  /** game-icons.net slug shown on the sheet combat card. */
+  icon?: string | null
+  attackName?: string
+  /** Explicit governing ability; otherwise use the profile default. */
+  attackAbility?: "STR" | "DEX" | "CON" | "INT" | "WIS" | "CHA" | null
+  attackProfile?: "melee" | "ranged" | "emanation" | "force_save"
+  /** single = one creature; multi = pick N targets; area = all in zone (Volley, Whirlwind, etc.) */
+  targetMode?: "single" | "multi" | "area"
+  /** Cap on targets when targetMode is multi (omit for unlimited within range). */
+  maxTargets?: number | null
+  /** Damage uses equipped weapon dice + modifier instead of fixed dice below. */
+  useWeaponDamage?: boolean
+  areaShape?: "cone" | "line" | "sphere" | "cylinder" | "cube" | "cone_or_line" | null
+  areaLengthFeet?: number | null
+  areaWidthFeet?: number | null
+  /** When areaShape is cone_or_line, length of the line option (e.g. 30 ft. breath line). */
+  alternateAreaLengthFeet?: number | null
+  properties: string[]
+  damageTypes: string[]
+  /**
+   * When true, the player picks one of `damageTypes` each time they use the attack
+   * (Reprisal: Necrotic or Radiant). Leave false when multiple types are dealt together.
+   */
+  chooseDamageType?: boolean
+  damageDiceCount: number
+  damageDieType: SpecialAttackDieType
+  damageByLevel?: BonusByLevelEntry[]
+  /** Damage is the selected variable class-resource spend rather than dice. */
+  damageFromResourceSpend?: boolean
+  /**
+   * Instead of dealing damage, restore Hit Points equal to the selected resource spend
+   * (Charnel Touch healing Undead thralls). No attack roll — pick a companion target.
+   */
+  healFromResourceSpend?: boolean
+  /**
+   * Who may receive healFromResourceSpend. `controlled_companion` = this character's
+   * companions (thralls); `choose_ally` = any party ally/companion.
+   */
+  healTarget?: "controlled_companion" | "choose_ally" | null
+  /** Deduct the selected class-resource spend only after a hit is confirmed. */
+  spendResourceOnHit?: boolean
+  /** Multiplier for resource-spend damage on a critical hit (default 2). */
+  criticalDamageMultiplier?: number | null
+  /** Class level at which this attack profile unlocks (e.g. thrall heal at Necromancer 2). */
+  unlocksAtClassLevel?: number | null
+  saveAbility?: string | null
+  saveDCBase?: number | null
+  /** On a successful save, target takes half damage (area exploits). */
+  saveHalfDamage?: boolean
+  rangeFeet?: number | null
+  /** attack / primed / explode when one ability has multiple special_attack modes (Bomb). */
+  attackVariant?: "attack" | "primed" | "explode" | null
+  /** Linear Prime Bomb scaling: +Nd10 (or formula dice) per resource spent. */
+  resourceScaleKey?: string | null
+  bonusDicePerResource?: string | null
+  maxResourcesSpent?: number | null
+  maxResourcesSpentByLevel?: import("@/lib/compendium/bonus-by-level").BonusByLevelEntry[]
+  radiusIncreaseFeetPerResource?: number | null
+  /** Explode save DC uses higher of STR or DEX mod when set. */
+  saveDCAbilityChoice?: "STR" | "DEX" | "higher_str_dex" | null
+  /** Optional alternate save DC ability the character may use instead (Alchemist INT). */
+  alternateSaveDCAbility?: "STR" | "DEX" | "CON" | "INT" | "WIS" | "CHA" | null
+  /** Ability modifier added to damage; "attack" reuses the attack's governing modifier. */
+  damageAbilityModifier?: "attack" | "STR" | "DEX" | "CON" | "INT" | "WIS" | "CHA" | null
+  /** Minimum value when adding damageAbilityModifier (Intelligent Explosions: minimum +1). */
+  damageAbilityMinimum?: number | null
+  damageAbilityFromLevel?: number | null
+  /** Omit positive ability modifier from damage (Explode). */
+  omitPositiveAbilityModFromDamage?: boolean
+}
+
+export interface HitDiceRestoreCharacteristic extends CharacteristicModifierBase {
+  type: "hit_dice_restore"
+  /** Base number of expended Hit Point Dice regained. */
+  amount: number
+  /** Higher-level amounts (e.g. 3 at 9, 6 at 13, 10 at 17). */
+  amountByLevel?: BonusByLevelEntry[]
+  /** When the player may choose to restore. Default short_rest. */
+  restoreOn?: "short_rest" | "long_rest"
+}
+
+export interface RestReplacementCharacteristic extends CharacteristicModifierBase {
+  type: "rest_replacement"
+  restHours: number
+  replacesLongRest?: boolean
+  description?: string
+}
+
+export interface MagicalSleepImmunityCharacteristic extends CharacteristicModifierBase {
+  type: "magical_sleep_immunity"
+  /** When true, the creature does not need sleep (Elf Trance, Reborn). */
+  noSleepRequired?: boolean
+  /** Named spells that can't target this creature (e.g. Dream). */
+  immuneToNamedSpells?: string[]
+}
+
+/**
+ * Authored (e.g. Goliath's Large Form) and aggregated into `AggregatedCharacteristics.creatureSize`,
+ * but not yet consumed anywhere — no derived stat (reach, carrying capacity, AC formulas that key
+ * off size) currently reacts to it, and "activatable" has no on/off toggle state. See
+ * docs/modifier-vs-feature-effect.md ("Known gaps") before wiring a consumer.
+ */
+export interface CreatureSizeCharacteristic extends CharacteristicModifierBase {
+  type: "creature_size"
+  size: CreatureSizeValue
+  /** passive = always this size; activatable = can assume this size temporarily */
+  mode: "passive" | "activatable"
+  durationMinutes?: number | null
+}
+
+export interface MovementEffectsCharacteristic extends CharacteristicModifierBase {
+  type: "movement_effects"
+  movementDash?: boolean
+  movementDisengage?: boolean
+  movementHide?: boolean
+  movementMoveThroughLargerSpaces?: boolean
+  movementHideBehindLargerCreatures?: boolean
+  /** Climb speed equal to walking speed (Dhampir Spider Climb). */
+  spiderClimb?: boolean
+  /** Minimum character level before spider climb applies. */
+  spiderClimbMinLevel?: number | null
+  /** Movement does not provoke Opportunity Attacks. */
+  moveWithoutOpportunityAttacks?: boolean
+  /** Movement is unaffected by Difficult Terrain. */
+  ignoreDifficultTerrain?: boolean
+  /** When set, movement bonuses apply only to these types (empty = all). */
+  movementTypes?: import("@/lib/types").MovementType[]
+}
+
+export interface DamageCharacteristic extends CharacteristicModifierBase {
+  type: "damage_resistance" | "damage_immunity"
+  damageTypes: string[]
+  /** Player picks this many damage types from choiceOptions when damageTypes is empty. */
+  choiceCount?: number | null
+  choiceOptions?: string[] | null
+  /**
+   * When true, applies to damage from spells (any damage type) — e.g. Abjurer Spell Resistance.
+   * Aggregated onto the sheet as the display token "Spell damage".
+   */
+  fromSpells?: boolean
+}
+
+export interface ConditionImmunityCharacteristic extends CharacteristicModifierBase {
+  type: "condition_immunity"
+  conditions: string[]
+  /** Exhaustion from these sources does not apply (Reborn Everlasting). */
+  exhaustionSourceExclusions?: string[]
+}
+
+export interface AttunementSlotsCharacteristic extends CharacteristicModifierBase {
+  type: "attunement_slots"
+  /** Additional attunement slots beyond the default of 3. */
+  bonusSlots?: number
+  /** Set total attunement slots (overrides default + bonus). */
+  totalSlots?: number | null
+}
+
+export interface DamageReductionCharacteristic extends CharacteristicModifierBase {
+  type: "damage_reduction"
+  amount: number
+  /** When `proficiency`, sheet/derived resolve amount from Proficiency Bonus (Heavy Armor Master). */
+  amountMode?: "fixed" | "proficiency"
+  /** Empty = all damage types (e.g. Heavy Armor Master uses B/P/S) */
+  damageTypes?: string[]
+  /** Optional armor gate (e.g. only while wearing Heavy armor). */
+  requiresArmorCategory?: "Light armor" | "Medium armor" | "Heavy armor" | null
+}
+
+export interface SpellSlotGrant {
+  level: number
+  count: number
+  /** @deprecated — migrated to spells_known on aggregate */
+  spellIds?: string[]
+}
+
+export interface SpellGrantCharacteristic extends CharacteristicModifierBase {
+  type: "spells"
+  grants: SpellSlotGrant[]
+}
+
+export interface SpellsKnownChoiceGrant {
+  /** Spell level (0 = cantrip). When `upToLevel` is true, this is the maximum level. */
+  level: number
+  /** How many spells the player chooses at this level. */
+  count: number
+  /** Class level when this grant becomes available (Innate Arcanum tiers). */
+  unlocksAtClassLevel?: number
+  /**
+   * When true, `level` is an inclusive maximum (e.g. Investigator grimoire: any spell
+   * of that level or lower), not an exact spell-level match.
+   */
+  upToLevel?: boolean
+  /** Optional per-grant class list override; otherwise uses spellListClassOptions + player pick. */
+  classNames?: string[]
+  /** Player may pick from any prepared-caster class list (Magical Secrets). */
+  crossClassAnyList?: boolean
+  /** Spells from this grant are always prepared (domain/oath spells). */
+  alwaysPrepared?: boolean
+  /** Number of slot-free casts restored on a Long Rest for each spell chosen by this grant. */
+  freeCastPerLongRest?: number
+}
+
+export interface SpellsKnownEntry {
+  spellId: string
+  prepared?: boolean
+  alwaysPrepared?: boolean
+  /** Number of slot-free casts restored on a Long Rest. */
+  freeCastPerLongRest?: number
+  /** Class level when this always-prepared spell unlocks (subclass spell tables). */
+  unlocksAtClassLevel?: number
+  /** May only be cast as a Ritual (e.g. Animal Speaker / Nature Speaker). */
+  castAsRitual?: boolean
+  /**
+   * Cast this spell by spending a class resource instead of (or in addition to) a spell slot.
+   * Used by Psion Alternate Effects (psi points) and similar homebrew grant tables.
+   */
+  castCost?: {
+    resourceKey: string
+    amount: number
+  } | null
+}
+
+export interface SpellsKnownCharacteristic extends CharacteristicModifierBase {
+  type: "spells_known"
+  spells: SpellsKnownEntry[]
+  /** Player chooses spells at runtime (e.g. Magic Initiate cantrips / level-1 spell). */
+  choiceGrants?: SpellsKnownChoiceGrant[]
+  /** Player picks one class list before choosing spells from choiceGrants. */
+  playerPicksSpellList?: boolean
+  castingAbility?: AbilityScoreKey
+  /** Default for choice grants and fixed spells without per-entry override. */
+  alwaysPrepared?: boolean
+  /** Free casts per long rest (Dragon Companion, etc.). */
+  freeCastPerLongRest?: { spellName: string; count: number }[]
+  /** Spell Mastery: cast these levels at will. */
+  castAtWillLevels?: number[]
+  /** Relentless Hunter: concentration on this spell can't break from damage. */
+  concentrationImmuneForSpell?: string | null
+  /** Foe Slayer: Hunter's Mark damage die override. */
+  markDamageDie?: string | null
+  /** Class spell lists the player may choose from when playerPicksSpellList is true. */
+  spellListClassOptions?: string[]
+}
+
+export type CraftableItemEntry = {
+  itemName: string
+  resourceCost: number
+  unlocksAtClassLevel: number
+  /** Uses per crafted item (e.g. Double Dose healing potions = 2). */
+  usesPerItem?: number | null
+  category?: string | null
+}
+
+/** Known/craftable items with level gates and resource costs (Alchemist potions, etc.). */
+export interface CraftableItemsCharacteristic extends CharacteristicModifierBase {
+  type: "craftable_items"
+  items: CraftableItemEntry[]
+  category?: string | null
+}
+
+/** Aggregatable cap on held craftable items (distinct from resource pool size). */
+export interface HeldItemsCapCharacteristic extends CharacteristicModifierBase {
+  type: "held_items_cap"
+  /** Default held cap = this ability modifier (typically INT). */
+  baseAbility?: AbilityScoreKey | null
+  flatBonus?: number
+}
+
+/** Extra hands / weapon slots beyond the usual two (Secondary Arms). */
+export interface ExtraWieldSlotsCharacteristic extends CharacteristicModifierBase {
+  type: "extra_wield_slots"
+  extraSlots?: number
+  /** Extra slots may only hold weapons with these properties (e.g. Light). Empty = any. */
+  allowedProperties?: string[]
+}
+
+export interface AuraCharacteristic extends CharacteristicModifierBase {
+  type: "aura"
+  radiusFeet: number
+  radiusByLevel?: BonusByLevelEntry[]
+  affectsSelf?: boolean
+  affectsAllies?: boolean
+  saveBonusConfig?: import("@/lib/compendium/roll-bonus-config").RollBonusConfig | null
+  conditionImmunities?: string[]
+  halfCover?: boolean
+  /** Smite of Protection: aura active while casting spells with this tag. */
+  activeWhileCastingSpellTag?: string | null
+  /** Superior Hunter's Defense: reaction resistance to last damage type. */
+  reactionGrantResistance?: boolean
+}
+
+export interface BonusDamageRiderEntry {
+  name: string
+  costDice?: string | null
+  description?: string | null
+  saveAbility?: string | null
+  conditionOnFailedSave?: string | null
+  /** Rider option becomes available at this class level (default 1). */
+  unlocksAtLevel?: number | null
+  /** Spend from a class resource pool instead of (or in addition to) costDice. */
+  costResourceKey?: string | null
+  costResourceAmount?: number | null
+}
+
+export type BonusDamageRiderTrigger = "on_hit" | "on_crit"
+
+export interface BonusDamageRidersCharacteristic extends CharacteristicModifierBase {
+  type: "bonus_damage_riders"
+  riders: BonusDamageRiderEntry[]
+  maxRidersPerUse?: number | null
+  /** Tier table for max optional riders per use (highest tier at or below class level). */
+  maxRidersPerUseByLevel?: { level: number; count: number }[] | null
+  appliesTo?: string | null
+  /** When riders is empty, automatic bonus applied on hit or crit (e.g. +level on crit). */
+  triggerOn?: BonusDamageRiderTrigger | null
+  automaticBonus?: import("@/lib/compendium/roll-bonus-config").RollBonusConfig | null
+  /** Automatic bonus dice/value that scales by class level (e.g. Brutal Strike +1d10 → +2d10). */
+  automaticBonusByLevel?: import("@/lib/compendium/bonus-by-level").BonusByLevelEntry[] | null
+}
+
+/** Nested common-modifier effect fired by a trigger characteristic. */
+export type NestedModifierEffect = {
+  catalogRefId: string
+  instanceId?: string
+  characteristics?: CharacteristicModifier[]
+  activation?: import("@/lib/types").FeatureActivation | null
+}
+
+export type RollTriggerKind = "ability" | "skill" | "attack" | "save"
+
+export interface SavingThrowTriggerCharacteristic extends CharacteristicModifierBase {
+  type: "saving_throw_trigger"
+  triggerOn: "make" | "fail" | "ally_fails"
+  saveAbility?: string | null
+  targetScope: SavingThrowTargetScope
+  saveConditionFilter?: string[]
+  useReaction?: boolean
+  /** When set, failed saves are treated as this total instead (Bend Reality, Shared Resilience). */
+  replaceFailedRollWith?: number | null
+  spendResourceKey?: string | null
+  spendResourceAmount?: number | null
+  effect?: NestedModifierEffect | null
+}
+
+export type OnHitTriggerKind = "hit" | "crit"
+
+export interface OnHitTriggerCharacteristic extends CharacteristicModifierBase {
+  type: "on_hit_trigger"
+  /** hit = on any hit; crit = critical hit only (Devastating Critical maximize). */
+  triggerOn?: OnHitTriggerKind | null
+  oncePerTurn?: boolean
+  spendResourceKey?: string | null
+  spendResourceAmount?: number | null
+  appliesTo?: string | null
+  /** Skip targets with these creature types (Vampiric Bite: not Construct or Undead). */
+  excludeCreatureTypes?: string[]
+  /** Only affect targets with these creature types when set. */
+  includeCreatureTypes?: string[]
+  /** Target must be at or below half its hit point maximum (Bloodied). */
+  onlyIfTargetBelowHalfHp?: boolean
+  /** Target must be at least this size. */
+  onlyIfTargetMinSize?: CreatureSizeValue | null
+  /** Maximize weapon damage dice instead of rolling (optional level gate). */
+  maximizeWeaponDamage?: boolean
+  maximizeWeaponDamageAtLevel?: number | null
+  effect?: NestedModifierEffect | null
+}
+
+export interface FailedRollTriggerCharacteristic extends CharacteristicModifierBase {
+  type: "failed_roll_trigger"
+  /** fail = Peerless Skill; success = Cutting Words, Psychic Feedback */
+  triggerOn?: "fail" | "success"
+  rollKind: RollTriggerKind
+  ability?: string | null
+  skills?: string[]
+  targetScope: SavingThrowTargetScope
+  rangeFeet?: number | null
+  useReaction?: boolean
+  spendResourceKey?: string | null
+  spendResourceAmount?: number | null
+  /** Peerless Skill: don't expend resource if the roll still fails after adding the die. */
+  refundResourceOnStillFailed?: boolean
+  /** Only skill checks the character is proficient in qualify (Vagabond Knack). */
+  requiresProficiency?: boolean
+  /** Reroll the d20 and add the die to the new roll instead of the failed one (Tenacity). */
+  rerollRoll?: boolean
+  effect?: NestedModifierEffect | null
+}
+
+export interface D20TestReactionCharacteristic extends CharacteristicModifierBase {
+  type: "d20_test_reaction"
+  modifierMode: "add" | "subtract"
+  rollKinds?: RollTriggerKind[]
+  targetScope: SavingThrowTargetScope
+  rangeFeet?: number | null
+  useReaction?: boolean
+  spendResourceKey?: string | null
+  spendResourceAmount?: number | null
+  dieSource?: "resource_die" | "fixed" | "ability_modifier"
+  fixedDie?: string | null
+  /** When dieSource is ability_modifier (e.g. Flash of Genius +INT). */
+  dieAbility?: AbilityScoreKey | null
+  effect?: NestedModifierEffect | null
+}
+
+export interface DamageHalvingReactionCharacteristic extends CharacteristicModifierBase {
+  type: "damage_halving_reaction"
+  cancelCritRiders?: boolean
+  rangeFeet?: number | null
+  useReaction?: boolean
+  /** Only against a creature you previously imposed disadvantage on (Sentinel). */
+  requiresPriorDisadvantage?: boolean
+}
+
+export interface HealingDicePoolCharacteristic extends CharacteristicModifierBase {
+  type: "healing_dice_pool"
+  dieType: "d4" | "d6" | "d8" | "d10" | "d12" | "d20"
+  poolSize?: number | null
+  poolSizeByLevel?: BonusByLevelEntry[]
+  maxDicePerUse?: { type: "ability_modifier"; ability: AbilityScoreKey } | null
+  /** Roll this many dice per use (e.g. proficiency bonus for Healing Hands). */
+  dicePerUseSource?: "proficiency" | null
+  activation: "bonus_action" | "action" | "magic_action"
+  recharges?: import("@/lib/types").RechargeRule[]
+}
+
+export interface OnCreatureDeathTriggerCharacteristic extends CharacteristicModifierBase {
+  type: "on_creature_death_trigger"
+  creatureFilter: "enemy" | "ally" | "any"
+  rangeFeet: number
+  useReaction?: boolean
+  effect?: NestedModifierEffect | null
+}
+
+export interface TurnStartTriggerCharacteristic extends CharacteristicModifierBase {
+  type: "turn_start_trigger"
+  /** Regain HP when current HP is below this fraction of max (e.g. 0.5 = half). */
+  hpBelowFraction?: number | null
+  /** Minimum HP required (e.g. 1 = not at 0). */
+  hpAtLeast?: number | null
+  /** Restore uses from this class resource pool (reduce used count). */
+  restoreResourceKey?: string | null
+  restoreResourceAmount?: number | null
+  /** Accrue a banked resource (e.g. Influence points) instead of restoring a pool. */
+  accrueResourceKey?: string | null
+  accrueResourceAmount?: number | null
+  accrueResourceMaxAbility?: AbilityScoreKey | null
+  accrueDecayMinutes?: number | null
+  /** Ephemeral turn-start grant that scales by class level (Psionic Mastery). */
+  accrueResourceAmountByLevel?: { level: number; amount: number }[] | null
+  /** Bonus units expire at end of turn if unspent (Psionic Mastery free psi). */
+  expiresEndOfTurn?: boolean
+  /** Human-readable spend restriction for ephemeral grants. */
+  usageRestriction?: string | null
+  /** Skip when toggle is off (e.g. in-combat gate). */
+  requiresSheetToggle?: SheetToggleKey
+  /** Skip when any of these conditions are active (e.g. Incapacitated). */
+  blockedByConditions?: string[]
+  /** Regain HP at the start of the turn (e.g. Champion's Heroic Rally: 5 + CON modifier while Bloodied). */
+  healMode?: "fixed" | "ability_modifier" | "dice" | null
+  healFixed?: number | null
+  healAbility?: AbilityScoreKey | null
+  healDiceCount?: number | null
+  healDieType?: "d4" | "d6" | "d8" | "d10" | "d12" | "d20" | null
+  /** Added on top of healFixed/healAbility/healDiceCount (e.g. "5 + CON modifier" = healAbility CON + healFlatBonus 5). */
+  healFlatBonus?: number | null
+  effect?: NestedModifierEffect | null
+}
+
+export interface TelepathyCharacteristic extends CharacteristicModifierBase {
+  type: "telepathy"
+  rangeFeet: number
+  /** Telepathy range in miles (overrides rangeFeet when set). */
+  rangeMiles?: number | null
+  /** Maximum words per telepathic message. */
+  maxMessageWords?: number | null
+  /** Requires an active token or similar link to communicate (Hexblood). */
+  requiresActiveToken?: boolean
+  /** Range in feet = this value × character level (Kalashtar Mind Link). */
+  rangeFeetPerLevel?: number | null
+  canInitiate?: boolean
+}
+
+export interface OnCastSpellTriggerCharacteristic extends CharacteristicModifierBase {
+  type: "on_cast_spell_trigger"
+  spellTags?: string[]
+  spellSchool?: string | null
+  effect?: NestedModifierEffect | null
+}
+
+/**
+ * Authored (e.g. Life Domain's Disciple of Life) and aggregated into
+ * `AggregatedCharacteristics.spellHealingModifiers`. Applied by
+ * `applySpellHealingModifiers` when a heal amount and spell level are known
+ * (feature heals with a slot level, or a parsed healing-spell overlay apply).
+ * `Spell` still has no structured healing field — this is not a full spell HP engine.
+ */
+export interface SpellHealingModifierCharacteristic extends CharacteristicModifierBase {
+  type: "spell_healing_modifier"
+  /** Disciple of Life flat bonus on healing spells. */
+  bonusFlat?: number
+  /** Disciple of Life: +N per spell level. */
+  bonusPerSpellLevel?: number
+  /** Blessed Healer self-heal when healing others. */
+  selfHealFlat?: number
+  selfHealPerSpellLevel?: number
+  maximizeHealingDice?: boolean
+  /** Grave Domain Return to Life — maximize dice only when target is at 0 HP. */
+  maximizeOnlyAtZeroHp?: boolean
+  halfDamageOnSaveSuccess?: boolean
+}
+
+export interface ResourceAbilityMenuOption {
+  name: string
+  description?: string
+  resourceCost?: number
+  /** Action economy spent by this specific option when the parent feature offers mixed timings. */
+  actionKind?: "action" | "bonus" | "reaction"
+  /** Spend this many Hit Point Dice when this menu option is used. */
+  hitDiceCost?: number | null
+  /** Waive resourceCost when character's element specialization matches. */
+  waiveWhenSpecializedElement?: "cold" | "fire" | "lightning" | null
+  /** When set, hide/disable this menu option until the character reaches this class level. */
+  unlocksAtLevel?: number | null
+  effect?: NestedModifierEffect | null
+  /**
+   * Structured bonus this option grants (e.g. add the menu's resource die to AC or damage).
+   * Lets the sheet show a computed value ("1d8") instead of only free-text description.
+   */
+  bonusConfig?: import("@/lib/compendium/roll-bonus-config").RollBonusConfig | null
+}
+
+export interface ResourceAbilityMenuCharacteristic extends CharacteristicModifierBase {
+  type: "resource_ability_menu"
+  resourceKey: string
+  options: ResourceAbilityMenuOption[]
+  /** Remarkable Strength: use menu abilities without spending the pool. */
+  waiveResourceCost?: boolean
+  /** Roll types that may trigger a free use (ability check, save, etc.). */
+  appliesOnRollKinds?: RollTriggerKind[]
+  /** Limit free use to these abilities (Strength, Constitution, etc.). */
+  appliesOnAbilities?: string[]
+}
+
+/**
+ * Authored (e.g. Thief's Reflexes) and surfaced as an informational sheet note
+ * (character-sheet-client.tsx "Senses & Rest" panel) — there is no turn-order/round simulation
+ * in the app, so this cannot actually grant a second turn mechanically.
+ */
+export interface ExtraTurnCharacteristic extends CharacteristicModifierBase {
+  type: "extra_turn"
+  firstRoundOnly?: boolean
+  turnCount?: number
+}
+
+export interface SpellListAccessCharacteristic extends CharacteristicModifierBase {
+  type: "spell_list_access"
+  /** Class names whose spell lists are accessible (e.g. Cleric for Divine Soul). */
+  classNames: string[]
+  /** Named additions to existing casting lists; does not grant/prep spells or slots. */
+  spellNames?: string[]
+}
+
+export interface SpellcastingAbilityCharacteristic extends CharacteristicModifierBase {
+  type: "spellcasting_ability"
+  ability: AbilityScoreKey
+  /** Player picks one of these abilities at build time (e.g. Elven Lineage Int/Wis/Cha). */
+  abilityOptions?: AbilityScoreKey[]
+}
+
+export interface UsesCharacteristic extends CharacteristicModifierBase {
+  type: "uses"
+  uses: UsesConfig
+}
+
+export interface GrantFeatCharacteristic extends CharacteristicModifierBase {
+  type: "grant_feat"
+  /** Feat categories the character may choose from (General, Epic Boon, etc.). */
+  featCategories: string[]
+  /** How many feat choices this modifier grants (default 1). */
+  count: number
+  /**
+   * Named feats also eligible for this pick (e.g. "Survivor" when the grant is
+   * "Survivor or a Dark Gift feat of your choice").
+   */
+  alsoFeatNames?: string[]
+}
+
+export type CreaturePickOnRest = "short_rest" | "long_rest" | "short_or_long_rest"
+
+/**
+ * Grants one or more Creatures & Companions entries on the character sheet.
+ * Names resolve against the creatures table (exact / case-insensitive match).
+ * When choiceOptions is set, the player picks `count` from that list; otherwise
+ * all creatureNames are granted.
+ */
+export interface GrantCreatureCharacteristic extends CharacteristicModifierBase {
+  type: "grant_creature"
+  /** Creature names from the Creatures & Companions compendium. */
+  creatureNames: string[]
+  /** When set, player picks from these (subset of or override for creatureNames). */
+  choiceOptions?: string[]
+  /** How many creatures to pick when choiceOptions is set (default 1). */
+  count?: number
+  /** Level-scaled pick totals (Thralls column, etc.). Overrides `count` when present. */
+  countByLevel?: UsesAtLevel[]
+  /**
+   * Combined Challenge Rating cap for all chosen creatures at once
+   * (`count` is the CR total, so 0.25 = CR 1/4).
+   */
+  combinedCrByLevel?: UsesAtLevel[]
+  /** Offer the choice on the matching rest overlay (same pick feeds Companions). */
+  pickOnRest?: CreaturePickOnRest
+  /** Heading on the picker (e.g. Animate Thralls). Defaults to the feature name. */
+  pickerTitle?: string
+  /** When true, the form uses polymorph rules (Wild Shape). */
+  polymorph?: boolean
+}
+
+export type EquipmentMagicItemsMode = "create_mundane" | "replicate_magic_item"
+
+export interface EquipmentAndMagicItemsCharacteristic extends CharacteristicModifierBase {
+  type: "equipment_and_magic_items"
+  mode: EquipmentMagicItemsMode
+  /** Named mundane items or magic item plan labels. */
+  itemOptions?: string[]
+  choiceCount?: number
+  /** Let the player enter an item name that is not in itemOptions. */
+  allowCustom?: boolean
+  usesPerLongRest?: number | "ability_modifier"
+  usesAbility?: AbilityScoreKey
+  planTables?: { minArtificerLevel: number; label: string; items?: string[] }[]
+}
+
+export interface PlayerNoteCharacteristic extends CharacteristicModifierBase {
+  type: "player_note"
+  /** Label shown above the editable note. */
+  prompt: string
+  placeholder?: string
+  /** Where the note editor is expected to appear. */
+  target: "feature" | "equipment"
+}
+
+export type InventoryContainerCapacityMode =
+  | "slot_count"
+  | "weight_lb"
+  | "cubic_feet"
+  | "unbounded"
+
+export type InventoryContainerContentKind =
+  | "equipment"
+  | "corpse"
+  | "companion"
+  | "freeform"
+
+export type InventoryContainerCreatureSize =
+  | "Tiny"
+  | "Small"
+  | "Medium"
+  | "Large"
+  | "Huge"
+  | "Gargantuan"
+
+/**
+ * Nested / extradimensional storage opened from the Gear tab (Dead Space linked
+ * item, Bag of Holding, Portable Hole). Side-channel — contents live in play state.
+ */
+export interface InventoryContainerCharacteristic extends CharacteristicModifierBase {
+  type: "inventory_container"
+  /** Display name for the space when it differs from the host item. */
+  containerName?: string | null
+  capacityMode: InventoryContainerCapacityMode
+  capacityAmount?: number | null
+  /** Soft capacity hint shown in UI (e.g. "12 Medium or smaller corpses"). */
+  capacityLabel?: string | null
+  contentKinds: InventoryContainerContentKind[]
+  maxCreatureSize?: InventoryContainerCreatureSize | null
+  /**
+   * When true with a create_mundane linked-item choice, the chosen host appears
+   * in Gear and opens this container (Dead Space bag/cloak/backpack).
+   */
+  linkHostItem?: boolean
+  /** Attach this container to owned equipment matching these names (Bag of Holding). */
+  attachToEquipmentNames?: string[]
+}
+
+export interface CatalogOptionCharacteristic extends CharacteristicModifierBase {
+  type: "catalog_option"
+  catalogAbilityId: string
+  catalogEntryId: string
+}
+
+/** Alert attached to named sheet actions / powers (talent riders without their own roll). */
+export interface PowerRiderCharacteristic extends CharacteristicModifierBase {
+  type: "power_rider"
+  /** Action / custom ability names that should show the alert (e.g. "Phase Rift", "Guardian Tactics"). */
+  parentPowerNames: string[]
+  /**
+   * Optional menu option names on the parent action (e.g. "Block", "Challenge", "Grasp").
+   * When set, the alert attaches only if the parent action's resource_ability_menu lists a matching option.
+   */
+  parentMenuOptionNames?: string[]
+  /** Short summary for the alert badge (defaults to feature label). */
+  alertSummary?: string
+  /** When set, only show this rider for these special_attack variants. */
+  appliesToAttackVariants?: Array<"attack" | "primed" | "explode">
+  /** When true, the sheet offers this rider as an optional add-on. */
+  selectable?: boolean
+  /** When selected, replace the parent action's HP spend with this amount. */
+  spendHitPoints?: number
+  /**
+   * Optional extra damage the player ticks on the weapon DMG ··· menu
+   * (Bloodied riders, first-round bonuses, "you can deal extra…" dice).
+   */
+  weaponDamageMenu?: boolean
+  /** Extra dice when the player checks this rider (e.g. "1d8"). */
+  bonusDice?: string | null
+  /** Level ladder for bonusDice when the feature scales without a class-resource column. */
+  dieByLevel?: { level: number; die: string }[]
+  /** Flat bonus from an ability modifier (Fierce Start +CHA). */
+  ability?: AbilityScoreKey
+  /** Special class-resource die (Finisher column) that supplies bonusDice. */
+  classResourceKey?: string | null
+  /**
+   * Roll this many single dice of the classResourceKey pool's current die size
+   * ("add two Battle Dice") instead of the pool-count column (Finisher 2d8).
+   */
+  classResourceDieCount?: number | null
+  /** Expend this many from classResourceKey when the damage roll includes the rider. */
+  spendClassResourceAmount?: number | null
+  /** Action economy the rider costs when rolled (maneuvers used "as a Bonus Action"). */
+  riderActionKind?: "bonus" | "reaction" | null
+  /** Only offer on melee (incl. Unarmed Strike) or ranged weapons. */
+  weaponScope?: "melee" | "ranged" | null
+  /**
+   * Flat bonus from whichever listed ability the weapon is not already using
+   * (Battle Edge: "Strength or Dexterity modifier, whichever you don't already add").
+   */
+  complementaryAbilities?: AbilityScoreKey[]
+  /** Floor for the ability / complementary-ability flat bonus (e.g. 1). */
+  abilityBonusMinimum?: number | null
+  /** Damage type for the extra dice when it differs from the weapon (Bear Hug: bludgeoning). */
+  bonusDiceType?: string | null
+  /** Check this rider when the named sheet toggle is on (e.g. below_half_hp). */
+  defaultSelectedWhenToggle?: string | null
+  /** Short condition suffix on the menu label (e.g. "Bloodied"). */
+  menuConditionLabel?: string | null
+}
+
+/** Hide a prior feature and treat this one as its successor on the sheet. */
+export interface ReplaceFeatureCharacteristic extends CharacteristicModifierBase {
+  type: "replace_feature"
+  /** Feature names this upgrade supersedes (hidden from Features + action cards). */
+  replacedFeatureNames: string[]
+}
+
+/** Set listed ability scores equal to another ability's score (Physical Surge). */
+export interface AbilityScoreOverrideCharacteristic extends CharacteristicModifierBase {
+  type: "ability_score_override"
+  targets: AbilityScoreKey[]
+  sourceAbility: AbilityScoreKey
+  /** Player may choose which target when more than one is listed. */
+  chooseOneTarget?: boolean
+}
+
+/** Multiply healing you receive (Magical Anathema). */
+export interface HealingReceivedModifierCharacteristic extends CharacteristicModifierBase {
+  type: "healing_received_modifier"
+  multiplier: number
+  magicalOnly?: boolean
+  includePotions?: boolean
+}
+
+/** Unlock / know a named custom ability (Telekinetic Weapons power). */
+export interface GrantCustomAbilityCharacteristic extends CharacteristicModifierBase {
+  type: "grant_custom_ability"
+  abilityNames: string[]
+}
+
+/**
+ * Put named equipment / magic items in the character's bag when the feature unlocks
+ * (Investigator subclass Trinkets). Granted once each: removing an item does not re-add it.
+ */
+export interface GrantEquipmentCharacteristic extends CharacteristicModifierBase {
+  type: "grant_equipment"
+  equipmentNames: string[]
+  /** Copies of each named item to grant. Defaults to 1. */
+  quantityPerItem?: number | null
+}
+
+/**
+ * Upgrade a named custom ability you already know, rather than granting a new one
+ * (Psion cross-power upgrades such as Phase Dancer improving Phase Rift).
+ */
+export interface ModifyCustomAbilityCharacteristic extends CharacteristicModifierBase {
+  type: "modify_custom_ability"
+  /** Replace the existing pool, preserving the ability identity and spent-use key. */
+  usesOverride?: UsesConfig | null
+  /** Upgrade existing check bonus dice rather than adding a stacking second bonus. */
+  checkBonusDieOverride?: import("@/lib/compendium/roll-bonus-config").RollBonusConfig["dieType"]
+  /** Custom abilities this upgrade applies to, by name. */
+  abilityNames: string[]
+  /** Text appended to the target ability wherever its description is shown. */
+  addendum?: string | null
+  /** Remove the target's independent use cap, retaining its shared resource price. */
+  removeUseLimit?: boolean
+  /** Optional, player-confirmed resource waiver (e.g. once per round). */
+  resourceCostWaiver?: string | null
+  /** Flat reduction to the selected ability's resource cost, minimum zero. */
+  resourceCostReduction?: number
+  /** Optional selector for libraries imported separately; every supplied filter must match. */
+  abilityFilter?: { role: string; eligibleClassNames?: string[]; minLevel?: number; maxLevel?: number } | null
+  /** Extra options appended to the target ability's own choice pool. */
+  appendOptions?: { name: string; description: string }[]
+}
+
+/** Extra picks for a feature choice pool (Unlimited Imagination, Skill Thief slots). */
+export interface FeatureChoiceCountBonusCharacteristic extends CharacteristicModifierBase {
+  type: "feature_choice_count_bonus"
+  targetFeatureName?: string | null
+  choiceCategory?: string | null
+  bonus?: number | null
+  bonusFrom?: "half_proficiency" | "proficiency" | null
+}
+
+/** Extra named options for a feature choice pool (Projected Nightmares → Boundless Imagination). */
+export interface FeatureChoiceOptionGrantCharacteristic extends CharacteristicModifierBase {
+  type: "feature_choice_option_grant"
+  targetFeatureName?: string | null
+  choiceCategory?: string | null
+  options: { name: string; description: string }[]
+}
+
+/** Marks a class feature as the level where subclass/archetype selection unlocks. */
+export interface SubclassUnlockCharacteristic extends CharacteristicModifierBase {
+  type: "subclass_unlock"
+}
+
+export type CharacteristicModifier =
+  | AbilityScoresCharacteristic
+  | SkillsCharacteristic
+  | SkillCheckAlternateAbilityCharacteristic
+  | SavingThrowAlternateAbilityCharacteristic
+  | ForcedSaveAbilityRemapCharacteristic
+  | WeaponAbilityOverrideCharacteristic
+  | WeaponSheetBadgeCharacteristic
+  | CustomSkillCharacteristic
+  | ListCharacteristic
+  | WeaponProficienciesCharacteristic
+  | AcCharacteristic
+  | HitPointsCharacteristic
+  | InitiativeCharacteristic
+  | VisionCharacteristic
+  | SpeedCharacteristic
+  | WeaponReachModifierCharacteristic
+  | AttackRollModifiersCharacteristic
+  | DamageRollModifiersCharacteristic
+  | UnarmedStrikeDamageCharacteristic
+  | WeaponDamageDieOverrideCharacteristic
+  | SpecialAttackCharacteristic
+  | RestReplacementCharacteristic
+  | HitDiceRestoreCharacteristic
+  | MagicalSleepImmunityCharacteristic
+  | CreatureSizeCharacteristic
+  | MovementEffectsCharacteristic
+  | DamageCharacteristic
+  | ConditionImmunityCharacteristic
+  | AttunementSlotsCharacteristic
+  | AuraCharacteristic
+  | BonusDamageRidersCharacteristic
+  | SavingThrowTriggerCharacteristic
+  | OnHitTriggerCharacteristic
+  | FailedRollTriggerCharacteristic
+  | D20TestReactionCharacteristic
+  | DamageHalvingReactionCharacteristic
+  | HealingDicePoolCharacteristic
+  | OnCreatureDeathTriggerCharacteristic
+  | TurnStartTriggerCharacteristic
+  | TelepathyCharacteristic
+  | OnCastSpellTriggerCharacteristic
+  | SpellHealingModifierCharacteristic
+  | ResourceAbilityMenuCharacteristic
+  | ExtraTurnCharacteristic
+  | DamageReductionCharacteristic
+  | SpellGrantCharacteristic
+  | SpellsKnownCharacteristic
+  | CraftableItemsCharacteristic
+  | HeldItemsCapCharacteristic
+  | ExtraWieldSlotsCharacteristic
+  | SpellListAccessCharacteristic
+  | SpellcastingAbilityCharacteristic
+  | UsesCharacteristic
+  | GrantFeatCharacteristic
+  | GrantCreatureCharacteristic
+  | EquipmentAndMagicItemsCharacteristic
+  | PlayerNoteCharacteristic
+  | InventoryContainerCharacteristic
+  | CatalogOptionCharacteristic
+  | PowerRiderCharacteristic
+  | ReplaceFeatureCharacteristic
+  | AbilityScoreOverrideCharacteristic
+  | HealingReceivedModifierCharacteristic
+  | GrantCustomAbilityCharacteristic
+  | GrantEquipmentCharacteristic
+  | ModifyCustomAbilityCharacteristic
+  | FeatureChoiceCountBonusCharacteristic
+  | FeatureChoiceOptionGrantCharacteristic
+  | SubclassUnlockCharacteristic
+
+export function createModifierId(): string {
+  return `mod_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+export function createCharacteristicModifier(
+  type: CharacteristicModifierType,
+): CharacteristicModifier {
+  const id = createModifierId()
+  switch (type) {
+    case "ability_scores":
+      return { id, type, mode: "fixed", bonuses: {} }
+    case "skills":
+      return { id, type, entries: [] }
+    case "skill_check_alternate_ability":
+      return { id, type, ability: "strength", skills: [] }
+    case "saving_throw_alternate_ability":
+      return { id, type, ability: "intelligence", saves: ["wisdom"] }
+    case "forced_save_ability_remap":
+      return {
+        id,
+        type,
+        fromAbility: "WIS",
+        toAbility: "INT",
+        scope: "your_features",
+      }
+    case "weapon_ability_override":
+      return {
+        id,
+        type,
+        ability: "charisma",
+        appliesTo: "both",
+        scope: "all",
+        weaponNames: [],
+        treatAsFinesse: false,
+        whenDamageDice: [],
+      }
+    case "weapon_sheet_badge":
+      return {
+        id,
+        type,
+        label: "Weapon rider",
+        description: "",
+        whenDamageDice: [],
+        includeUnarmed: false,
+        requireFirearm: false,
+        appliesTo: "all",
+        weaponNames: [],
+      }
+    case "custom_skill":
+      return { id, type, name: "", ability: "intelligence", expertise: false }
+    case "languages":
+    case "armor_proficiencies":
+    case "tool_proficiencies":
+    case "saving_throws":
+      return { id, type, values: [] }
+    case "weapon_proficiencies":
+      return { id, type, mode: "specific", values: [] }
+    case "ac":
+      return { id, type, mode: "flat_bonus", flatBonus: 1 }
+    case "hit_points":
+      return { id, type, mode: "flat", value: 2 }
+    case "initiative":
+      return { id, type, mode: "flat_bonus", flatBonus: 1 }
+    case "vision":
+      return { id, type, visionType: "darkvision", rangeFeet: 60 }
+    case "speed":
+      return { id, type, speedType: "walk", mode: "add", value: 5 }
+    case "weapon_reach_modifier":
+      return { id, type, reachBonusFeet: 5, weaponPropertyFilter: [], appliesToUnarmedStrike: false }
+    case "attack_roll_modifiers":
+      return {
+        id,
+        type,
+        entries: [{ bonus: 2, target: "ranged" }],
+        criticalHitMinimum: null,
+        criticalHitMinimumByLevel: [],
+      }
+    case "condition_immunity":
+      return { id, type, conditions: [] }
+    case "damage_roll_modifiers":
+      return { id, type, entries: [{ bonus: 2, target: "one_handed_melee" }] }
+    case "unarmed_strike_damage":
+      return { id, type, die: "1d6", dieByLevel: [], emptyHandedDie: null, damageType: null, ability: null }
+    case "weapon_damage_die_override":
+      return {
+        id,
+        type,
+        dieSides: 4,
+        dieSidesByLevel: [],
+        scope: "weapons",
+        weaponNames: [],
+      }
+    case "special_attack":
+      return {
+        id,
+        type,
+        attackName: "Special Attack",
+        icon: null,
+        attackProfile: "melee",
+        properties: [],
+        damageTypes: [],
+        chooseDamageType: false,
+        damageDiceCount: 1,
+        damageDieType: "d6",
+        damageByLevel: [],
+      }
+    case "hit_dice_restore":
+      return { id, type, amount: 3, amountByLevel: [], restoreOn: "short_rest" }
+    case "rest_replacement":
+      return { id, type, restHours: 4, replacesLongRest: true, description: "" }
+    case "magical_sleep_immunity":
+      return { id, type, noSleepRequired: false, immuneToNamedSpells: [] }
+    case "creature_size":
+      return { id, type, size: "Large", mode: "activatable", durationMinutes: 10 }
+    case "movement_effects":
+      return { id, type }
+    case "damage_resistance":
+    case "damage_immunity":
+      return { id, type, damageTypes: [], choiceCount: null, choiceOptions: null, fromSpells: false }
+    case "damage_reduction":
+      return {
+        id,
+        type,
+        amount: 3,
+        amountMode: "fixed",
+        damageTypes: ["Bludgeoning", "Piercing", "Slashing"],
+        requiresArmorCategory: null,
+      }
+    case "spells":
+      return { id, type, grants: [{ level: 1, count: 1 }] }
+    case "spells_known":
+      return { id, type, spells: [], choiceGrants: [] }
+    case "spell_list_access":
+      return { id, type, classNames: [] }
+    case "spellcasting_ability":
+      return { id, type, ability: "intelligence" }
+    case "uses":
+      return { id, type, uses: { type: "unlimited" } }
+    case "attunement_slots":
+      return { id, type, bonusSlots: 1, totalSlots: null }
+    case "aura":
+      return { id, type, radiusFeet: 10, affectsSelf: true, affectsAllies: true }
+    case "bonus_damage_riders":
+      return {
+        id,
+        type,
+        riders: [],
+        maxRidersPerUse: 1,
+        maxRidersPerUseByLevel: [],
+        automaticBonusByLevel: [],
+      }
+    case "saving_throw_trigger":
+      return { id, type, triggerOn: "make", saveAbility: null, targetScope: "self", effect: null }
+    case "on_hit_trigger":
+      return { id, type, oncePerTurn: true, effect: null }
+    case "failed_roll_trigger":
+      return { id, type, triggerOn: "fail", rollKind: "ability", targetScope: "self", effect: null }
+    case "d20_test_reaction":
+      return {
+        id,
+        type,
+        modifierMode: "add",
+        rollKinds: [],
+        targetScope: "self",
+        dieSource: "resource_die",
+        effect: null,
+      }
+    case "damage_halving_reaction":
+      return { id, type, useReaction: true, cancelCritRiders: false }
+    case "healing_dice_pool":
+      return {
+        id,
+        type,
+        dieType: "d6",
+        activation: "bonus_action",
+        recharges: [{ rest: "long_rest" }],
+      }
+    case "on_creature_death_trigger":
+      return { id, type, creatureFilter: "enemy", rangeFeet: 30, effect: null }
+    case "turn_start_trigger":
+      return { id, type, hpBelowFraction: 0.5, hpAtLeast: 1, effect: null }
+    case "telepathy":
+      return { id, type, rangeFeet: 60, canInitiate: true }
+    case "on_cast_spell_trigger":
+      return { id, type, spellTags: [], effect: null }
+    case "spell_healing_modifier":
+      return { id, type, bonusFlat: 0, bonusPerSpellLevel: 0 }
+    case "resource_ability_menu":
+      return { id, type, resourceKey: "", options: [] }
+    case "extra_turn":
+      return { id, type, firstRoundOnly: true, turnCount: 1 }
+    case "grant_feat":
+      return { id, type, featCategories: ["General"], count: 1 }
+    case "grant_creature":
+      return { id, type, creatureNames: [], count: 1 }
+    case "power_rider":
+      return { id, type, parentPowerNames: [], parentMenuOptionNames: [], alertSummary: "", selectable: false }
+    case "replace_feature":
+      return { id, type, replacedFeatureNames: [] }
+    case "ability_score_override":
+      return {
+        id,
+        type,
+        targets: ["strength", "dexterity"],
+        sourceAbility: "intelligence",
+        chooseOneTarget: true,
+      }
+    case "healing_received_modifier":
+      return { id, type, multiplier: 0.5, magicalOnly: true, includePotions: true }
+    case "grant_custom_ability":
+      return { id, type, abilityNames: [] }
+    case "grant_equipment":
+      return { id, type, equipmentNames: [] }
+    case "modify_custom_ability":
+      return { id, type, abilityNames: [], addendum: null, appendOptions: [] }
+    case "feature_choice_count_bonus":
+      return { id, type, targetFeatureName: null, choiceCategory: null, bonus: 1, bonusFrom: null }
+    case "feature_choice_option_grant":
+      return { id, type, targetFeatureName: null, choiceCategory: null, options: [] }
+    case "subclass_unlock":
+      return { id, type, label: "Choose subclass" }
+    case "equipment_and_magic_items":
+      return { id, type, mode: "create_mundane", itemOptions: [], choiceCount: 1 }
+    case "player_note":
+      return { id, type, prompt: "Player notes", placeholder: "", target: "feature" }
+    case "inventory_container":
+      return {
+        id,
+        type,
+        containerName: null,
+        capacityMode: "slot_count",
+        capacityAmount: 1,
+        capacityLabel: null,
+        contentKinds: ["equipment", "freeform"],
+        maxCreatureSize: null,
+        linkHostItem: false,
+        attachToEquipmentNames: [],
+      }
+    case "craftable_items":
+      return { id, type, items: [], category: null }
+    case "held_items_cap":
+      return { id, type, baseAbility: "intelligence", flatBonus: 0 }
+    case "extra_wield_slots":
+      return { id, type, extraSlots: 1, allowedProperties: [] }
+    case "catalog_option":
+      return { id, type, catalogAbilityId: "", catalogEntryId: "" }
+    default:
+      throw new Error(`Unhandled characteristic modifier type: ${type}`)
+  }
+}
+
+function isCharacteristicModifier(value: unknown): value is CharacteristicModifier {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    "id" in value &&
+    typeof (value as CharacteristicModifier).type === "string"
+  )
+}
+
+function coerceUsesAtLevelTable(value: unknown): UsesAtLevel[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const rows = value.filter((row): row is UsesAtLevel => {
+    if (!row || typeof row !== "object") return false
+    const level = (row as UsesAtLevel).level
+    const count = (row as UsesAtLevel).count
+    return typeof level === "number" && Number.isFinite(level) && typeof count === "number" && Number.isFinite(count)
+  })
+  return rows.length ? rows : undefined
+}
+
+function coerceStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+  }
+  if (typeof value === "string" && value.trim()) return [value.trim()]
+  return []
+}
+
+function migrateWeaponProficiencies(value: CharacteristicModifier): WeaponProficienciesCharacteristic {
+  const raw = value as WeaponProficienciesCharacteristic & { values?: string[] }
+  if (raw.mode === "martial_weapons" || raw.mode === "specific") {
+    return {
+      id: raw.id,
+      label: raw.label,
+      type: "weapon_proficiencies",
+      mode: raw.mode,
+      values: raw.values ?? [],
+    }
+  }
+
+  const legacyValues = raw.values ?? []
+  const hasMartialCategory = legacyValues.some((entry) =>
+    entry.toLowerCase().includes("martial"),
+  )
+  const specificValues = legacyValues.filter(
+    (entry) =>
+      !entry.toLowerCase().includes("martial") &&
+      !entry.toLowerCase().includes("simple") &&
+      entry.trim().length > 0,
+  )
+
+  if (hasMartialCategory && specificValues.length === 0) {
+    return {
+      id: raw.id,
+      label: raw.label,
+      type: "weapon_proficiencies",
+      mode: "martial_weapons",
+      values: [],
+    }
+  }
+
+  return {
+    id: raw.id,
+    label: raw.label,
+    type: "weapon_proficiencies",
+    mode: "specific",
+    values: specificValues.length ? specificValues : legacyValues,
+  }
+}
+
+function migrateCharacteristicModifier(value: unknown): CharacteristicModifier | null {
+  if (!isCharacteristicModifier(value)) return null
+
+  if (value.type === "skills") {
+    const legacy = value as SkillsCharacteristic
+    if (!legacy.entries?.length && legacy.values?.length) {
+      return {
+        id: legacy.id,
+        label: legacy.label,
+        type: "skills",
+        entries: legacy.values.map((skill) => ({ skill, expertise: false })),
+      }
+    }
+    return { ...legacy, entries: legacy.entries ?? [] }
+  }
+
+  if (value.type === "weapon_ability_override") {
+    const raw = value as WeaponAbilityOverrideCharacteristic & {
+      alternateAbility?: AbilityScoreKey
+      weaponAbilityAppliesTo?: WeaponAbilityAppliesTo
+      weaponAbilityScope?: WeaponAbilityScope
+      treatAsFinesse?: boolean
+      whenDamageDice?: string[]
+    }
+    return {
+      ...raw,
+      ability: raw.ability ?? raw.alternateAbility ?? "strength",
+      appliesTo: raw.appliesTo ?? raw.weaponAbilityAppliesTo ?? "both",
+      scope: raw.scope ?? raw.weaponAbilityScope ?? "all",
+      treatAsFinesse: Boolean(raw.treatAsFinesse),
+      whenDamageDice: Array.isArray(raw.whenDamageDice)
+        ? raw.whenDamageDice.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : [],
+    }
+  }
+
+  if (value.type === "weapon_sheet_badge") {
+    const raw = value as WeaponSheetBadgeCharacteristic
+    return {
+      ...raw,
+      whenDamageDice: Array.isArray(raw.whenDamageDice)
+        ? raw.whenDamageDice.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : [],
+      includeUnarmed: Boolean(raw.includeUnarmed),
+      requireFirearm: Boolean(raw.requireFirearm),
+      appliesTo: raw.appliesTo ?? "all",
+      weaponNames: Array.isArray(raw.weaponNames) ? raw.weaponNames : [],
+    }
+  }
+
+  if (value.type === "weapon_proficiencies") {
+    return migrateWeaponProficiencies(value)
+  }
+
+  if (value.type === "spells_known") {
+    const raw = value as SpellsKnownCharacteristic
+    return {
+      ...raw,
+      spells: raw.spells ?? [],
+      choiceGrants: raw.choiceGrants ?? [],
+      spellListClassOptions: raw.spellListClassOptions ?? [],
+      playerPicksSpellList: raw.playerPicksSpellList ?? false,
+      alwaysPrepared: raw.alwaysPrepared ?? false,
+    }
+  }
+
+  if (value.type === "aura") {
+    const raw = value as AuraCharacteristic
+    return {
+      ...raw,
+      radiusFeet: raw.radiusFeet ?? 10,
+      conditionImmunities: raw.conditionImmunities ?? [],
+      radiusByLevel: raw.radiusByLevel ?? [],
+    }
+  }
+
+  if (value.type === "bonus_damage_riders") {
+    const raw = value as BonusDamageRidersCharacteristic
+    return {
+      ...raw,
+      riders: (raw.riders ?? []).map((rider) => ({
+        ...rider,
+        unlocksAtLevel: rider.unlocksAtLevel ?? null,
+        costResourceKey: rider.costResourceKey ?? null,
+        costResourceAmount: rider.costResourceAmount ?? null,
+      })),
+      maxRidersPerUse: raw.maxRidersPerUse ?? 1,
+      maxRidersPerUseByLevel: raw.maxRidersPerUseByLevel ?? [],
+      triggerOn: raw.triggerOn ?? "on_hit",
+      automaticBonus: raw.automaticBonus ?? null,
+      automaticBonusByLevel: raw.automaticBonusByLevel ?? [],
+    }
+  }
+
+  if (value.type === "saving_throw_trigger") {
+    const raw = value as SavingThrowTriggerCharacteristic
+    return {
+      ...raw,
+      triggerOn: raw.triggerOn ?? "make",
+      saveAbility: raw.saveAbility ?? null,
+      targetScope: raw.targetScope ?? "self",
+      saveConditionFilter: raw.saveConditionFilter ?? [],
+      useReaction: raw.useReaction ?? false,
+      replaceFailedRollWith: raw.replaceFailedRollWith ?? null,
+      spendResourceKey: raw.spendResourceKey ?? null,
+      spendResourceAmount: raw.spendResourceAmount ?? null,
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "on_hit_trigger") {
+    const raw = value as OnHitTriggerCharacteristic
+    return {
+      ...raw,
+      triggerOn: raw.triggerOn ?? "hit",
+      oncePerTurn: raw.oncePerTurn ?? true,
+      excludeCreatureTypes: coerceStringArray(raw.excludeCreatureTypes),
+      includeCreatureTypes: coerceStringArray(raw.includeCreatureTypes),
+      onlyIfTargetBelowHalfHp: raw.onlyIfTargetBelowHalfHp ?? false,
+      onlyIfTargetMinSize: raw.onlyIfTargetMinSize ?? null,
+      maximizeWeaponDamage: raw.maximizeWeaponDamage ?? false,
+      maximizeWeaponDamageAtLevel: raw.maximizeWeaponDamageAtLevel ?? null,
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "failed_roll_trigger") {
+    const raw = value as FailedRollTriggerCharacteristic
+    return {
+      ...raw,
+      triggerOn: raw.triggerOn ?? "fail",
+      rollKind: raw.rollKind ?? "ability",
+      targetScope: raw.targetScope ?? "self",
+      rangeFeet: raw.rangeFeet ?? null,
+      useReaction: raw.useReaction ?? false,
+      refundResourceOnStillFailed: raw.refundResourceOnStillFailed ?? false,
+      requiresProficiency: raw.requiresProficiency ?? false,
+      rerollRoll: raw.rerollRoll ?? false,
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "d20_test_reaction") {
+    const raw = value as D20TestReactionCharacteristic
+    return {
+      ...raw,
+      modifierMode: raw.modifierMode ?? "add",
+      rollKinds: raw.rollKinds ?? [],
+      targetScope: raw.targetScope ?? "self",
+      rangeFeet: raw.rangeFeet ?? null,
+      useReaction: raw.useReaction ?? false,
+      dieSource: raw.dieSource ?? "resource_die",
+      fixedDie: raw.fixedDie ?? null,
+      dieAbility: raw.dieAbility ?? null,
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "damage_halving_reaction") {
+    const raw = value as DamageHalvingReactionCharacteristic
+    return {
+      ...raw,
+      cancelCritRiders: raw.cancelCritRiders ?? false,
+      useReaction: raw.useReaction ?? true,
+      requiresPriorDisadvantage: raw.requiresPriorDisadvantage ?? false,
+    }
+  }
+
+  if (value.type === "healing_dice_pool") {
+    const raw = value as HealingDicePoolCharacteristic
+    return {
+      ...raw,
+      dieType: raw.dieType ?? "d6",
+      activation: raw.activation ?? "bonus_action",
+      recharges: raw.recharges ?? [{ rest: "long_rest" }],
+      poolSizeByLevel: raw.poolSizeByLevel ?? [],
+      dicePerUseSource: raw.dicePerUseSource ?? null,
+    }
+  }
+
+  if (value.type === "on_creature_death_trigger") {
+    const raw = value as OnCreatureDeathTriggerCharacteristic
+    return {
+      ...raw,
+      creatureFilter: raw.creatureFilter ?? "enemy",
+      rangeFeet: raw.rangeFeet ?? 30,
+      useReaction: raw.useReaction ?? false,
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "telepathy") {
+    const raw = value as TelepathyCharacteristic
+    return {
+      ...raw,
+      rangeFeet: raw.rangeFeet ?? 60,
+      rangeMiles: raw.rangeMiles ?? null,
+      maxMessageWords: raw.maxMessageWords ?? null,
+      requiresActiveToken: raw.requiresActiveToken ?? false,
+      rangeFeetPerLevel: raw.rangeFeetPerLevel ?? null,
+      canInitiate: raw.canInitiate ?? true,
+    }
+  }
+
+  if (value.type === "on_cast_spell_trigger") {
+    const raw = value as OnCastSpellTriggerCharacteristic
+    return {
+      ...raw,
+      spellTags: raw.spellTags ?? [],
+      spellSchool: raw.spellSchool ?? null,
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "spell_healing_modifier") {
+    const raw = value as SpellHealingModifierCharacteristic
+    return {
+      ...raw,
+      bonusFlat: raw.bonusFlat ?? 0,
+      bonusPerSpellLevel: raw.bonusPerSpellLevel ?? 0,
+      maximizeHealingDice: raw.maximizeHealingDice ?? false,
+      maximizeOnlyAtZeroHp: raw.maximizeOnlyAtZeroHp ?? false,
+      halfDamageOnSaveSuccess: raw.halfDamageOnSaveSuccess ?? false,
+    }
+  }
+
+  if (value.type === "resource_ability_menu") {
+    const raw = value as ResourceAbilityMenuCharacteristic
+    return {
+      ...raw,
+      resourceKey: raw.resourceKey ?? "",
+      options: (raw.options ?? []).map((option) => ({
+        ...option,
+        unlocksAtLevel: option.unlocksAtLevel ?? null,
+        hitDiceCost: option.hitDiceCost ?? null,
+      })),
+      waiveResourceCost: raw.waiveResourceCost ?? false,
+      appliesOnRollKinds: raw.appliesOnRollKinds ?? [],
+      appliesOnAbilities: raw.appliesOnAbilities ?? [],
+    }
+  }
+
+  if (value.type === "power_rider") {
+    const raw = value as PowerRiderCharacteristic
+    return {
+      ...raw,
+      parentPowerNames: coerceStringArray(raw.parentPowerNames),
+      parentMenuOptionNames: coerceStringArray(raw.parentMenuOptionNames),
+      alertSummary: raw.alertSummary ?? "",
+      appliesToAttackVariants: Array.isArray(raw.appliesToAttackVariants)
+        ? raw.appliesToAttackVariants.filter(
+            (entry): entry is "attack" | "primed" | "explode" =>
+              entry === "attack" || entry === "primed" || entry === "explode",
+          )
+        : undefined,
+      selectable: raw.selectable ?? false,
+      spendHitPoints:
+        typeof raw.spendHitPoints === "number" && raw.spendHitPoints > 0
+          ? raw.spendHitPoints
+          : undefined,
+      weaponDamageMenu: raw.weaponDamageMenu === true,
+      bonusDice: raw.bonusDice?.trim() || undefined,
+      dieByLevel: Array.isArray(raw.dieByLevel)
+        ? raw.dieByLevel.filter(
+            (row): row is { level: number; die: string } =>
+              typeof row?.level === "number" && typeof row?.die === "string" && Boolean(row.die.trim()),
+          )
+        : undefined,
+      ability:
+        raw.ability && (ABILITY_SCORE_KEYS as readonly string[]).includes(raw.ability)
+          ? raw.ability
+          : undefined,
+      classResourceKey: raw.classResourceKey?.trim() || undefined,
+      defaultSelectedWhenToggle: raw.defaultSelectedWhenToggle?.trim() || undefined,
+      menuConditionLabel: raw.menuConditionLabel?.trim() || undefined,
+    }
+  }
+
+  if (value.type === "replace_feature") {
+    const raw = value as ReplaceFeatureCharacteristic
+    return {
+      ...raw,
+      replacedFeatureNames: coerceStringArray(raw.replacedFeatureNames),
+    }
+  }
+
+  if (value.type === "turn_start_trigger") {
+    const raw = value as TurnStartTriggerCharacteristic
+    return {
+      ...raw,
+      hpBelowFraction: raw.hpBelowFraction ?? null,
+      hpAtLeast: raw.hpAtLeast ?? null,
+      restoreResourceKey: raw.restoreResourceKey ?? null,
+      restoreResourceAmount: raw.restoreResourceAmount ?? null,
+      blockedByConditions: raw.blockedByConditions ?? [],
+      effect: raw.effect ?? null,
+    }
+  }
+
+  if (value.type === "extra_turn") {
+    const raw = value as ExtraTurnCharacteristic
+    return {
+      ...raw,
+      firstRoundOnly: raw.firstRoundOnly ?? true,
+      turnCount: raw.turnCount ?? 1,
+    }
+  }
+
+  if (value.type === "grant_creature") {
+    const raw = value as GrantCreatureCharacteristic
+    const pickOnRest =
+      raw.pickOnRest === "short_rest" ||
+      raw.pickOnRest === "long_rest" ||
+      raw.pickOnRest === "short_or_long_rest"
+        ? raw.pickOnRest
+        : undefined
+    return {
+      ...raw,
+      creatureNames: coerceStringArray(raw.creatureNames),
+      choiceOptions: raw.choiceOptions?.length ? coerceStringArray(raw.choiceOptions) : undefined,
+      count: raw.count ?? 1,
+      countByLevel: coerceUsesAtLevelTable(raw.countByLevel),
+      combinedCrByLevel: coerceUsesAtLevelTable(raw.combinedCrByLevel),
+      pickOnRest,
+      pickerTitle: raw.pickerTitle?.trim() || undefined,
+      polymorph: raw.polymorph || undefined,
+    }
+  }
+
+  if (
+    value.type === "tool_proficiencies" ||
+    value.type === "languages" ||
+    value.type === "armor_proficiencies" ||
+    value.type === "saving_throws"
+  ) {
+    const raw = value as ListCharacteristic & { armor?: string[] }
+    const values = coerceStringArray(raw.values?.length ? raw.values : raw.armor)
+    return { ...raw, values, choiceCount: raw.choiceCount ?? null }
+  }
+
+  if (value.type === "damage_resistance" || value.type === "damage_immunity") {
+    const raw = value as DamageCharacteristic & { values?: string[] }
+    return {
+      ...raw,
+      damageTypes: coerceStringArray(raw.damageTypes ?? raw.values),
+      choiceCount: raw.choiceCount ?? null,
+      choiceOptions: raw.choiceOptions ? coerceStringArray(raw.choiceOptions) : null,
+      fromSpells: raw.fromSpells ?? false,
+    }
+  }
+
+  if (value.type === "unarmed_strike_damage") {
+    const raw = value as UnarmedStrikeDamageCharacteristic
+    return {
+      ...raw,
+      die: raw.die ?? "1d6",
+      dieByLevel: normalizeBonusByLevel(raw.dieByLevel),
+      emptyHandedDie: raw.emptyHandedDie ?? null,
+      damageType: raw.damageType ?? null,
+      ability: raw.ability ?? null,
+    }
+  }
+
+  if (value.type === "weapon_damage_die_override") {
+    const raw = value as WeaponDamageDieOverrideCharacteristic
+    return {
+      ...raw,
+      dieSides: raw.dieSides ?? 4,
+      dieSidesByLevel: normalizeBonusByLevel(raw.dieSidesByLevel),
+      scope: raw.scope ?? "weapons",
+      weaponNames: raw.weaponNames ?? [],
+    }
+  }
+
+  if (value.type === "special_attack") {
+    const raw = value as SpecialAttackCharacteristic
+    return {
+      ...raw,
+      icon: resolveSpecialAttackIcon(raw),
+      targetMode: raw.targetMode ?? "single",
+      maxTargets: raw.maxTargets ?? null,
+      useWeaponDamage: raw.useWeaponDamage ?? false,
+      saveHalfDamage: raw.saveHalfDamage ?? false,
+      properties: raw.properties ?? [],
+      damageTypes: raw.damageTypes ?? [],
+      chooseDamageType: raw.chooseDamageType ?? false,
+      damageDiceCount: raw.damageDiceCount ?? 1,
+      damageDieType: raw.damageDieType ?? "d6",
+      damageByLevel: raw.damageByLevel ?? [],
+      damageFromResourceSpend: raw.damageFromResourceSpend ?? false,
+      spendResourceOnHit: raw.spendResourceOnHit ?? false,
+      criticalDamageMultiplier: raw.criticalDamageMultiplier ?? 2,
+    }
+  }
+
+  if (value.type === "hit_dice_restore") {
+    const raw = value as HitDiceRestoreCharacteristic
+    return {
+      ...raw,
+      amount: typeof raw.amount === "number" ? raw.amount : 1,
+      amountByLevel: normalizeBonusByLevel(raw.amountByLevel),
+      restoreOn: raw.restoreOn === "long_rest" ? "long_rest" : "short_rest",
+    }
+  }
+
+  if (value.type === "rest_replacement") {
+    const raw = value as RestReplacementCharacteristic
+    return {
+      ...raw,
+      restHours: raw.restHours ?? 4,
+      replacesLongRest: raw.replacesLongRest ?? true,
+      description: raw.description ?? "",
+    }
+  }
+
+  if (value.type === "magical_sleep_immunity") {
+    const raw = value as MagicalSleepImmunityCharacteristic
+    return {
+      ...raw,
+      noSleepRequired: raw.noSleepRequired ?? false,
+      immuneToNamedSpells: coerceStringArray(raw.immuneToNamedSpells),
+    }
+  }
+
+  if (value.type === "creature_size") {
+    const raw = value as CreatureSizeCharacteristic
+    return {
+      ...raw,
+      size: raw.size ?? "Medium",
+      mode: raw.mode ?? "passive",
+    }
+  }
+
+  if (value.type === "movement_effects") {
+    const raw = value as MovementEffectsCharacteristic
+    return {
+      ...raw,
+      movementTypes: raw.movementTypes ?? [],
+      spiderClimb: raw.spiderClimb ?? false,
+      spiderClimbMinLevel: raw.spiderClimbMinLevel ?? null,
+    }
+  }
+
+  if (value.type === "condition_immunity") {
+    const raw = value as ConditionImmunityCharacteristic & { values?: string[] }
+    return {
+      ...raw,
+      conditions: coerceStringArray(raw.conditions ?? raw.values),
+      exhaustionSourceExclusions: coerceStringArray(raw.exhaustionSourceExclusions),
+    }
+  }
+
+  if (value.type === "attunement_slots") {
+    const raw = value as AttunementSlotsCharacteristic
+    return {
+      ...raw,
+      bonusSlots: raw.bonusSlots ?? 0,
+      totalSlots: raw.totalSlots ?? null,
+    }
+  }
+
+  if (value.type === "extra_wield_slots") {
+    const raw = value as ExtraWieldSlotsCharacteristic
+    return {
+      ...raw,
+      extraSlots: raw.extraSlots ?? 1,
+      allowedProperties: Array.isArray(raw.allowedProperties) ? raw.allowedProperties : [],
+    }
+  }
+
+  if (value.type === "attack_roll_modifiers") {
+    const raw = value as AttackRollModifiersCharacteristic
+    return {
+      ...raw,
+      entries: (raw.entries ?? []).map((entry) => ({
+        ...entry,
+        criticalHitMinimum: entry.criticalHitMinimum ?? null,
+        criticalHitMinimumByLevel: normalizeBonusByLevel(entry.criticalHitMinimumByLevel),
+      })),
+      criticalHitMinimum: raw.criticalHitMinimum ?? null,
+      criticalHitMinimumByLevel: normalizeBonusByLevel(raw.criticalHitMinimumByLevel),
+    }
+  }
+
+  if (value.type === "damage_roll_modifiers") {
+    const raw = value as DamageRollModifiersCharacteristic
+    return {
+      ...raw,
+      entries: (raw.entries ?? []).map((entry) => ({ ...entry })),
+    }
+  }
+
+  if (value.type === "ability_scores") {
+    const raw = value as AbilityScoresCharacteristic
+    const mode = raw.mode === "asi_pool" ? "asi_pool" : "fixed"
+    const allowed = Array.isArray(raw.allowedAbilities)
+      ? raw.allowedAbilities.filter((key): key is AbilityScoreKey =>
+          (ABILITY_SCORE_KEYS as readonly string[]).includes(key),
+        )
+      : undefined
+    return {
+      id: raw.id,
+      label: raw.label,
+      type: "ability_scores",
+      mode,
+      bonuses: raw.bonuses ?? {},
+      points: mode === "asi_pool" ? (raw.points ?? 2) : undefined,
+      ...(mode === "asi_pool" && allowed?.length ? { allowedAbilities: allowed } : {}),
+    }
+  }
+
+  if (value.type === "spell_list_access") {
+    const raw = value as SpellListAccessCharacteristic
+    return { ...raw, classNames: coerceStringArray(raw.classNames), spellNames: coerceStringArray(raw.spellNames) }
+  }
+
+  return value
+}
+
+export function normalizeCharacteristics(
+  raw: unknown,
+  legacyUses: UsesConfig | null | undefined,
+): CharacteristicModifier[] {
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .map(migrateCharacteristicModifier)
+      .filter((mod): mod is CharacteristicModifier => mod !== null)
+  }
+
+  if (legacyUses) {
+    return [{ id: createModifierId(), type: "uses", uses: legacyUses }]
+  }
+
+  return []
+}
+
+export function extractUsesConfig(mods: CharacteristicModifier[]): UsesConfig | null {
+  const usesMod = mods.find((mod): mod is UsesCharacteristic => mod.type === "uses")
+  return usesMod?.uses ?? null
+}
+
+export function resolveUsesConfig(
+  characteristics: CharacteristicModifier[] | null | undefined,
+  legacyUses: UsesConfig | null | undefined,
+): UsesConfig | null {
+  // Characteristics win when they include a uses row. Other types (special_attack, etc.)
+  // must not drop feature.limitedUses — that is how variable spends like 5 × PB are authored.
+  const fromCharacteristics = extractUsesConfig(normalizeCharacteristics(characteristics, null))
+  if (fromCharacteristics) return fromCharacteristics
+  return legacyUses ?? null
+}
+
+export function getSkillEntries(mod: SkillsCharacteristic): SkillEntry[] {
+  if (mod.entries?.length) return mod.entries
+  if (mod.values?.length) {
+    return mod.values.map((skill) => ({ skill, expertise: false }))
+  }
+  return []
+}
+
+export function collectCustomSkillNames(
+  mods: CharacteristicModifier[] | null | undefined,
+): string[] {
+  if (!mods?.length) return []
+  const names: string[] = []
+  for (const mod of mods) {
+    if (mod.type !== "custom_skill") continue
+    const name = mod.name?.trim()
+    if (name) pushUnique(names, [name])
+  }
+  return names
+}
+
+export function skillNamesForCheckModifiers(extraSkillNames: string[] = []): string[] {
+  const srd = new Set<string>(SKILL_NAMES as readonly string[])
+  const out: string[] = [...SKILL_NAMES]
+  for (const raw of extraSkillNames) {
+    const name = raw.trim()
+    if (name && !srd.has(name)) out.push(name)
+  }
+  return out
+}
+
+export function getWeaponProficiencyValues(mod: WeaponProficienciesCharacteristic): string[] {
+  if (mod.mode === "martial_weapons") return [MARTIAL_WEAPONS_LABEL]
+  return mod.values ?? []
+}
+
+export type AggregatedRollModifier = RollModifierEntry
+
+export type AggregatedSpellsKnown = {
+  spellIds: string[]
+  prepared: boolean
+  castingAbility?: AbilityScoreKey
+  /** Per-spell resource cast costs keyed by spellId (Alternate Effects, etc.). */
+  castCostsBySpellId?: Record<string, { resourceKey: string; amount: number }>
+}
+
+export type AggregatedCharacteristics = {
+  abilityBonuses: Partial<Record<AbilityScoreKey, number>>
+  skills: string[]
+  skillExpertise: string[]
+  /**
+   * Skills from feats like Keen Mind / Observant: resolve after other proficiencies —
+   * expertise if already proficient, otherwise proficiency.
+   */
+  expertiseIfProficientSkills: string[]
+  customSkills: CustomSkillDefinition[]
+  languages: string[]
+  armorProficiencies: string[]
+  weaponProficiencies: string[]
+  toolProficiencies: string[]
+  toolExpertise: string[]
+  toolExpertiseAll: boolean
+  savingThrows: string[]
+  acFlatBonus: number
+  acFlatBonusWhileArmored: number
+  acAbilityBonuses: { ability: AbilityModifierKey; minimum?: number; requiresArmor?: boolean }[]
+  acFixed: number | null
+  acAbilityMods: AbilityModifierKey[]
+  acBase: number
+  acIncludeProficiency: boolean
+  /** Competing base AC formulas (multiclass UD, magic items) — player picks one. */
+  acFormulaOptions: AcFormulaOption[]
+  hpFlatBonus: number
+  hpPerLevel: number
+  initiativeFlatBonus: number
+  initiativeIncludeProficiency: boolean
+  initiativeAbility: AbilityModifierKey | null
+  initiativeAbilityBonus: number
+  /** Ability modifiers added on top of the normal initiative roll (e.g. Dread Ambusher's WIS). */
+  initiativeAdditionalAbilities: AbilityModifierKey[]
+  vision: { type: string; rangeFeet: number }[]
+  /** Additive speed bonuses, kept separate so species base speeds are not replaced. */
+  speedAdd: Record<string, number>
+  /** Explicit speed values before additive bonuses. */
+  speedSet: Record<string, number>
+  speed: Record<string, number>
+  /** Climb/swim/fly speeds that mirror walking speed (Peak Athlete). */
+  speedEqualToWalk: string[]
+  attackRollModifiers: AggregatedRollModifier[]
+  damageRollModifiers: AggregatedRollModifier[]
+  /**
+   * Active Magic Weapon / Elemental Weapon-style modifiers. Applied per bound
+   * equipment id in deriveWeaponAttack — not flattened onto every weapon.
+   */
+  weaponBoundSpellBuffModifiers: CharacteristicModifier[]
+  weaponReachModifiers: WeaponReachModifierCharacteristic[]
+  unarmedStrikeDie: UnarmedStrikeDie | null
+  unarmedStrikeDieByLevel: import("@/lib/compendium/bonus-by-level").BonusByLevelEntry[]
+  unarmedStrikeEmptyHandedDie: UnarmedStrikeDie | null
+  unarmedStrikeDamageType: string | null
+  unarmedStrikeAbility: AbilityScoreKey | null
+  weaponDamageDieOverrides: WeaponDamageDieOverrideCharacteristic[]
+  resistances: string[]
+  immunities: string[]
+  conditionImmunities: string[]
+  /** Feature / item names that grant each condition immunity (same keys as conditionImmunities). */
+  conditionImmunitySources: Record<string, string[]>
+  criticalHitMinimum: number | null
+  criticalHitMinimumByLevel: import("@/lib/compendium/bonus-by-level").BonusByLevelEntry[]
+  attunementSlots: number | null
+  auras: AuraCharacteristic[]
+  weaponAbilityOverrides: WeaponAbilityOverrideCharacteristic[]
+  savingThrowAlternateAbilities: SavingThrowAlternateAbilityCharacteristic[]
+  forcedSaveAbilityRemaps: ForcedSaveAbilityRemapCharacteristic[]
+  bonusDamageRiders: BonusDamageRidersCharacteristic[]
+  savingThrowTriggers: SavingThrowTriggerCharacteristic[]
+  onHitTriggers: OnHitTriggerCharacteristic[]
+  failedRollTriggers: FailedRollTriggerCharacteristic[]
+  onCastSpellTriggers: OnCastSpellTriggerCharacteristic[]
+  spellHealingModifiers: SpellHealingModifierCharacteristic[]
+  resourceAbilityMenus: ResourceAbilityMenuCharacteristic[]
+  extraTurns: ExtraTurnCharacteristic[]
+  damageReduction: {
+    amount: number
+    amountMode?: "fixed" | "proficiency"
+    damageTypes: string[]
+    requiresArmorCategory?: "Light armor" | "Medium armor" | "Heavy armor" | null
+  }[]
+  spellsByLevel: { level: number; count: number }[]
+  spellsKnown: AggregatedSpellsKnown[]
+  spellListAccess: string[]
+  spellListAccessNames: string[]
+  spellcastingAbility: AbilityScoreKey | null
+  telepathy: { rangeFeet: number; label?: string } | null
+  craftableItems: CraftableItemEntry[]
+  heldItemsCapBonus: number
+  heldItemsCapAbility: AbilityScoreKey | null
+  extraWieldSlots: number
+  /** null = extra slots may hold any weapon or shield. */
+  extraWieldAllowedProperties: string[] | null
+  specialAttacks: SpecialAttackCharacteristic[]
+  restReplacement: { restHours: number; replacesLongRest: boolean; description: string } | null
+  magicalSleepImmunity: boolean
+  noSleepRequired: boolean
+  creatureSize: CreatureSizeCharacteristic | null
+  movementEffects: {
+    movementDash: boolean
+    movementDisengage: boolean
+    movementHide: boolean
+    movementMoveThroughLargerSpaces: boolean
+    movementHideBehindLargerCreatures: boolean
+    spiderClimb: boolean
+    spiderClimbMinLevel: number | null
+    moveWithoutOpportunityAttacks: boolean
+    ignoreDifficultTerrain: boolean
+    overlayNotes: string[]
+  }
+  catalogOptions: CatalogOptionCharacteristic[]
+  equipmentMagicItems: EquipmentAndMagicItemsCharacteristic[]
+  powerRiders: PowerRiderCharacteristic[]
+  abilityScoreOverrides: AbilityScoreOverrideCharacteristic[]
+  healingReceivedModifiers: HealingReceivedModifierCharacteristic[]
+  grantedCustomAbilityNames: string[]
+  /** Items unlocked features put in the bag, by name, deduped across features. */
+  grantedEquipment: GrantedEquipmentEntry[]
+  customAbilityModifications: ModifyCustomAbilityCharacteristic[]
+  featureChoiceCountBonuses: FeatureChoiceCountBonusCharacteristic[]
+  featureChoiceOptionGrants: FeatureChoiceOptionGrantCharacteristic[]
+}
+
+/** Feature + modifier that handed the item out. Dedupe still keys on item name. */
+export type GrantedEquipmentSource = {
+  featureId: string
+  modifierId: string
+}
+
+export type GrantedEquipmentEntry = {
+  name: string
+  quantity: number
+  grantedBy?: GrantedEquipmentSource
+}
+
+const UNARMED_DIE_RANK: Record<UnarmedStrikeDie, number> = {
+  "1": 0,
+  "1d4": 1,
+  "1d6": 2,
+  "1d8": 3,
+  "1d10": 4,
+  "1d12": 5,
+}
+
+const emptyAggregated = (): AggregatedCharacteristics => ({
+  abilityBonuses: {},
+  skills: [],
+  skillExpertise: [],
+  expertiseIfProficientSkills: [],
+  customSkills: [],
+  languages: [],
+  armorProficiencies: [],
+  weaponProficiencies: [],
+  toolProficiencies: [],
+  toolExpertise: [],
+  toolExpertiseAll: false,
+  savingThrows: [],
+  acFlatBonus: 0,
+  acFlatBonusWhileArmored: 0,
+  acAbilityBonuses: [],
+  acFixed: null,
+  acAbilityMods: [],
+  acBase: 10,
+  acIncludeProficiency: false,
+  acFormulaOptions: [],
+  hpFlatBonus: 0,
+  hpPerLevel: 0,
+  initiativeFlatBonus: 0,
+  initiativeIncludeProficiency: false,
+  initiativeAbility: null,
+  initiativeAbilityBonus: 0,
+  initiativeAdditionalAbilities: [],
+  vision: [],
+  speedAdd: {},
+  speedSet: {},
+  speed: {},
+  speedEqualToWalk: [],
+  attackRollModifiers: [],
+  damageRollModifiers: [],
+  weaponBoundSpellBuffModifiers: [],
+  weaponReachModifiers: [],
+  unarmedStrikeDie: null,
+  unarmedStrikeEmptyHandedDie: null,
+  unarmedStrikeDieByLevel: [],
+  unarmedStrikeDamageType: null,
+  unarmedStrikeAbility: null,
+  weaponDamageDieOverrides: [],
+  resistances: [],
+  immunities: [],
+  conditionImmunities: [],
+  conditionImmunitySources: {},
+  criticalHitMinimum: null,
+  criticalHitMinimumByLevel: [],
+  attunementSlots: null,
+  auras: [],
+  weaponAbilityOverrides: [],
+  savingThrowAlternateAbilities: [],
+  forcedSaveAbilityRemaps: [],
+  bonusDamageRiders: [],
+  savingThrowTriggers: [],
+  onHitTriggers: [],
+  failedRollTriggers: [],
+  onCastSpellTriggers: [],
+  spellHealingModifiers: [],
+  resourceAbilityMenus: [],
+  extraTurns: [],
+  damageReduction: [],
+  spellsByLevel: [],
+  spellsKnown: [],
+  spellListAccess: [],
+  spellListAccessNames: [],
+  spellcastingAbility: null,
+  telepathy: null,
+  craftableItems: [],
+  heldItemsCapBonus: 0,
+  heldItemsCapAbility: null,
+  extraWieldSlots: 0,
+  extraWieldAllowedProperties: null,
+  specialAttacks: [],
+  restReplacement: null,
+  magicalSleepImmunity: false,
+  noSleepRequired: false,
+  creatureSize: null,
+  movementEffects: {
+    movementDash: false,
+    movementDisengage: false,
+    movementHide: false,
+    movementMoveThroughLargerSpaces: false,
+    movementHideBehindLargerCreatures: false,
+    spiderClimb: false,
+    spiderClimbMinLevel: null,
+    moveWithoutOpportunityAttacks: false,
+    ignoreDifficultTerrain: false,
+    overlayNotes: [],
+  },
+  catalogOptions: [],
+  equipmentMagicItems: [],
+  powerRiders: [],
+  abilityScoreOverrides: [],
+  healingReceivedModifiers: [],
+  grantedCustomAbilityNames: [],
+  grantedEquipment: [],
+  customAbilityModifications: [],
+  featureChoiceCountBonuses: [],
+  featureChoiceOptionGrants: [],
+})
+
+function modifierSourceName(mod: CharacteristicModifier): string | undefined {
+  const tagged = (mod as { _contributionSource?: { source?: string } })._contributionSource
+  const name = tagged?.source?.trim() || mod.label?.trim()
+  return name || undefined
+}
+
+function recordConditionImmunity(
+  result: AggregatedCharacteristics,
+  conditions: string[] | null | undefined,
+  sourceName?: string,
+) {
+  pushUnique(result.conditionImmunities, conditions)
+  if (!sourceName) return
+  for (const raw of conditions ?? []) {
+    const condition = raw.trim()
+    if (!condition) continue
+    const existing = result.conditionImmunitySources[condition] ?? []
+    if (existing.some((entry) => entry.toLowerCase() === sourceName.toLowerCase())) continue
+    result.conditionImmunitySources[condition] = [...existing, sourceName]
+  }
+}
+
+function pushUnique(list: string[], values: string[] | null | undefined) {
+  for (const value of values ?? []) {
+    if (value && !list.includes(value)) list.push(value)
+  }
+}
+
+function readGrantedBy(mod: GrantEquipmentCharacteristic): GrantedEquipmentSource | undefined {
+  const tagged = (mod as GrantEquipmentCharacteristic & { _grantedBy?: GrantedEquipmentSource })
+    ._grantedBy
+  const featureId = tagged?.featureId?.trim()
+  const modifierId = tagged?.modifierId?.trim() || mod.id?.trim()
+  if (!featureId || !modifierId) return undefined
+  return { featureId, modifierId }
+}
+
+/** Two features naming the same item grant it once, at the larger requested count. */
+function pushGrantedEquipment(
+  list: GrantedEquipmentEntry[],
+  mod: GrantEquipmentCharacteristic,
+) {
+  const quantity = Math.max(1, Math.floor(mod.quantityPerItem ?? 1))
+  const grantedBy = readGrantedBy(mod)
+  for (const raw of mod.equipmentNames ?? []) {
+    const name = raw.trim()
+    if (!name) continue
+    const existing = list.find((entry) => entry.name.toLowerCase() === name.toLowerCase())
+    if (existing) {
+      existing.quantity = Math.max(existing.quantity, quantity)
+      if (!existing.grantedBy && grantedBy) existing.grantedBy = grantedBy
+      continue
+    }
+    list.push(grantedBy ? { name, quantity, grantedBy } : { name, quantity })
+  }
+}
+
+export function pickHigherUnarmedDie(
+  current: UnarmedStrikeDie | null,
+  next: UnarmedStrikeDie,
+): UnarmedStrikeDie {
+  if (!current) return next
+  return UNARMED_DIE_RANK[next] > UNARMED_DIE_RANK[current] ? next : current
+}
+
+function resolveResourceScaledFlatBonus(
+  mod: {
+    flatBonus?: number
+    flatBonusFromClassResourceKey?: string | null
+    flatBonusClassResourceScale?: "full" | "half_ceil" | null
+  },
+  counts: Record<string, number> | undefined,
+): number {
+  const key = mod.flatBonusFromClassResourceKey?.trim()
+  if (key && counts) {
+    const raw = counts[key] ?? 0
+    if (mod.flatBonusClassResourceScale === "half_ceil") return Math.ceil(raw / 2)
+    return raw
+  }
+  return mod.flatBonus ?? 0
+}
+
+function resolveRollEntryBonus(
+  entry: RollModifierEntry,
+  counts: Record<string, number> | undefined,
+): RollModifierEntry {
+  const key = entry.bonusFromClassResourceKey?.trim()
+  if (!key || !counts) return entry
+  const raw = counts[key] ?? 0
+  const bonus =
+    entry.bonusClassResourceScale === "half_ceil" ? Math.ceil(raw / 2) : raw
+  return { ...entry, bonus }
+}
+
+function isModifierActive(
+  mod: CharacteristicModifier,
+  ctx: LimitationEvaluationContext = {},
+): boolean {
+  return modifierLimitationsMet(mod as LimitationSource, {
+    activeConditions: ctx.activeConditions,
+    activeSheetToggles: ctx.activeSheetToggles,
+    equippedArmor: ctx.equippedArmor,
+    equippedShield: ctx.equippedShield,
+  })
+}
+
+function evaluateAcFormulaScore(
+  option: AcFormulaOption,
+  abilityMods: Record<AbilityScoreKey, number>,
+  proficiencyBonus: number,
+): number {
+  if (option.kind === "set_fixed") {
+    let ac = option.fixedAc ?? 0
+    if (option.includeProficiency) ac += proficiencyBonus
+    return ac
+  }
+  let ac = option.base ?? 10
+  for (const key of option.abilities ?? []) {
+    ac += abilityMods[abilityModifierKeyToScoreKey(key)]
+  }
+  if (option.includeProficiency) ac += proficiencyBonus
+  return ac
+}
+
+export function resolveAggregatedAcFormula(
+  aggregated: AggregatedCharacteristics,
+  params: {
+    selectedFormulaId?: string | null
+    abilityMods: Record<AbilityScoreKey, number>
+    proficiencyBonus: number
+  },
+): void {
+  const { selectedFormulaId, abilityMods, proficiencyBonus } = params
+  if (!aggregated.acFormulaOptions.length) return
+
+  const byId = new Map(aggregated.acFormulaOptions.map((option) => [option.id, option]))
+  let chosen =
+    (selectedFormulaId ? byId.get(selectedFormulaId) : null) ??
+  null
+
+  if (!chosen) {
+    chosen = aggregated.acFormulaOptions.reduce((best, option) => {
+      if (!best) return option
+      const bestScore = evaluateAcFormulaScore(best, abilityMods, proficiencyBonus)
+      const optionScore = evaluateAcFormulaScore(option, abilityMods, proficiencyBonus)
+      return optionScore > bestScore ? option : best
+    }, null as AcFormulaOption | null)
+  }
+
+  if (!chosen) return
+
+  if (chosen.kind === "set_fixed") {
+    aggregated.acFixed = chosen.fixedAc ?? null
+    aggregated.acAbilityMods = []
+    aggregated.acBase = 10
+  } else {
+    aggregated.acFixed = null
+    aggregated.acBase = chosen.base ?? 10
+    aggregated.acAbilityMods = (chosen.abilities ?? []).slice(0, 2)
+  }
+  aggregated.acIncludeProficiency = chosen.includeProficiency ?? false
+}
+
+export function aggregateCharacteristics(
+  mods: CharacteristicModifier[],
+  options?: AggregateCharacteristicsOptions,
+): AggregatedCharacteristics {
+  const result = emptyAggregated()
+  const limitationCtx: LimitationEvaluationContext = {
+    activeConditions: options?.activeConditions,
+    activeSheetToggles: options?.activeSheetToggles,
+    equippedArmor: options?.equippedArmor,
+    equippedShield: options?.equippedShield,
+    currentHp: options?.currentHp,
+  }
+  const characterLevel = options?.characterLevel ?? 1
+  const classResourceCounts = options?.classResourceCounts
+
+  for (const mod of mods) {
+    if (!isModifierActive(mod, limitationCtx)) continue
+    if (isUngatedSituationalSpeedGrant(mod)) continue
+    switch (mod.type) {
+      case "ability_scores":
+        if (mod.mode === "asi_pool") break
+        for (const [key, bonus] of Object.entries(mod.bonuses)) {
+          const ability = key as AbilityScoreKey
+          result.abilityBonuses[ability] = (result.abilityBonuses[ability] ?? 0) + (bonus ?? 0)
+        }
+        break
+      case "skills":
+        if (mod.grantsProficiency === false) break
+        // Unresolved player pick: entries are the allowed pool, not granted skills.
+        if ((mod.choiceCount ?? 0) > 0) break
+        if (mod.expertiseIfProficient) {
+          for (const entry of getSkillEntries(mod)) {
+            pushUnique(result.expertiseIfProficientSkills, [entry.skill])
+          }
+          break
+        }
+        for (const entry of getSkillEntries(mod)) {
+          pushUnique(result.skills, [entry.skill])
+          if (entry.expertise || mod.grantExpertise) {
+            pushUnique(result.skillExpertise, [entry.skill])
+          }
+        }
+        break
+      case "custom_skill": {
+        const name = mod.name?.trim()
+        if (!name) break
+        result.customSkills.push({
+          name,
+          ability: mod.ability ?? "intelligence",
+          expertise: mod.expertise ?? false,
+        })
+        pushUnique(result.skills, [name])
+        if (mod.expertise) pushUnique(result.skillExpertise, [name])
+        break
+      }
+      case "languages":
+      case "armor_proficiencies":
+        pushUnique(
+          mod.type === "languages" ? result.languages : result.armorProficiencies,
+          mod.values,
+        )
+        break
+      case "tool_proficiencies":
+        pushUnique(result.toolProficiencies, mod.values)
+        if (mod.grantExpertise) {
+          if (!mod.values.length) {
+            result.toolExpertiseAll = true
+          } else {
+            pushUnique(result.toolExpertise, mod.values)
+          }
+        }
+        break
+      case "weapon_proficiencies":
+        pushUnique(result.weaponProficiencies, getWeaponProficiencyValues(mod))
+        break
+      case "saving_throws":
+        pushUnique(result.savingThrows, mod.values)
+        break
+      case "ac":
+        if (mod.mode === "flat_bonus") {
+          if (mod.flatBonusAbility) result.acAbilityBonuses.push({ ability: mod.flatBonusAbility, minimum: mod.flatBonusMinimum, requiresArmor: mod.requiresArmor })
+          const flat = resolveResourceScaledFlatBonus(mod, classResourceCounts)
+          if (mod.requiresArmor) {
+            result.acFlatBonusWhileArmored += flat
+          } else {
+            result.acFlatBonus += flat
+          }
+        } else if (mod.mode === "set_fixed") {
+          result.acFormulaOptions.push({
+            id: mod.id,
+            label: mod.label ?? "Fixed AC",
+            kind: "set_fixed",
+            fixedAc: mod.fixedAc ?? 0,
+            includeProficiency: mod.includeProficiency ?? false,
+          })
+        } else if (mod.mode === "ability_modifiers") {
+          result.acFormulaOptions.push({
+            id: mod.id,
+            label: mod.label ?? "Unarmored Defense",
+            kind: "ability_modifiers",
+            base: mod.base ?? 10,
+            abilities: (mod.abilities ?? []).slice(0, 2),
+            includeProficiency: mod.includeProficiency ?? false,
+          })
+        } else if (mod.mode === "add_proficiency") {
+          result.acIncludeProficiency = true
+        }
+        break
+      case "hit_points":
+        if (mod.mode === "flat") {
+          result.hpFlatBonus += mod.value
+        } else {
+          result.hpPerLevel += mod.value
+        }
+        break
+      case "initiative":
+        if (mod.mode === "flat_bonus") {
+          result.initiativeFlatBonus += mod.flatBonus ?? 0
+        } else if (mod.mode === "add_proficiency") {
+          result.initiativeIncludeProficiency = true
+        } else if (mod.mode === "ability_modifier") {
+          result.initiativeAbility = mod.ability ?? "DEX"
+          result.initiativeAbilityBonus = mod.bonus ?? 0
+        } else if (mod.mode === "add_ability_modifier" && mod.ability) {
+          result.initiativeAdditionalAbilities.push(mod.ability)
+        }
+        break
+      case "vision": {
+        const rangeFeet = mod.rangeFeetByLevel?.length
+          ? resolveFixedValueAtLevel(
+              normalizeBonusByLevel(mod.rangeFeetByLevel),
+              characterLevel,
+              mod.rangeFeet,
+            ) ?? mod.rangeFeet
+          : mod.rangeFeet
+        result.vision.push({
+          type: mod.visionType === "custom" ? mod.customType || "Custom" : mod.visionType,
+          rangeFeet,
+        })
+        break
+      }
+      case "speed": {
+        const key =
+          mod.speedType === "custom" ? mod.customType?.toLowerCase() || "custom" : mod.speedType
+        if (mod.mode === "equal_to_walk") {
+          if (!result.speedEqualToWalk.includes(key)) {
+            result.speedEqualToWalk.push(key)
+          }
+        } else {
+          const value =
+            mod.valueByLevel?.length
+              ? resolveFixedValueAtLevel(mod.valueByLevel, characterLevel, mod.value) ?? mod.value
+              : mod.value
+          if (mod.mode === "set") {
+            result.speedSet[key] = value
+          } else {
+            result.speedAdd[key] = (result.speedAdd[key] ?? 0) + value
+          }
+          result.speed[key] = (result.speedSet[key] ?? 0) + (result.speedAdd[key] ?? 0)
+        }
+        break
+      }
+      case "weapon_reach_modifier":
+        result.weaponReachModifiers.push(mod)
+        break
+      case "attack_roll_modifiers":
+        // Weapon-bound spell buffs (Magic Weapon, …) apply per equipment id in
+        // deriveWeaponAttack — do not flatten onto every weapon.
+        if (isWeaponBoundSpellBuffModifier(mod)) {
+          result.weaponBoundSpellBuffModifiers.push(mod)
+          break
+        }
+        result.attackRollModifiers.push(
+          ...mod.entries.map((entry) => resolveRollEntryBonus(entry, classResourceCounts)),
+        )
+        if (mod.criticalHitMinimum != null) {
+          result.criticalHitMinimum =
+            result.criticalHitMinimum == null
+              ? mod.criticalHitMinimum
+              : Math.min(result.criticalHitMinimum, mod.criticalHitMinimum)
+        }
+        if (mod.criticalHitMinimumByLevel?.length) {
+          result.criticalHitMinimumByLevel = normalizeBonusByLevel([
+            ...result.criticalHitMinimumByLevel,
+            ...mod.criticalHitMinimumByLevel,
+          ]).sort((a, b) => a.level - b.level)
+        }
+        break
+      case "damage_roll_modifiers":
+        if (isWeaponBoundSpellBuffModifier(mod)) {
+          result.weaponBoundSpellBuffModifiers.push(mod)
+          break
+        }
+        result.damageRollModifiers.push(
+          ...mod.entries.map((entry) => resolveRollEntryBonus(entry, classResourceCounts)),
+        )
+        break
+      case "unarmed_strike_damage":
+        if (mod.dieByLevel?.length) {
+          result.unarmedStrikeDieByLevel = normalizeBonusByLevel([
+            ...result.unarmedStrikeDieByLevel,
+            ...mod.dieByLevel,
+          ]).sort((a, b) => a.level - b.level)
+        }
+        if (mod.die) {
+          result.unarmedStrikeDie = pickHigherUnarmedDie(result.unarmedStrikeDie, mod.die)
+        }
+        if (mod.emptyHandedDie) {
+          result.unarmedStrikeEmptyHandedDie = pickHigherUnarmedDie(
+            result.unarmedStrikeEmptyHandedDie,
+            mod.emptyHandedDie,
+          )
+        }
+        if (mod.damageType) {
+          result.unarmedStrikeDamageType = mod.damageType
+        }
+        if (mod.ability) {
+          result.unarmedStrikeAbility = mod.ability
+        }
+        break
+      case "weapon_damage_die_override":
+        result.weaponDamageDieOverrides.push(mod)
+        break
+      case "special_attack":
+        result.specialAttacks.push(mod)
+        break
+      case "rest_replacement":
+        result.restReplacement = {
+          restHours: mod.restHours,
+          replacesLongRest: mod.replacesLongRest ?? true,
+          description: mod.description ?? "",
+        }
+        break
+      case "magical_sleep_immunity":
+        result.magicalSleepImmunity = true
+        if (mod.noSleepRequired) result.noSleepRequired = true
+        break
+      case "creature_size":
+        result.creatureSize = mod
+        break
+      case "movement_effects":
+        if (mod.movementDash) result.movementEffects.movementDash = true
+        if (mod.movementDisengage) result.movementEffects.movementDisengage = true
+        if (mod.movementHide) result.movementEffects.movementHide = true
+        if (mod.movementMoveThroughLargerSpaces) {
+          result.movementEffects.movementMoveThroughLargerSpaces = true
+        }
+        if (mod.movementHideBehindLargerCreatures) {
+          result.movementEffects.movementHideBehindLargerCreatures = true
+        }
+        if (mod.spiderClimb) {
+          result.movementEffects.spiderClimb = true
+          if (mod.spiderClimbMinLevel != null) {
+            result.movementEffects.spiderClimbMinLevel = mod.spiderClimbMinLevel
+          }
+        }
+        if (mod.moveWithoutOpportunityAttacks) {
+          result.movementEffects.moveWithoutOpportunityAttacks = true
+        }
+        if (mod.ignoreDifficultTerrain) {
+          result.movementEffects.ignoreDifficultTerrain = true
+        }
+        const overlayNote = mod.label?.trim()
+        if (overlayNote && !result.movementEffects.overlayNotes.includes(overlayNote)) {
+          result.movementEffects.overlayNotes.push(overlayNote)
+        }
+        break
+      case "damage_resistance":
+        pushUnique(result.resistances, mod.damageTypes)
+        if (mod.fromSpells) pushUnique(result.resistances, ["Spell damage"])
+        break
+      case "damage_immunity":
+        pushUnique(result.immunities, mod.damageTypes)
+        if (mod.fromSpells) pushUnique(result.immunities, ["Spell damage"])
+        break
+      case "condition_immunity":
+        recordConditionImmunity(result, mod.conditions, modifierSourceName(mod))
+        break
+      case "attunement_slots":
+        if (mod.totalSlots != null) {
+          result.attunementSlots = mod.totalSlots
+        } else if (mod.bonusSlots) {
+          result.attunementSlots = (result.attunementSlots ?? 3) + mod.bonusSlots
+        }
+        break
+      case "aura":
+        result.auras.push(mod)
+        if (mod.conditionImmunities?.length) {
+          recordConditionImmunity(result, mod.conditionImmunities, modifierSourceName(mod))
+        }
+        break
+      case "weapon_ability_override":
+        result.weaponAbilityOverrides.push(mod)
+        break
+      case "weapon_sheet_badge":
+        break
+      case "saving_throw_alternate_ability":
+        result.savingThrowAlternateAbilities.push(mod)
+        break
+      case "forced_save_ability_remap":
+        result.forcedSaveAbilityRemaps.push(mod)
+        break
+      case "telepathy": {
+        const rangeFeet =
+          mod.rangeFeetPerLevel != null && characterLevel > 0
+            ? mod.rangeFeetPerLevel * characterLevel
+            : mod.rangeMiles != null
+              ? Math.round(mod.rangeMiles * 5280)
+              : mod.rangeFeet
+        const previous = result.telepathy?.rangeFeet ?? 0
+        if (rangeFeet > previous) {
+          result.telepathy = { rangeFeet, label: mod.label }
+        }
+        break
+      }
+      case "bonus_damage_riders": {
+        const resolved = resolveBonusDamageRidersAtLevel(mod, characterLevel)
+        const appliesKey = (resolved.appliesTo ?? "").trim().toLowerCase()
+        const existingIdx = result.bonusDamageRiders.findIndex((entry) =>
+          appliesKey
+            ? (entry.appliesTo ?? "").trim().toLowerCase() === appliesKey
+            : entry.id === resolved.id,
+        )
+        if (existingIdx >= 0) {
+          result.bonusDamageRiders[existingIdx] = mergeBonusDamageRiders(
+            result.bonusDamageRiders[existingIdx],
+            resolved,
+          )
+        } else {
+          result.bonusDamageRiders.push(resolved)
+        }
+        break
+      }
+      case "saving_throw_trigger":
+        result.savingThrowTriggers.push(mod)
+        break
+      case "on_hit_trigger":
+        result.onHitTriggers.push(mod)
+        break
+      case "failed_roll_trigger":
+        result.failedRollTriggers.push(mod)
+        break
+      case "on_cast_spell_trigger":
+        result.onCastSpellTriggers.push(mod)
+        break
+      case "spell_healing_modifier":
+        result.spellHealingModifiers.push(mod)
+        break
+      case "resource_ability_menu":
+        result.resourceAbilityMenus.push(mod)
+        break
+      case "extra_turn":
+        result.extraTurns.push(mod)
+        break
+      case "damage_reduction":
+        result.damageReduction.push({
+          amount: mod.amount,
+          amountMode: mod.amountMode ?? "fixed",
+          damageTypes: mod.damageTypes ?? [],
+          requiresArmorCategory: mod.requiresArmorCategory ?? null,
+        })
+        break
+      case "spells":
+        for (const grant of mod.grants) {
+          const existing = result.spellsByLevel.find((entry) => entry.level === grant.level)
+          if (existing) {
+            existing.count += grant.count
+          } else {
+            result.spellsByLevel.push({ level: grant.level, count: grant.count })
+          }
+          if (grant.spellIds?.length) {
+            result.spellsKnown.push({
+              spellIds: grant.spellIds,
+              prepared: true,
+            })
+          }
+        }
+        break
+      case "spells_known":
+        if (mod.spells.length) {
+          const castCostsBySpellId: Record<string, { resourceKey: string; amount: number }> = {}
+          for (const entry of mod.spells) {
+            if (!entry.spellId || !entry.castCost) continue
+            castCostsBySpellId[entry.spellId] = {
+              resourceKey: entry.castCost.resourceKey,
+              amount: entry.castCost.amount,
+            }
+          }
+          result.spellsKnown.push({
+            spellIds: mod.spells.map((entry) => entry.spellId).filter(Boolean),
+            prepared: mod.spells.some((entry) => entry.prepared !== false),
+            castingAbility: mod.castingAbility,
+            castCostsBySpellId: Object.keys(castCostsBySpellId).length
+              ? castCostsBySpellId
+              : undefined,
+          })
+        }
+        if (mod.castingAbility) {
+          result.spellcastingAbility = mod.castingAbility
+        }
+        break
+      case "craftable_items":
+        result.craftableItems.push(...mod.items)
+        break
+      case "held_items_cap":
+        if (mod.baseAbility) result.heldItemsCapAbility = mod.baseAbility
+        result.heldItemsCapBonus += mod.flatBonus ?? 0
+        break
+      case "extra_wield_slots": {
+        const slots = mod.extraSlots ?? 1
+        const firstSlot = result.extraWieldSlots === 0
+        result.extraWieldSlots += slots
+        const allowed = (mod.allowedProperties ?? []).map((entry) => entry.trim()).filter(Boolean)
+        if (!allowed.length) {
+          result.extraWieldAllowedProperties = null
+        } else if (firstSlot) {
+          result.extraWieldAllowedProperties = [...allowed]
+        } else if (result.extraWieldAllowedProperties) {
+          const seen = new Set(result.extraWieldAllowedProperties.map((entry) => entry.toLowerCase()))
+          for (const property of allowed) {
+            if (!seen.has(property.toLowerCase())) {
+              result.extraWieldAllowedProperties.push(property)
+              seen.add(property.toLowerCase())
+            }
+          }
+        }
+        break
+      }
+      case "spellcasting_ability":
+        result.spellcastingAbility = mod.ability
+        break
+      case "spell_list_access":
+        pushUnique(result.spellListAccess, mod.classNames)
+        pushUnique(result.spellListAccessNames, mod.spellNames ?? [])
+        break
+      case "uses":
+        break
+      case "catalog_option":
+        result.catalogOptions.push(mod)
+        break
+      case "equipment_and_magic_items":
+        result.equipmentMagicItems.push(mod)
+        break
+      case "player_note":
+        break
+      case "inventory_container":
+        break
+      case "power_rider":
+        result.powerRiders.push(mod)
+        break
+      case "replace_feature":
+        break
+      case "ability_score_override":
+        result.abilityScoreOverrides.push(mod)
+        break
+      case "healing_received_modifier":
+        result.healingReceivedModifiers.push(mod)
+        break
+      case "grant_custom_ability":
+        pushUnique(result.grantedCustomAbilityNames, mod.abilityNames)
+        break
+      case "grant_equipment":
+        pushGrantedEquipment(result.grantedEquipment, mod)
+        break
+      case "modify_custom_ability":
+        result.customAbilityModifications.push(mod)
+        break
+      case "feature_choice_count_bonus":
+        result.featureChoiceCountBonuses.push(mod)
+        break
+      case "feature_choice_option_grant":
+        result.featureChoiceOptionGrants.push(mod)
+        break
+      case "subclass_unlock":
+        break
+      case "hit_dice_restore":
+        break
+    }
+  }
+
+  return result
+}
+
+export function abilityModifierKeyToScoreKey(key: AbilityModifierKey): AbilityScoreKey {
+  const map: Record<AbilityModifierKey, AbilityScoreKey> = {
+    STR: "strength",
+    DEX: "dexterity",
+    CON: "constitution",
+    INT: "intelligence",
+    WIS: "wisdom",
+    CHA: "charisma",
+  }
+  return map[key]
+}
+
+export function applyAcCharacteristics(
+  baseAc: number,
+  aggregated: AggregatedCharacteristics,
+  abilityMods: Record<AbilityScoreKey, number>,
+  proficiencyBonus: number,
+  options?: { shieldBonus?: number; wearingArmor?: boolean },
+): number {
+  const shieldBonus = options?.shieldBonus ?? 0
+  const armoredFlat =
+    (options?.wearingArmor ? aggregated.acFlatBonusWhileArmored : 0) + acAbilityBonus(aggregated, abilityMods, options?.wearingArmor)
+
+  if (aggregated.acFixed != null && aggregated.acFixed > 0) {
+    let ac = aggregated.acFixed
+    if (aggregated.acIncludeProficiency) ac += proficiencyBonus
+    return ac + aggregated.acFlatBonus + armoredFlat + shieldBonus
+  }
+
+  if (aggregated.acAbilityMods.length > 0) {
+    let ac = aggregated.acBase
+    for (const key of aggregated.acAbilityMods) {
+      ac += abilityMods[abilityModifierKeyToScoreKey(key)]
+    }
+    if (aggregated.acIncludeProficiency) ac += proficiencyBonus
+    return ac + aggregated.acFlatBonus + armoredFlat + shieldBonus
+  }
+
+  let ac = baseAc + aggregated.acFlatBonus + armoredFlat
+  if (aggregated.acIncludeProficiency) ac += proficiencyBonus
+  return ac
+}
+
+export function acAbilityBonus(aggregated: AggregatedCharacteristics, abilityMods: Record<AbilityScoreKey, number>, wearingArmor = false): number {
+  return (aggregated.acAbilityBonuses ?? []).reduce((total, row) => total + (row.requiresArmor && !wearingArmor ? 0 : Math.max(row.minimum ?? -Infinity, abilityMods[abilityModifierKeyToScoreKey(row.ability)])), 0)
+}
+
+export function computeInitiative(
+  dexMod: number,
+  aggregated: AggregatedCharacteristics,
+  abilityMods: Record<AbilityScoreKey, number>,
+  proficiencyBonus: number,
+): number {
+  let init = dexMod
+  if (aggregated.initiativeAbility) {
+    init =
+      abilityMods[abilityModifierKeyToScoreKey(aggregated.initiativeAbility)] +
+      aggregated.initiativeAbilityBonus
+  }
+  for (const ability of aggregated.initiativeAdditionalAbilities) {
+    init += abilityMods[abilityModifierKeyToScoreKey(ability)]
+  }
+  init += aggregated.initiativeFlatBonus
+  if (aggregated.initiativeIncludeProficiency) init += proficiencyBonus
+  return init
+}
+
+export function applyHpCharacteristics(
+  baseHp: number,
+  aggregated: AggregatedCharacteristics,
+  totalLevel: number,
+): number {
+  return Math.max(
+    baseHp + aggregated.hpFlatBonus + aggregated.hpPerLevel * totalLevel,
+    1,
+  )
+}
+
+function resolveRollModifierTarget(entry: AggregatedRollModifier): string {
+  return entry.target === "custom" ? (entry.customTarget?.toLowerCase() ?? "") : entry.target
+}
+
+function weaponMatchesAttackTarget(
+  subcategory: string,
+  properties: string[],
+  target: string,
+): boolean {
+  if (!target || target === "all") return true
+  const sub = subcategory.toLowerCase()
+  const props = properties.join(" ").toLowerCase()
+
+  switch (target) {
+    case "melee":
+      return sub.includes("melee")
+    case "ranged":
+      return sub.includes("ranged")
+    case "simple_melee":
+      return sub.includes("simple") && sub.includes("melee")
+    case "simple_ranged":
+      return sub.includes("simple") && sub.includes("ranged")
+    case "martial_melee":
+      return sub.includes("martial") && sub.includes("melee")
+    case "martial_ranged":
+      return sub.includes("martial") && sub.includes("ranged")
+    case "one_handed_melee":
+      return sub.includes("melee") && !props.includes("two-handed") && !props.includes("two handed")
+    default:
+      return sub.includes(target) || props.includes(target)
+  }
+}
+
+function creatureTypeMatches(
+  entry: RollModifierEntry,
+  targetCreatureType?: string,
+): boolean {
+  if (!entry.onlyVsCreatureTypes?.length) return true
+  const needle = targetCreatureType?.trim().toLowerCase()
+  if (!needle) return false
+  return entry.onlyVsCreatureTypes.some((type) => type.trim().toLowerCase() === needle)
+}
+
+export type TargetConditionContext = {
+  targetCreatureType?: string
+  targetBelowHalfHp?: boolean
+  targetSize?: CreatureSizeValue | null
+}
+
+type ExtendedCreatureSize = CreatureSizeValue | "Tiny" | "Gargantuan"
+
+const SIZE_ORDER: ExtendedCreatureSize[] = ["Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan"]
+
+function sizeAtLeast(
+  actual: ExtendedCreatureSize | null | undefined,
+  minimum: ExtendedCreatureSize,
+): boolean {
+  if (!actual) return false
+  return SIZE_ORDER.indexOf(actual) >= SIZE_ORDER.indexOf(minimum)
+}
+
+export function targetConditionMatches(
+  entry: {
+    onlyVsCreatureTypes?: string[]
+    onlyIfTargetBelowHalfHp?: boolean
+    onlyIfTargetMinSize?: CreatureSizeValue | null
+  },
+  ctx?: TargetConditionContext,
+): boolean {
+  if (!creatureTypeMatches(entry as RollModifierEntry, ctx?.targetCreatureType)) return false
+  if (entry.onlyIfTargetBelowHalfHp && !ctx?.targetBelowHalfHp) return false
+  if (entry.onlyIfTargetMinSize && !sizeAtLeast(ctx?.targetSize ?? null, entry.onlyIfTargetMinSize)) {
+    return false
+  }
+  return true
+}
+
+export function onHitTriggerMatchesTarget(
+  trigger: OnHitTriggerCharacteristic,
+  ctx?: TargetConditionContext,
+): boolean {
+  if (trigger.includeCreatureTypes?.length) {
+    const needle = ctx?.targetCreatureType?.trim().toLowerCase()
+    if (!needle) return false
+    if (!trigger.includeCreatureTypes.some((type) => type.trim().toLowerCase() === needle)) {
+      return false
+    }
+  }
+  if (trigger.excludeCreatureTypes?.length && ctx?.targetCreatureType) {
+    const needle = ctx.targetCreatureType.trim().toLowerCase()
+    if (trigger.excludeCreatureTypes.some((type) => type.trim().toLowerCase() === needle)) {
+      return false
+    }
+  }
+  return targetConditionMatches(trigger, ctx)
+}
+
+export function sumAttackRollModifiers(
+  aggregated: AggregatedCharacteristics,
+  options?: TargetConditionContext & {
+    subcategory?: string
+    properties?: string[]
+    unarmed?: boolean
+    targetCreatureType?: string
+  },
+): number {
+  let bonus = 0
+  for (const entry of aggregated.attackRollModifiers) {
+    if (!targetConditionMatches(entry, options)) continue
+    const target = resolveRollModifierTarget(entry)
+    if (options?.unarmed && (target === "unarmed" || target.includes("unarmed"))) {
+      bonus += entry.bonus
+      continue
+    }
+    if (weaponMatchesAttackTarget(options?.subcategory ?? "", options?.properties ?? [], target)) {
+      bonus += entry.bonus
+    }
+  }
+  return bonus
+}
+
+export function sumDamageRollModifiers(
+  aggregated: AggregatedCharacteristics,
+  options?: TargetConditionContext & {
+    subcategory?: string
+    properties?: string[]
+    damageType?: string
+    unarmed?: boolean
+    targetCreatureType?: string
+  },
+): number {
+  let bonus = 0
+  const damageType = options?.damageType?.toLowerCase() ?? ""
+  for (const entry of aggregated.damageRollModifiers) {
+    if (!targetConditionMatches(entry, options)) continue
+    const target = resolveRollModifierTarget(entry)
+    if (options?.unarmed && (target === "unarmed" || target.includes("unarmed"))) {
+      bonus += entry.bonus
+      continue
+    }
+    if (target === "all") {
+      bonus += entry.bonus
+      continue
+    }
+    if (damageType && target === damageType) {
+      bonus += entry.bonus
+      continue
+    }
+    if (weaponMatchesAttackTarget(options?.subcategory ?? "", options?.properties ?? [], target)) {
+      bonus += entry.bonus
+    }
+  }
+  return bonus
+}
+
+export type AbilityModifierDamageRules = {
+  grantAbilityModifierWhenMissing: boolean
+  bonusDiceWhenModifierIncluded: string | null
+  bonusDiceUsesWeaponDamageType: boolean
+}
+
+function resolveAbilityModifierDamageTarget(entry: AggregatedRollModifier): string {
+  const target = resolveRollModifierTarget(entry)
+  // Import often stored Overkill as target "all"; the feature only affects Ranged weapons.
+  if (
+    target === "all" &&
+    entry.grantAbilityModifierWhenMissing &&
+    entry.bonusDiceWhenModifierIncluded
+  ) {
+    return "ranged"
+  }
+  return target
+}
+
+function damageEntryMatchesWeapon(
+  entry: AggregatedRollModifier,
+  options?: TargetConditionContext & {
+    subcategory?: string
+    properties?: string[]
+    unarmed?: boolean
+  },
+): boolean {
+  if (!targetConditionMatches(entry, options)) return false
+  const target = resolveAbilityModifierDamageTarget(entry)
+  if (options?.unarmed) {
+    return target === "unarmed" || target.includes("unarmed")
+  }
+  if (target === "all") return true
+  if (!target) return false
+  return weaponMatchesAttackTarget(options?.subcategory ?? "", options?.properties ?? [], target)
+}
+
+/** Overkill-style: add ability mod when a weapon omits it, else extra dice. */
+export function collectAbilityModifierDamageRules(
+  aggregated: AggregatedCharacteristics,
+  options?: TargetConditionContext & {
+    subcategory?: string
+    properties?: string[]
+    unarmed?: boolean
+  },
+): AbilityModifierDamageRules {
+  let grantAbilityModifierWhenMissing = false
+  let bonusDiceWhenModifierIncluded: string | null = null
+  let bonusDiceUsesWeaponDamageType = false
+  for (const entry of aggregated.damageRollModifiers) {
+    if (!damageEntryMatchesWeapon(entry, options)) continue
+    if (entry.grantAbilityModifierWhenMissing) grantAbilityModifierWhenMissing = true
+    if (entry.bonusDiceWhenModifierIncluded) {
+      bonusDiceWhenModifierIncluded = entry.bonusDiceWhenModifierIncluded
+      bonusDiceUsesWeaponDamageType = Boolean(entry.bonusDiceUsesWeaponDamageType)
+    }
+  }
+  return {
+    grantAbilityModifierWhenMissing,
+    bonusDiceWhenModifierIncluded,
+    bonusDiceUsesWeaponDamageType,
+  }
+}
+
+export function formatUnarmedStrikeDamage(
+  die: UnarmedStrikeDie | null,
+  abilityMod: number,
+  dieByLevel?: BonusByLevelEntry[],
+  characterLevel = 20,
+): string {
+  const resolved = dieByLevel?.length
+    ? resolveUnarmedStrikeDieAtLevel(die, dieByLevel, characterLevel)
+    : die
+  const dice = resolved && resolved !== "1" ? resolved : "1"
+  const modSuffix =
+    abilityMod === 0 ? "" : abilityMod > 0 ? ` + ${abilityMod}` : ` - ${Math.abs(abilityMod)}`
+  return `${dice}${modSuffix} Bludgeoning`.trim()
+}
+
+export function bonusByLevelEntryToUnarmedDie(entry: BonusByLevelEntry): UnarmedStrikeDie | null {
+  if (entry.mode === "dice" && entry.dieCount === 1 && entry.dieType) {
+    const candidate = `1${entry.dieType}` as UnarmedStrikeDie
+    if (UNARMED_STRIKE_DICE.includes(candidate)) return candidate
+  }
+  if (entry.bonus?.match(/^1d\d+$/i)) {
+    const candidate = entry.bonus.toLowerCase() as UnarmedStrikeDie
+    if (UNARMED_STRIKE_DICE.includes(candidate)) return candidate
+  }
+  return null
+}
+
+export function resolveUnarmedStrikeDieAtLevel(
+  fallbackDie: UnarmedStrikeDie | null | undefined,
+  dieByLevel: BonusByLevelEntry[] | null | undefined,
+  characterLevel: number,
+): UnarmedStrikeDie | null {
+  const rows = normalizeBonusByLevel(dieByLevel)
+  if (rows.length) {
+    const applicable = rows.filter((row) => row.level <= characterLevel).sort((a, b) => b.level - a.level)
+    for (const row of applicable) {
+      const die = bonusByLevelEntryToUnarmedDie(row)
+      if (die) return die
+    }
+  }
+  return fallbackDie ?? null
+}
+
+function isUnarmedStrikeName(weapon: { id?: string | null; name?: string | null }): boolean {
+  if (weapon.id === "unarmed-strike") return true
+  return /^unarmed strike$/i.test(weapon.name?.trim() ?? "")
+}
+
+function weaponMatchesDieOverrideScope(
+  weapon: { id?: string | null; name?: string | null; subcategory?: string | null; properties?: string[] | null },
+  override: WeaponDamageDieOverrideCharacteristic,
+): boolean {
+  if (hasExcludedWeaponProperty(weapon, override.excludedWeaponProperties)) return false
+  const scope = override.scope ?? "weapons"
+  const unarmed = isUnarmedStrikeName(weapon)
+  if (scope === "all") return true
+  if (scope === "unarmed") return unarmed
+  if (scope === "weapons") return !unarmed
+  const subcategory = (weapon.subcategory ?? "").toLowerCase()
+  if (scope === "melee") return unarmed || subcategory.includes("melee") || !subcategory.includes("ranged")
+  if (scope === "ranged") return !unarmed && subcategory.includes("ranged")
+  if (scope === "specific") {
+    const names = (override.weaponNames ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean)
+    if (!names.length) return false
+    const weaponName = (weapon.name ?? "").trim().toLowerCase()
+    return names.some((name) => weaponName === name || weaponName.includes(name))
+  }
+  return true
+}
+
+/** Resolve die sides for a weapon from active weapon_damage_die_override characteristics. */
+export function resolveWeaponDamageDieSidesOverride(
+  aggregated: AggregatedCharacteristics,
+  weapon: { name?: string | null; subcategory?: string | null; properties?: string[] | null; damage?: string | null },
+  characterLevel = 1,
+): number | null {
+  let sides: number | null = null
+  for (const override of aggregated.weaponDamageDieOverrides) {
+    if (!weaponMatchesDieOverrideScope(weapon, override)) continue
+    const fromLevel = override.dieSidesByLevel?.length
+      ? resolveFixedValueAtLevel(override.dieSidesByLevel, characterLevel, override.dieSides ?? null)
+      : override.dieSides ?? null
+    if (fromLevel == null) continue
+    if (override.onlyIncrease) {
+      const printed = weapon.damage?.match(/^\s*(\d+)d(\d+)/i)
+      if (!printed || Number(printed[1]) !== 1 || Number(printed[2]) >= fromLevel) continue
+    }
+    sides = sides == null ? fromLevel : Math.min(sides, fromLevel)
+  }
+  return sides
+}

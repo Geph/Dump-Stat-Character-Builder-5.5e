@@ -1,0 +1,1893 @@
+import type { AbilityModifierKey, AbilityScoreKey } from "@/lib/compendium/characteristic-modifiers"
+import type { FeatPickCategory } from "@/lib/compendium/class-feature-metadata"
+import { GRANT_FEAT_CATALOG_ID, grantFeatCharacteristic } from "@/lib/compendium/grant-feat-catalog"
+import {
+  GRANT_CREATURE_CATALOG_ID,
+  grantCreatureCharacteristic,
+} from "@/lib/compendium/grant-creature-catalog"
+import { CHARACTERISTIC_MODIFIER_TYPE_OPTIONS } from "@/lib/compendium/characteristic-modifiers"
+import { isKnownEffectKind } from "@/lib/compendium/modifier-catalog-refs"
+import {
+  characteristicCatalogRefId,
+  effectCatalogRefId,
+} from "@/lib/compendium/modifier-catalog-refs"
+import {
+  charInstance,
+  fxInstance,
+  modId,
+  usesInstance,
+} from "@/lib/compendium/modifier-instance-builders"
+import { createModifierInstanceId } from "@/lib/compendium/linked-modifiers"
+import type { ImportMechanic } from "@/lib/import/content-schema"
+import type {
+  DetectFeatureContext,
+  DetectedModifier,
+  DetectionConfidence,
+} from "@/lib/import/detect-feature-modifiers"
+import { spellNamePlaceholder } from "@/lib/import/resolve-linked-modifier-spells"
+import { inferSpellListClassNames } from "@/lib/compendium/investigator-spell-list"
+import { createModifierLimitation } from "@/lib/compendium/modifier-limitations"
+import { looksLikeSituationalSpeedGrant } from "@/lib/compendium/situational-speed-grant"
+import { buildEvasionModifier } from "@/lib/compendium/shared-feature-modifier-builders"
+import type { FeatureActivation, UsesConfig } from "@/lib/types"
+
+const VALID_CHARACTERISTIC_KINDS = new Set<string>(
+  CHARACTERISTIC_MODIFIER_TYPE_OPTIONS.map((option) => option.value),
+)
+
+function instanceKey(ctx: DetectFeatureContext, kind: string): string {
+  const base = [ctx.contentKind, ctx.sourceName, ctx.featureName, kind, "ai"]
+    .filter(Boolean)
+    .join("_")
+    .replace(/[^a-z0-9]+/gi, "_")
+    .toLowerCase()
+  return `import_${base}`
+}
+
+function titleCaseWords(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ")
+}
+
+function abilityScoreToModifierKey(
+  ability: AbilityScoreKey | null | undefined,
+): AbilityModifierKey {
+  const map: Record<AbilityScoreKey, AbilityModifierKey> = {
+    strength: "STR",
+    dexterity: "DEX",
+    constitution: "CON",
+    intelligence: "INT",
+    wisdom: "WIS",
+    charisma: "CHA",
+  }
+  return ability ? map[ability] : "CHA"
+}
+
+const KNOWN_CHECK_CONDITION_TYPES = [
+  "Frightened",
+  "Charmed",
+  "Poisoned",
+  "Blinded",
+  "Deafened",
+  "Paralyzed",
+  "Petrified",
+  "Restrained",
+  "Stunned",
+  "Incapacitated",
+  "Prone",
+  "Exhaustion",
+  "spell",
+] as const
+
+/** Pull named conditions from a freeform conditionNote so Frightened/Charmed gates still wire. */
+function extractConditionTypesFromNote(note: string | null | undefined): string[] | null {
+  const text = note?.trim()
+  if (!text) return null
+  const found = KNOWN_CHECK_CONDITION_TYPES.filter((condition) =>
+    new RegExp(`\\b${condition}\\b`, "i").test(text),
+  )
+  return found.length ? [...found] : null
+}
+
+function usesRechargesFromImport(
+  recharge: ImportMechanic["usesRecharge"],
+): UsesConfig["recharges"] {
+  if (recharge === "until_item_consumed" || recharge === "on_resource_reactivation") {
+    return undefined
+  }
+  if (recharge === "short_rest") return [{ rest: "short_rest" }]
+  if (recharge === "both") {
+    // Short OR Long Rest recovers all expended uses (War Priest, 2024 PHB).
+    // "Regain 1 on a Short Rest" is a separate phrase-detection path — do not encode it here.
+    return [{ rest: "short_rest" }, { rest: "long_rest" }]
+  }
+  return [{ rest: "long_rest" }]
+}
+
+function aiConfidence(mechanic: ImportMechanic): DetectionConfidence {
+  return mechanic.confidence ?? "medium"
+}
+
+/**
+ * Shared by the top-level `damage_roll_modifiers` mechanic and `on_hit_trigger`'s nested effect —
+ * both describe flat +N or "extra NdM [damage type] damage" via the same characteristic shape.
+ * Returns null when neither damageBonus nor bonusDice is present.
+ */
+function buildDamageRollModifiersCharacteristic(
+  mechanic: ImportMechanic,
+  ctx: DetectFeatureContext,
+  idSuffix: string,
+  labelSuffix?: string,
+) {
+  const flatBonus = mechanic.damageBonus
+  const dice = mechanic.bonusDice?.trim()
+  const grantsMissingAbility = mechanic.grantAbilityModifierWhenMissing === true
+  const includedModifierDice = mechanic.bonusDiceWhenModifierIncluded?.trim()
+  if (flatBonus == null && !dice && !grantsMissingAbility && !includedModifierDice) return null
+  const damageType = mechanic.damageType ? titleCaseWords(mechanic.damageType) : undefined
+  const creatureTypes = mechanic.targetCreatureTypes?.map(titleCaseWords).filter(Boolean)
+  const target = mechanic.damageTarget ?? "all"
+
+  if (flatBonus != null || grantsMissingAbility || includedModifierDice) {
+    const effectiveFlatBonus = flatBonus ?? 0
+    const baseLabel =
+      grantsMissingAbility || includedModifierDice
+        ? "Conditional weapon damage modifier"
+        : `+${effectiveFlatBonus}${damageType ? ` ${damageType}` : ""} damage`
+    return {
+      id: modId(instanceKey(ctx, idSuffix)),
+      type: "damage_roll_modifiers" as const,
+      entries: [
+        {
+          bonus: effectiveFlatBonus,
+          target,
+          ...(damageType ? { customTarget: damageType } : {}),
+          ...(creatureTypes?.length ? { onlyVsCreatureTypes: creatureTypes } : {}),
+          ...(grantsMissingAbility ? { grantAbilityModifierWhenMissing: true } : {}),
+          ...(includedModifierDice
+            ? { bonusDiceWhenModifierIncluded: includedModifierDice }
+            : {}),
+          ...(mechanic.bonusDiceUsesWeaponDamageType
+            ? { bonusDiceUsesWeaponDamageType: true }
+            : {}),
+        },
+      ],
+      label: labelSuffix ? `${baseLabel} ${labelSuffix}` : baseLabel,
+      ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+    }
+  }
+
+  const entry = {
+    bonus: 0,
+    target,
+    customTarget: `${dice}${damageType ? ` ${damageType}` : ""}`,
+    ...(creatureTypes?.length ? { onlyVsCreatureTypes: creatureTypes } : {}),
+  }
+  const baseLabel = creatureTypes?.length
+    ? `Extra ${dice}${damageType ? ` ${damageType}` : ""} vs ${creatureTypes.join(", ")}`
+    : `Extra ${dice}${damageType ? ` ${damageType}` : ""} damage`
+  return {
+    id: modId(instanceKey(ctx, idSuffix)),
+    type: "damage_roll_modifiers" as const,
+    entries: [entry],
+    label: labelSuffix ? `${baseLabel} ${labelSuffix}` : baseLabel,
+    ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+  }
+}
+
+function isReactionRechargePhrase(phrase: string): boolean {
+  return (
+    /\bonce you take this reaction\b/i.test(phrase) ||
+    /\bcan'?t use this benefit again until you finish a long rest\b/i.test(phrase)
+  )
+}
+
+const HEAL_DIE_TYPES = new Set(["d4", "d6", "d8", "d10", "d12", "d20"])
+
+function parseHealDiceExpression(
+  dice: string,
+): { count: number; dieType: "d4" | "d6" | "d8" | "d10" | "d12" | "d20" } | null {
+  const match = dice.trim().match(/^(\d+)\s*d\s*(\d+)$/i)
+  if (!match) return null
+  const dieType = `d${match[2]}`
+  if (!HEAL_DIE_TYPES.has(dieType)) return null
+  return { count: parseInt(match[1], 10), dieType: dieType as "d4" | "d6" | "d8" | "d10" | "d12" | "d20" }
+}
+
+/**
+ * `temporary_hit_points` mechanics[] wiring for on-activation grants.
+ * Ally / chosen-creature targets set healTarget: "choose_ally" so the sheet can pick a
+ * party member or companion. turn_start / on_hit triggers and class_resource_die scaling
+ * remain unwired (no general sheet mechanism yet).
+ */
+function buildTemporaryHitPointsEffect(
+  mechanic: ImportMechanic,
+  ctx: DetectFeatureContext,
+  instanceId: string,
+  matchedPhrase: string,
+): DetectedModifier | null {
+  // `trigger` is a real schema field (used by movement_grant) that models sometimes mis-key
+  // thpTrigger onto — if it's set without thpTrigger, treat this as an unrecognized explicit
+  // trigger rather than silently defaulting to "on_activation" for a case the source didn't
+  // actually describe (see the Improved Warding Flare case: mis-keyed trigger/target produced
+  // a bogus "activate for temp HP" effect instead of not wiring at all).
+  if (mechanic.thpTrigger == null && mechanic.trigger) {
+    return null
+  }
+  const trigger = mechanic.thpTrigger ?? "on_activation"
+  const target = mechanic.thpTarget ?? "self"
+  if (trigger !== "on_activation" && trigger !== "on_use") {
+    return null
+  }
+  const healTarget =
+    target === "self"
+      ? ("self" as const)
+      : target === "chosen_creature_in_range" || target === "allies_in_range"
+        ? ("choose_ally" as const)
+        : null
+  if (!healTarget) return null
+
+  const dice = mechanic.amountDice ? parseHealDiceExpression(mechanic.amountDice) : null
+  const healPatch =
+    mechanic.amountScaling === "ability_modifier" && mechanic.ability
+      ? { healMode: "ability_modifier" as const, healAbility: abilityScoreToModifierKey(mechanic.ability) }
+      : mechanic.amountScaling === "character_level"
+        ? {
+            // amountMultiplier is documented for class_resource_die doubling ("twice the number
+            // rolled"), but the cheatsheet's wording is easy to misread for character_level
+            // scaling too ("three times your level") — accept it as a fallback rather than
+            // silently granting 1x level when the LLM puts the multiplier there instead of amount.
+            healMode: "character_level" as const,
+            healLevelMultiplier: mechanic.amount ?? mechanic.amountMultiplier ?? 1,
+          }
+        : mechanic.amountScaling === "proficiency"
+          ? {
+              healMode: "proficiency" as const,
+              healProficiencyMultiplier: mechanic.amount ?? mechanic.amountMultiplier ?? 1,
+            }
+          : dice
+            ? { healMode: "dice" as const, healDiceCount: dice.count, healDieType: dice.dieType }
+            : mechanic.amount != null
+              ? { healMode: "fixed" as const, healFixed: mechanic.amount }
+              : null
+  if (!healPatch) return null
+
+  return {
+    ruleId: "ai.temporary_hit_points",
+    confidence: aiConfidence(mechanic),
+    matchedPhrase,
+    instance: fxInstance(instanceId, effectCatalogRefId("grant_temp_hp"), {
+      effects: [
+        {
+          id: modId(instanceKey(ctx, "temp_hp")),
+          kind: "grant_temp_hp",
+          tempHpTrigger: "on_action",
+          healTarget,
+          ...healPatch,
+          ...(mechanic.amountMinimum != null ? { healMinimum: mechanic.amountMinimum } : {}),
+        },
+      ],
+    }),
+  }
+}
+
+export type UnresolvedMechanic = {
+  kind: "unresolved"
+  raw: string
+  featureName: string
+  sourcePhrase: string
+}
+
+export type ParsedAiMechanics = {
+  detections: DetectedModifier[]
+  unresolved: UnresolvedMechanic[]
+}
+
+function toUnresolvedMechanic(
+  mechanic: ImportMechanic,
+  ctx: DetectFeatureContext,
+): UnresolvedMechanic {
+  const sourcePhrase = mechanic.sourcePhrase?.trim() ?? ""
+  const raw = mechanic.kind === "unresolved" ? sourcePhrase || mechanic.kind : mechanic.kind
+  return {
+    kind: "unresolved",
+    raw,
+    featureName: ctx.featureName ?? "",
+    sourcePhrase: sourcePhrase || raw,
+  }
+}
+
+function isUnresolvedMechanic(
+  value: DetectedModifier | UnresolvedMechanic,
+): value is UnresolvedMechanic {
+  return "kind" in value && value.kind === "unresolved"
+}
+
+function buildFromMechanic(
+  mechanic: ImportMechanic,
+  ctx: DetectFeatureContext,
+): DetectedModifier | UnresolvedMechanic | null {
+  const instanceId = createModifierInstanceId()
+  const matchedPhrase = mechanic.sourcePhrase?.trim() || `AI: ${mechanic.kind}`
+
+  if (mechanic.kind === "check_roll_modifier" || mechanic.kind === "extra_attack") {
+    if (!isKnownEffectKind(mechanic.kind)) return null
+    if (mechanic.kind === "extra_attack") {
+      return {
+        ruleId: "ai.extra_attack",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: fxInstance(instanceId, effectCatalogRefId("extra_attack"), {
+          effects: [
+            {
+              id: modId(instanceKey(ctx, "extra_attack")),
+              kind: "extra_attack",
+              extraAttackCount: mechanic.extraAttackCount ?? 1,
+            },
+          ],
+        }),
+      }
+    }
+
+    if (!mechanic.checkRollMode && !mechanic.incomingAttackMode) return null
+    // Freeform qualifiers (e.g. "that involves you dancing") cannot be enforced on the sheet —
+    // skip wiring so we don't silently over-grant unrestricted advantage/bonus.
+    // Named conditions in conditionNote (Frightened, Charmed, …) map to checkConditionTypes.
+    const conditionTypesFromNote = extractConditionTypesFromNote(mechanic.conditionNote)
+    const checkConditionTypes = [
+      ...(mechanic.checkConditionTypes ?? []),
+      ...(conditionTypesFromNote ?? []),
+    ].filter((value, index, all) => all.indexOf(value) === index)
+    if (mechanic.conditionNote?.trim() && !checkConditionTypes.length) return null
+    const importedBonus = mechanic.bonusConfig
+    const bonusAbility = importedBonus?.ability
+      ? ({
+          strength: "STR",
+          dexterity: "DEX",
+          constitution: "CON",
+          intelligence: "INT",
+          wisdom: "WIS",
+          charisma: "CHA",
+        } as const)[importedBonus.ability]
+      : undefined
+    const bonusConfig = importedBonus
+      ? {
+          mode: importedBonus.mode,
+          ...(importedBonus.fixed != null ? { fixed: importedBonus.fixed } : {}),
+          ...(bonusAbility ? { ability: bonusAbility } : {}),
+          ...(importedBonus.multiplier != null
+            ? { multiplier: importedBonus.multiplier }
+            : {}),
+          ...(importedBonus.minimum != null
+            ? {
+                resultFloor: {
+                  mode: "fixed" as const,
+                  fixed: importedBonus.minimum,
+                },
+              }
+            : {}),
+        }
+      : undefined
+    return {
+      ruleId: "ai.check_roll_modifier",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: fxInstance(instanceId, effectCatalogRefId("check_roll_modifier"), {
+        effects: [
+          {
+            id: modId(instanceKey(ctx, "check_roll")),
+            kind: "check_roll_modifier",
+            checkRollMode: mechanic.checkRollMode,
+            checkCategory: mechanic.incomingAttackMode
+              ? "other"
+              : mechanic.checkCategory ?? (mechanic.checkSkills?.length ? "skill" : "save"),
+            ...(mechanic.incomingAttackMode
+              ? { incomingAttackMode: mechanic.incomingAttackMode }
+              : {}),
+            checkAbility: mechanic.checkAbility ?? undefined,
+            checkSkills: mechanic.checkSkills,
+            ...(bonusConfig ? { bonusConfig } : {}),
+            ...(checkConditionTypes.length ? { checkConditionTypes } : {}),
+            ...(mechanic.requiresSheetToggle
+              ? {
+                  limitations: [
+                    createModifierLimitation({
+                      kind: "sheet_toggle",
+                      rule: "requires_active",
+                      value: mechanic.requiresSheetToggle,
+                    }),
+                  ],
+                }
+              : {}),
+          },
+        ],
+      }),
+    }
+  }
+
+  if (mechanic.kind === "turn_start_resource_restore") {
+    if (!mechanic.restoreResourceKey || mechanic.restoreResourceAmount == null) return null
+    // See turn_start_trigger below — "hit_points"/"hp" means "heal", not a resource pool restore.
+    if (mechanic.restoreResourceKey === "hit_points" || mechanic.restoreResourceKey === "hp") {
+      return {
+        ruleId: "ai.turn_start_resource_restore.heal",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("turn_start_trigger"), [
+          {
+            id: modId(instanceKey(ctx, "turn_start_restore")),
+            type: "turn_start_trigger",
+            healMode: "fixed" as const,
+            healFixed: mechanic.restoreResourceAmount,
+          },
+        ]),
+      }
+    }
+    return {
+      ruleId: "ai.turn_start_resource_restore",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("turn_start_trigger"), [
+        {
+          id: modId(instanceKey(ctx, "turn_start_restore")),
+          type: "turn_start_trigger",
+          restoreResourceKey: mechanic.restoreResourceKey,
+          restoreResourceAmount: mechanic.restoreResourceAmount,
+        },
+      ]),
+    }
+  }
+
+  // Captured in BYO mechanics[] — ephemeral free points (Psionic Mastery), not a pool refill.
+  if (mechanic.kind === "turn_start_bonus_grant") {
+    if (!mechanic.grantResourceKey) return null
+    const amountByLevel = mechanic.grantAmountByLevel?.length
+      ? mechanic.grantAmountByLevel
+      : null
+    const flatAmount =
+      mechanic.grantAmount ??
+      (amountByLevel?.length ? amountByLevel[0]!.amount : null)
+    if (flatAmount == null && !amountByLevel?.length) return null
+    return {
+      ruleId: "ai.turn_start_bonus_grant",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("turn_start_trigger"), [
+        {
+          id: modId(instanceKey(ctx, "turn_start_bonus")),
+          type: "turn_start_trigger",
+          accrueResourceKey: mechanic.grantResourceKey,
+          ...(flatAmount != null ? { accrueResourceAmount: flatAmount } : {}),
+          ...(amountByLevel?.length ? { accrueResourceAmountByLevel: amountByLevel } : {}),
+          expiresEndOfTurn: mechanic.expiresEndOfTurn ?? true,
+          ...(mechanic.usageRestriction
+            ? { usageRestriction: mechanic.usageRestriction }
+            : {}),
+          label: mechanic.usageRestriction
+            ? `Turn-start ${mechanic.grantResourceKey} (+ restriction)`
+            : `Turn-start ${mechanic.grantResourceKey}`,
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "turn_start_trigger") {
+    // "hit_points"/"hp" isn't a class-resource pool — the LLM means "heal N HP at turn start"
+    // (Elder Champion's Regeneration, etc.), not a resource restore. Route it to the heal
+    // fields instead of restoreResourceKey, which would just no-op looking for a nonexistent
+    // "..._hit_points" resource row.
+    const isHitPointsRestore =
+      mechanic.restoreResourceKey === "hit_points" || mechanic.restoreResourceKey === "hp"
+    return {
+      ruleId: "ai.turn_start_trigger",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("turn_start_trigger"), [
+        {
+          id: modId(instanceKey(ctx, "turn_start")),
+          type: "turn_start_trigger",
+          ...(mechanic.hpBelowFraction != null ? { hpBelowFraction: mechanic.hpBelowFraction } : {}),
+          ...(isHitPointsRestore
+            ? { healMode: "fixed" as const, healFixed: mechanic.restoreResourceAmount ?? 1 }
+            : mechanic.restoreResourceKey
+              ? {
+                  restoreResourceKey: mechanic.restoreResourceKey,
+                  restoreResourceAmount: mechanic.restoreResourceAmount ?? 1,
+                }
+              : {}),
+          ...(mechanic.grantResourceKey
+            ? {
+                accrueResourceKey: mechanic.grantResourceKey,
+                accrueResourceAmount: mechanic.grantAmount ?? 1,
+              }
+            : {}),
+          ...(mechanic.blockedByConditions?.length
+            ? { blockedByConditions: mechanic.blockedByConditions }
+            : {}),
+          ...(mechanic.requiresSheetToggle
+            ? { requiresSheetToggle: mechanic.requiresSheetToggle as never }
+            : {}),
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "on_hit_trigger") {
+    // Bonus damage ("extra NdM [type] damage on hit") is described via the SAME
+    // damage_roll_modifiers shape used by the top-level mechanic — nested here as this
+    // trigger's `effect` so it actually shows up on the weapon attack line, gated by
+    // triggerOn/oncePerTurn/spendResourceKey on the outer trigger characteristic.
+    const nestedDamage = buildDamageRollModifiersCharacteristic(
+      mechanic,
+      ctx,
+      "on_hit_damage",
+      mechanic.oncePerTurn ? "(once per turn, on hit)" : "(on hit)",
+    )
+    const nestedInstanceId = nestedDamage ? instanceKey(ctx, "on_hit_damage_effect") : undefined
+    return {
+      ruleId: "ai.on_hit_trigger",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("on_hit_trigger"), [
+        {
+          id: modId(instanceKey(ctx, "on_hit")),
+          type: "on_hit_trigger",
+          triggerOn: mechanic.triggerOn ?? "hit",
+          oncePerTurn: mechanic.oncePerTurn ?? false,
+          ...(mechanic.spendResourceKey
+            ? {
+                spendResourceKey: mechanic.spendResourceKey,
+                spendResourceAmount: mechanic.spendResourceAmount ?? 1,
+              }
+            : {}),
+          ...(mechanic.maximizeWeaponDamage
+            ? {
+                maximizeWeaponDamage: true,
+                maximizeWeaponDamageAtLevel: mechanic.maximizeWeaponDamageAtLevel ?? null,
+              }
+            : {}),
+          ...(mechanic.requiresSheetToggle
+            ? { requiresSheetToggle: mechanic.requiresSheetToggle as never }
+            : {}),
+          ...(nestedDamage && nestedInstanceId
+            ? {
+                effect: {
+                  instanceId: nestedInstanceId,
+                  catalogRefId: characteristicCatalogRefId("damage_roll_modifiers"),
+                  characteristics: [nestedDamage],
+                },
+              }
+            : {}),
+          // damageTypeOptions (player-chosen damage type per use) remains on the ImportMechanic
+          // for review — there's no per-use damage-type-choice mechanism on this characteristic.
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "failed_roll_trigger") {
+    const rollKind = mechanic.rollKind ?? "attack"
+    const bonusFixed = mechanic.bonusFixed
+    const effectActivation =
+      bonusFixed != null
+        ? {
+            effects: [
+              {
+                id: modId(instanceKey(ctx, "failed_roll_bonus")),
+                kind: "check_roll_modifier" as const,
+                checkRollMode: "bonus" as const,
+                checkCategory: rollKind === "attack" ? ("attack" as const) : ("other" as const),
+                bonusConfig: { mode: "fixed" as const, fixed: bonusFixed },
+                label: `+${bonusFixed} to the roll`,
+              },
+            ],
+          }
+        : null
+    return {
+      ruleId: "ai.failed_roll_trigger",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("failed_roll_trigger"), [
+        {
+          id: modId(instanceKey(ctx, "failed_roll")),
+          type: "failed_roll_trigger",
+          triggerOn: mechanic.failedTriggerOn ?? "fail",
+          rollKind,
+          targetScope: mechanic.targetScope ?? "self",
+          rangeFeet: mechanic.rangeFeet ?? null,
+          useReaction: mechanic.useReaction ?? false,
+          ...(mechanic.spendResourceKey
+            ? {
+                spendResourceKey: mechanic.spendResourceKey,
+                spendResourceAmount: mechanic.spendResourceAmount ?? 1,
+              }
+            : {}),
+          effect: {
+            catalogRefId: effectCatalogRefId("check_roll_modifier"),
+            ...(effectActivation ? { activation: effectActivation } : {}),
+          },
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "d20_test_reaction") {
+    return {
+      ruleId: "ai.d20_test_reaction",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("d20_test_reaction"), [
+        {
+          id: modId(instanceKey(ctx, "d20_test")),
+          type: "d20_test_reaction",
+          modifierMode: mechanic.modifierMode ?? "subtract",
+          rollKinds: mechanic.rollKinds ?? ["ability", "skill", "attack", "save"],
+          targetScope: mechanic.targetScope ?? "target_creature",
+          rangeFeet: mechanic.rangeFeet ?? null,
+          useReaction: mechanic.useReaction ?? false,
+          dieSource: mechanic.dieSource ?? "fixed",
+          fixedDie: mechanic.fixedDie ?? "1d4",
+          dieAbility: mechanic.dieAbility ?? null,
+          spendResourceKey: mechanic.spendResourceKey ?? null,
+          spendResourceAmount: mechanic.spendResourceAmount ?? null,
+          effect: null,
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "special_attack") {
+    const diceMatch = (mechanic.damageDice ?? mechanic.bonusDice)?.trim().match(
+      /^(\d+)\s*d\s*(4|6|8|10|12)\b/i,
+    )
+    if (!diceMatch && !mechanic.attackProfile) return null
+    const damageDiceCount = diceMatch ? parseInt(diceMatch[1]!, 10) || 1 : 1
+    const damageDieType = (`d${diceMatch?.[2] ?? "6"}`) as
+      | "d4"
+      | "d6"
+      | "d8"
+      | "d10"
+      | "d12"
+    const damageTypes = (mechanic.damageTypes?.length
+      ? mechanic.damageTypes
+      : mechanic.damageType
+        ? [mechanic.damageType]
+        : []
+    ).map(titleCaseWords)
+    const attackProfile = mechanic.attackProfile ?? (mechanic.saveAbility ? "force_save" : "ranged")
+    return {
+      ruleId: "ai.special_attack",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: {
+        ...charInstance(instanceId, characteristicCatalogRefId("special_attack"), [
+          {
+            id: modId(instanceKey(ctx, "special_attack")),
+            type: "special_attack",
+            attackName: mechanic.attackName?.trim() || ctx.featureName || "Special Attack",
+            icon: mechanic.icon?.trim() || null,
+            attackProfile,
+            targetMode: mechanic.targetMode ?? (mechanic.areaShape ? "area" : "single"),
+            areaShape: mechanic.areaShape ?? null,
+            areaLengthFeet: mechanic.areaLengthFeet ?? null,
+            areaWidthFeet: mechanic.areaWidthFeet ?? null,
+            properties: [],
+            damageTypes,
+            damageDiceCount:
+              mechanic.damageFromResourceSpend || mechanic.healFromResourceSpend ? 0 : damageDiceCount,
+            damageDieType,
+            damageFromResourceSpend: mechanic.damageFromResourceSpend ?? false,
+            healFromResourceSpend: mechanic.healFromResourceSpend ?? false,
+            healTarget: mechanic.healTarget ?? null,
+            spendResourceOnHit: mechanic.spendResourceOnHit ?? false,
+            criticalDamageMultiplier: mechanic.criticalDamageMultiplier ?? 2,
+            unlocksAtClassLevel: mechanic.unlocksAtClassLevel ?? null,
+            saveAbility: mechanic.saveAbility ?? null,
+            saveDCBase: attackProfile === "force_save" || attackProfile === "emanation" ? 8 : null,
+            saveHalfDamage: mechanic.saveHalfDamage ?? Boolean(mechanic.saveAbility),
+            rangeFeet: mechanic.rangeFeet ?? null,
+            label: matchedPhrase || mechanic.attackName || ctx.featureName,
+          },
+        ]),
+        activation: { action: true },
+      },
+    }
+  }
+
+  if (mechanic.kind === "initiative") {
+    const mode = mechanic.initiativeMode ?? "flat_bonus"
+    return {
+      ruleId: "ai.initiative",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("initiative"), [
+        {
+          id: modId(instanceKey(ctx, "initiative")),
+          type: "initiative",
+          mode,
+          ...(mode === "flat_bonus" ? { flatBonus: mechanic.initiativeFlatBonus ?? 1 } : {}),
+          ...(mode === "ability_modifier" || mode === "add_ability_modifier"
+            ? {
+                ability: abilityScoreToModifierKey(mechanic.initiativeAbility),
+                bonus: 0,
+              }
+            : {}),
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "telepathy") {
+    if (mechanic.telepathyRangeFeet == null) return null
+    return {
+      ruleId: "ai.telepathy",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("telepathy"), [
+        {
+          id: modId(instanceKey(ctx, "telepathy")),
+          type: "telepathy",
+          rangeFeet: mechanic.telepathyRangeFeet,
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "unarmed_strike_damage") {
+    const fixedDieRaw = mechanic.unarmedDie?.trim().toLowerCase()
+    const fixedDie =
+      fixedDieRaw && /^(?:1|1d4|1d6|1d8|1d10|1d12)$/.test(fixedDieRaw)
+        ? (fixedDieRaw as "1" | "1d4" | "1d6" | "1d8" | "1d10" | "1d12")
+        : null
+    if (!fixedDie && !mechanic.dieByLevel?.length) return null
+    const dieByLevel = (mechanic.dieByLevel ?? []).map((entry) => {
+      const match = entry.die.match(/^(\d+)d(\d+)$/i)
+      return {
+        level: entry.level,
+        mode: "dice" as const,
+        dieCount: match ? parseInt(match[1], 10) : 1,
+        dieType: (match ? `d${match[2]}` : "d8") as "d4" | "d6" | "d8" | "d10" | "d12",
+      }
+    })
+    return {
+      ruleId: "ai.unarmed_strike_damage",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("unarmed_strike_damage"), [
+        {
+          id: modId(instanceKey(ctx, "unarmed_die")),
+          type: "unarmed_strike_damage",
+          ...(fixedDie ? { die: fixedDie } : {}),
+          ...(dieByLevel.length ? { dieByLevel } : {}),
+          ...(mechanic.damageType ? { damageType: titleCaseWords(mechanic.damageType) } : {}),
+          ...(mechanic.ability ? { ability: mechanic.ability } : {}),
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "weapon_damage_die_override") {
+    const dieSides = mechanic.dieSides
+    if (dieSides == null || !Number.isFinite(dieSides)) return null
+    return {
+      ruleId: "ai.weapon_damage_die_override",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("weapon_damage_die_override"), [
+        {
+          id: modId(instanceKey(ctx, "weapon_die_override")),
+          type: "weapon_damage_die_override",
+          dieSides,
+          excludedWeaponProperties: mechanic.excludedWeaponProperties ?? [],
+          onlyIncrease: mechanic.onlyIncrease ?? false,
+          scope: mechanic.weaponDamageScope ?? "weapons",
+          weaponNames: mechanic.weaponNames ?? [],
+          ...(mechanic.requiresSheetToggle
+            ? {
+                limitations: [
+                  {
+                    id: `lim_${instanceKey(ctx, "weapon_die_toggle")}`,
+                    kind: "sheet_toggle" as const,
+                    rule: "requires_active" as const,
+                    value: mechanic.requiresSheetToggle,
+                  },
+                ],
+              }
+            : {}),
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "resource_ability_menu") {
+    const resourceKey =
+      mechanic.classResourceKey ??
+      mechanic.spendResourceKey ??
+      mechanic.resourceKey
+    if (!resourceKey && !mechanic.waiveResourceCost) return null
+    return {
+      ruleId: "ai.resource_ability_menu",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("resource_ability_menu"), [
+        {
+          id: modId(instanceKey(ctx, "resource_menu")),
+          type: "resource_ability_menu",
+          resourceKey: resourceKey ?? "",
+          waiveResourceCost: mechanic.waiveResourceCost ?? false,
+          options: mechanic.menuOptions?.length
+            ? mechanic.menuOptions.map((option) => ({
+                name: option.name,
+                ...(option.description ? { description: option.description } : {}),
+                ...(option.resourceCost != null ? { resourceCost: option.resourceCost } : {}),
+                ...(option.hitDiceCost != null ? { hitDiceCost: option.hitDiceCost } : {}),
+                ...(option.unlocksAtLevel != null ? { unlocksAtLevel: option.unlocksAtLevel } : {}),
+                ...(option.actionKind ? { actionKind: option.actionKind } : {}),
+                ...(option.bonusConfig ? { bonusConfig: option.bonusConfig } : {}),
+              }))
+            : (mechanic.menuAbilityNames ?? []).map((name) => ({ name })),
+          ...(mechanic.requiresSheetToggle
+            ? {
+                limitations: [
+                  {
+                    id: `lim_${instanceKey(ctx, "resource_menu_toggle")}`,
+                    kind: "sheet_toggle" as const,
+                    rule: "requires_active" as const,
+                    value: mechanic.requiresSheetToggle,
+                  },
+                ],
+              }
+            : {}),
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "replace_feature") {
+    const replaced = (mechanic.replacedFeatureNames ?? []).map((name) => name.trim()).filter(Boolean)
+    if (!replaced.length) return null
+    return {
+      ruleId: "ai.replace_feature",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("replace_feature"), [
+        {
+          id: modId(instanceKey(ctx, "replace_feature")),
+          type: "replace_feature",
+          replacedFeatureNames: replaced,
+          label: mechanic.alertSummary?.trim() || undefined,
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "power_rider") {
+    const parents = (mechanic.parentPowerNames ?? []).map((name) => name.trim()).filter(Boolean)
+    if (!parents.length) return null
+    return {
+      ruleId: "ai.power_rider",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("power_rider"), [
+        {
+          id: modId(instanceKey(ctx, "power_rider")),
+          type: "power_rider",
+          parentPowerNames: parents,
+          parentMenuOptionNames: (mechanic.parentMenuOptionNames ?? [])
+            .map((name) => name.trim())
+            .filter(Boolean),
+          alertSummary: mechanic.alertSummary?.trim() || undefined,
+          appliesToAttackVariants: (mechanic.appliesToAttackVariants ?? []).filter(
+            (entry): entry is "attack" | "primed" | "explode" =>
+              entry === "attack" || entry === "primed" || entry === "explode",
+          ),
+          selectable: mechanic.selectable ?? false,
+          spendHitPoints:
+            mechanic.spendHitPoints != null && mechanic.spendHitPoints > 0
+              ? mechanic.spendHitPoints
+              : undefined,
+          weaponDamageMenu: mechanic.weaponDamageMenu === true,
+          bonusDice: mechanic.bonusDice?.trim() || undefined,
+          dieByLevel: (mechanic.dieByLevel ?? [])
+            .map((row) => ({ level: row.level, die: row.die.trim() }))
+            .filter((row) => row.die),
+          ability: mechanic.ability,
+          classResourceKey: mechanic.classResourceKey?.trim() || mechanic.resourceKey?.trim() || undefined,
+          defaultSelectedWhenToggle: mechanic.defaultSelectedWhenToggle?.trim() || undefined,
+          menuConditionLabel: mechanic.menuConditionLabel?.trim() || undefined,
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "temporary_hit_points") {
+    return buildTemporaryHitPointsEffect(mechanic, ctx, instanceId, matchedPhrase)
+  }
+
+  if (mechanic.kind === "grant_inspiration") {
+    const target = mechanic.inspirationTarget ?? "self"
+    const healTarget = target === "ally" ? ("choose_ally" as const) : ("self" as const)
+    return {
+      ruleId: "ai.grant_inspiration",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: fxInstance(instanceId, effectCatalogRefId("grant_inspiration"), {
+        effects: [
+          {
+            id: modId(instanceKey(ctx, "grant_inspiration")),
+            kind: "grant_inspiration",
+            healTarget,
+            label: "Heroic Inspiration",
+          },
+        ],
+      }),
+    }
+  }
+
+  if (mechanic.kind === "weapon_reach_modifier") {
+    const reachBonusFeet = mechanic.reachBonusFeet
+    if (reachBonusFeet == null || !(reachBonusFeet > 0)) return null
+    return {
+      ruleId: "ai.weapon_reach_modifier",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: charInstance(instanceId, characteristicCatalogRefId("weapon_reach_modifier"), [
+        {
+          id: modId(instanceKey(ctx, "weapon_reach")),
+          type: "weapon_reach_modifier",
+          reachBonusFeet,
+          weaponPropertyFilter: mechanic.weaponPropertyFilter?.length ? mechanic.weaponPropertyFilter : undefined,
+          // Reach mechanics are overwhelmingly "your Unarmed Strike gains reach" (Elemental
+          // Attunement, etc.) rather than a filter on carried weapons — default true unless the
+          // source explicitly scoped this to specific weapon properties instead.
+          appliesToUnarmedStrike: !mechanic.weaponPropertyFilter?.length,
+          ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+        },
+      ]),
+    }
+  }
+
+  if (mechanic.kind === "movement_grant") {
+    // Moving OTHER creatures (allies/chosen creatures) isn't modeled by movement_option, which
+    // is a self-only "extra movement option" effect — leave those for manual review.
+    if (mechanic.targets && mechanic.targets !== "self") return null
+
+    let moveDistanceMode: "speed" | "fixed" | "multiplier" | null = null
+    let moveDistanceFixed: number | undefined
+    let moveDistanceMultiplier: number | undefined
+    if (mechanic.distanceMode === "fixed" && mechanic.distanceFeet != null) {
+      moveDistanceMode = "fixed"
+      moveDistanceFixed = mechanic.distanceFeet
+    } else if (mechanic.distanceMode === "fraction_of_speed" && mechanic.fraction != null) {
+      moveDistanceMode = "multiplier"
+      moveDistanceMultiplier = mechanic.fraction
+    } else if (mechanic.distanceMode === "full_speed") {
+      moveDistanceMode = "speed"
+    }
+    if (!moveDistanceMode) return null
+
+    const trigger = mechanic.trigger?.toLowerCase() ?? ""
+    const activation: FeatureActivation = trigger.includes("bonus_action")
+      ? { bonusAction: true }
+      : trigger.includes("reaction")
+        ? { reaction: true }
+        : trigger.includes("action")
+          ? { action: true }
+          : {}
+
+    return {
+      ruleId: "ai.movement_grant",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: fxInstance(instanceId, effectCatalogRefId("movement_option"), {
+        ...activation,
+        effects: [
+          {
+            id: modId(instanceKey(ctx, "movement_grant")),
+            kind: "movement_option",
+            moveDistanceMode,
+            ...(moveDistanceFixed != null ? { moveDistanceFixed } : {}),
+            ...(moveDistanceMultiplier != null ? { moveDistanceMultiplier } : {}),
+            ...(mechanic.teleport ? { movementTeleport: true } : {}),
+            ...(mechanic.provokesOpportunityAttacks === false ? { moveWithoutOpportunityAttacks: true } : {}),
+            label: matchedPhrase,
+          },
+        ],
+      }),
+    }
+  }
+
+  if (mechanic.kind === "damage_reduction") {
+    const mode = mechanic.reductionMode ?? (mechanic.reductionAmount != null ? "flat" : "evasion")
+    if (mode === "flat") {
+      const amount = mechanic.reductionAmount
+      if (amount == null || !(amount > 0)) return null
+      return {
+        ruleId: "ai.damage_reduction.flat",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("damage_reduction"), [
+          {
+            id: modId(instanceKey(ctx, "damage_reduction")),
+            type: "damage_reduction",
+            amount,
+            damageTypes: mechanic.damageTypes?.length
+              ? mechanic.damageTypes
+              : ["Bludgeoning", "Piercing", "Slashing"],
+          },
+        ]),
+      }
+    }
+    return {
+      ruleId: "ai.damage_reduction.evasion",
+      confidence: aiConfidence(mechanic),
+      matchedPhrase,
+      instance: buildEvasionModifier(instanceId, mechanic.checkAbility ?? "Dexterity"),
+    }
+  }
+
+  if (!VALID_CHARACTERISTIC_KINDS.has(mechanic.kind)) {
+    return toUnresolvedMechanic(mechanic, ctx)
+  }
+
+  switch (mechanic.kind) {
+    case "skills": {
+      if (mechanic.choiceCount && mechanic.choiceCount > 0) {
+        const skills = mechanic.skills?.map(titleCaseWords).filter(Boolean) ?? []
+        return {
+          ruleId: "ai.skills.choice",
+          confidence: aiConfidence(mechanic),
+          matchedPhrase,
+          instance: charInstance(instanceId, characteristicCatalogRefId("skills"), [
+            {
+              id: modId(instanceKey(ctx, "skills_choice")),
+              type: "skills",
+              entries: skills.map((skill) => ({ skill, expertise: false })),
+              allowAnySkill: skills.length === 0,
+              choiceCount: mechanic.choiceCount,
+            },
+          ]),
+        }
+      }
+      const skills = mechanic.skills?.map(titleCaseWords).filter(Boolean) ?? []
+      if (!skills.length) return null
+      return {
+        ruleId: "ai.skills",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("skills"), [
+          {
+            id: modId(instanceKey(ctx, "skills")),
+            type: "skills",
+            entries: skills.map((skill) => ({
+              skill,
+              expertise: Boolean(mechanic.grantExpertise),
+            })),
+            grantExpertise: mechanic.grantExpertise,
+          },
+        ]),
+      }
+    }
+    case "tool_proficiencies": {
+      const tools = mechanic.tools?.map(titleCaseWords).filter(Boolean) ?? []
+      const choiceCount =
+        typeof mechanic.choiceCount === "number" && mechanic.choiceCount > 0
+          ? mechanic.choiceCount
+          : 0
+      if (!tools.length && !mechanic.grantExpertise && choiceCount <= 0) return null
+      return {
+        ruleId:
+          choiceCount > 0
+            ? "ai.tools.choice"
+            : mechanic.grantExpertise
+              ? "ai.tools.expertise"
+              : "ai.tools",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("tool_proficiencies"), [
+          {
+            id: modId(instanceKey(ctx, choiceCount > 0 ? "tools_choice" : "tools")),
+            type: "tool_proficiencies",
+            values: tools,
+            ...(choiceCount > 0 ? { choiceCount } : {}),
+            ...(mechanic.grantExpertise ? { grantExpertise: true } : {}),
+          },
+        ]),
+      }
+    }
+    case "armor_proficiencies": {
+      const armor = mechanic.armor?.map(titleCaseWords).filter(Boolean) ?? []
+      if (!armor.length) return null
+      return {
+        ruleId: "ai.armor",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("armor_proficiencies"), [
+          {
+            id: modId(instanceKey(ctx, "armor")),
+            type: "armor_proficiencies",
+            values: armor,
+          },
+        ]),
+      }
+    }
+    case "weapon_proficiencies": {
+      if (!mechanic.weaponMode) return null
+      return {
+        ruleId: "ai.weapons",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("weapon_proficiencies"), [
+          {
+            id: modId(instanceKey(ctx, "weapons")),
+            type: "weapon_proficiencies",
+            mode: mechanic.weaponMode as import("@/lib/compendium/weapon-proficiency-options").WeaponProficiencyMode,
+            values: [],
+          },
+        ]),
+      }
+    }
+    case "saving_throws": {
+      const saves = mechanic.savingThrows ?? []
+      if (!saves.length) return null
+      return {
+        ruleId: "ai.saves",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("saving_throws"), [
+          {
+            id: modId(instanceKey(ctx, "saves")),
+            type: "saving_throws",
+            values: saves,
+          },
+        ]),
+      }
+    }
+    case "languages": {
+      const languages = mechanic.languages?.map(titleCaseWords).filter(Boolean) ?? []
+      const choiceCount = mechanic.languageChoiceCount ?? 0
+      if (!languages.length && choiceCount <= 0) return null
+      return {
+        ruleId: choiceCount > 0 ? "ai.languages.choice" : "ai.languages",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("languages"), [
+          {
+            id: modId(instanceKey(ctx, choiceCount > 0 ? "lang_choice" : "lang")),
+            type: "languages",
+            values: languages,
+            choiceCount: choiceCount > 0 ? choiceCount : null,
+            choicePool: mechanic.choicePool ?? (choiceCount > 0 ? "standard" : null),
+          },
+        ]),
+      }
+    }
+    case "spells_known": {
+      const spellNames = mechanic.spellNames?.map((name) => name.trim()).filter(Boolean) ?? []
+      const choiceGrants = mechanic.spellChoiceGrants ?? []
+      if (!spellNames.length && !choiceGrants.length) return null
+      return {
+        ruleId: "ai.spells_known",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("spells_known"), [
+          {
+            id: modId(instanceKey(ctx, "spells_known")),
+            type: "spells_known",
+            spells: spellNames.map((name) => ({
+              spellId: spellNamePlaceholder(name),
+              alwaysPrepared: mechanic.alwaysPrepared ?? true,
+              castAsRitual: mechanic.castAsRitual || undefined,
+              unlocksAtClassLevel: mechanic.unlocksAtClassLevel,
+              ...(mechanic.unlocksAtClassLevel != null && mechanic.unlocksAtClassLevel > 1
+                ? { freeCastPerLongRest: 1 }
+                : /\bonce\s+(?:free\s+)?per\s+long\s+rest\b/i.test(matchedPhrase)
+                  ? { freeCastPerLongRest: 1 }
+                  : {}),
+            })),
+            choiceGrants,
+            alwaysPrepared: mechanic.alwaysPrepared ?? (spellNames.length > 0 ? true : undefined),
+            castingAbility: mechanic.spellcastingAbility,
+            label: mechanic.spellChoiceLabel,
+            spellListClassOptions: inferSpellListClassNames(mechanic.spellChoiceLabel),
+          },
+        ]),
+      }
+    }
+    case "ac": {
+      if (mechanic.acFlatBonus != null || mechanic.acBonusAbility) {
+        return {
+          ruleId: "ai.ac.flat",
+          confidence: aiConfidence(mechanic),
+          matchedPhrase,
+          instance: charInstance(instanceId, characteristicCatalogRefId("ac"), [
+            {
+              id: modId(instanceKey(ctx, "ac_bonus")),
+              type: "ac",
+              mode: "flat_bonus",
+              flatBonus: mechanic.acFlatBonus ?? 0,
+              flatBonusAbility: mechanic.acBonusAbility,
+              flatBonusMinimum: mechanic.acBonusMinimum,
+              ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+            },
+          ]),
+        }
+      }
+      const abilities = (mechanic.acAbilities ?? []).map(
+        (ability) =>
+          ({
+            strength: "STR",
+            dexterity: "DEX",
+            constitution: "CON",
+            intelligence: "INT",
+            wisdom: "WIS",
+            charisma: "CHA",
+          })[ability],
+      ) as import("@/lib/compendium/characteristic-modifiers").AbilityModifierKey[]
+      if (!abilities.length || mechanic.acBase == null) return null
+      return {
+        ruleId: "ai.ac.formula",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("ac"), [
+          {
+            id: modId(instanceKey(ctx, "ac_formula")),
+            type: "ac",
+            mode: "ability_modifiers",
+            base: mechanic.acBase,
+            abilities,
+            ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+          },
+        ]),
+      }
+    }
+    case "hit_points": {
+      if (mechanic.hpValue == null) return null
+      return {
+        ruleId: "ai.hit_points",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("hit_points"), [
+          {
+            id: modId(instanceKey(ctx, "hp")),
+            type: "hit_points",
+            mode: mechanic.hpMode ?? "per_level",
+            value: mechanic.hpValue,
+            ...(mechanic.hpLevelScope ? { levelScope: mechanic.hpLevelScope } : {}),
+          },
+        ]),
+      }
+    }
+    case "attack_roll_modifiers": {
+      if (
+        mechanic.attackBonus == null &&
+        mechanic.criticalHitMinimum == null &&
+        !mechanic.criticalHitMinimumByLevel?.length &&
+        !mechanic.ignoreHalfCover &&
+        !mechanic.treatThreeQuartersCoverAsHalf
+      ) {
+        return null
+      }
+      return {
+        ruleId: "ai.attack",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("attack_roll_modifiers"), [
+          {
+            id: modId(instanceKey(ctx, "attack")),
+            type: "attack_roll_modifiers",
+            entries: [
+              {
+                bonus: mechanic.attackBonus ?? 0,
+                target: mechanic.attackTarget ?? "all",
+                criticalHitMinimum: mechanic.criticalHitMinimum ?? null,
+                criticalHitMinimumByLevel: (mechanic.criticalHitMinimumByLevel ?? []).map(
+                  (entry) => ({ level: entry.level, mode: "fixed" as const, fixed: entry.fixed }),
+                ),
+                ...(mechanic.ignoreHalfCover ? { ignoreHalfCover: true } : {}),
+                ...(mechanic.treatThreeQuartersCoverAsHalf
+                  ? { treatThreeQuartersCoverAsHalf: true }
+                  : {}),
+              },
+            ],
+          },
+        ]),
+      }
+    }
+    case "damage_roll_modifiers": {
+      const characteristic = buildDamageRollModifiersCharacteristic(mechanic, ctx, "damage")
+      if (!characteristic) return null
+      const hasCreatureTypes = characteristic.entries[0]?.onlyVsCreatureTypes?.length
+      return {
+        ruleId: hasCreatureTypes ? "ai.damage.creature_type" : "ai.damage",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("damage_roll_modifiers"), [
+          characteristic,
+        ]),
+      }
+    }
+    case "damage_resistance": {
+      const types = (mechanic.damageTypes ?? []).map(titleCaseWords).filter(Boolean)
+      // "Spells" / "Spell damage" aren't elemental types — they mean "damage from spells"
+      // (Abjurer Spell Resistance). Route that to fromSpells instead of a dead type token.
+      const fromSpells = types.some((t) => /^(?:spells?|spell damage)$/i.test(t))
+      const concreteTypes = types.filter((t) => !/^(?:spells?|spell damage)$/i.test(t))
+      if (!concreteTypes.length && !fromSpells) return null
+      return {
+        ruleId: fromSpells ? "ai.resistance.spell_damage" : "ai.resistance",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("damage_resistance"), [
+          {
+            id: modId(instanceKey(ctx, "resistance")),
+            type: "damage_resistance",
+            damageTypes: concreteTypes,
+            ...(fromSpells ? { fromSpells: true } : {}),
+            ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+          },
+        ]),
+      }
+    }
+    case "damage_immunity": {
+      const types = (mechanic.damageTypes ?? []).map(titleCaseWords).filter(Boolean)
+      if (!types.length) return null
+      return {
+        ruleId: "ai.damage_immunity",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("damage_immunity"), [
+          {
+            id: modId(instanceKey(ctx, "damage_immune")),
+            type: "damage_immunity",
+            damageTypes: types,
+            ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+          },
+        ]),
+      }
+    }
+    case "condition_immunity": {
+      const conditions = (mechanic.conditions ?? []).map(titleCaseWords).filter(Boolean)
+      if (!conditions.length) return null
+      return {
+        ruleId: "ai.condition_immunity",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("condition_immunity"), [
+          {
+            id: modId(instanceKey(ctx, "immune")),
+            type: "condition_immunity",
+            conditions,
+            ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+          },
+        ]),
+      }
+    }
+    case "speed": {
+      const isEqualToWalk = mechanic.speedMode === "equal_to_walk"
+      if (!isEqualToWalk && mechanic.speedFeet == null) return null
+      if (
+        !mechanic.requiresSheetToggle &&
+        looksLikeSituationalSpeedGrant(ctx.featureName, matchedPhrase)
+      ) {
+        return null
+      }
+      return {
+        ruleId: "ai.speed",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("speed"), [
+          {
+            id: modId(instanceKey(ctx, "speed")),
+            type: "speed",
+            speedType: mechanic.speedType ?? "walk",
+            mode: isEqualToWalk ? "equal_to_walk" : "add",
+            value: isEqualToWalk ? 0 : (mechanic.speedFeet as number),
+            ...(mechanic.canHover && (mechanic.speedType ?? "walk") === "fly"
+              ? { customType: "hover" }
+              : {}),
+            ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+          },
+        ]),
+      }
+    }
+    case "vision": {
+      if (mechanic.visionRangeFeet == null) return null
+      return {
+        ruleId: "ai.vision",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("vision"), [
+          {
+            id: modId(instanceKey(ctx, "vision")),
+            type: "vision",
+            visionType: mechanic.visionType ?? "darkvision",
+            rangeFeet: mechanic.visionRangeFeet,
+          },
+        ]),
+      }
+    }
+    case "uses": {
+      if (isReactionRechargePhrase(matchedPhrase)) return null
+      if (mechanic.usesRecharge === "until_item_consumed") {
+        const uses: UsesConfig = {
+          type: "special",
+          specialDescription:
+            mechanic.sourcePhrase?.trim() ||
+            "Spent resource cannot be regained until the crafted item is spent or destroyed",
+        }
+        return {
+          ruleId: "ai.uses",
+          confidence: aiConfidence(mechanic),
+          matchedPhrase,
+          instance: usesInstance(instanceId, uses, ctx.featureName ?? "Limited uses"),
+        }
+      }
+      if (mechanic.usesRecharge === "on_resource_reactivation") {
+        const gate = mechanic.gatingResourceKey?.trim() || "resource"
+        const uses: UsesConfig = {
+          type: "special",
+          specialDescription:
+            mechanic.sourcePhrase?.trim() ||
+            `Refreshes when ${gate} is (re)activated`,
+        }
+        return {
+          ruleId: "ai.uses.on_resource_reactivation",
+          confidence: aiConfidence(mechanic),
+          matchedPhrase,
+          instance: usesInstance(instanceId, uses, ctx.featureName ?? "Limited uses"),
+        }
+      }
+      // "Spend N of class resource X" with no independent usesFixed/usesRecharge means the
+      // ability itself has no separate use cap — it's unlimited, gated only by resource
+      // availability (e.g. Hand of Healing: "expend 1 Focus Point", no per-rest cap of its own).
+      // Only take this branch when usesFixed/usesAbility weren't ALSO given — those mean there's
+      // a real cap on top of the resource cost (e.g. "3/long rest, or spend a resource to renew").
+      const uses: UsesConfig = mechanic.usesAbility
+        ? {
+            type: "ability_modifier",
+            abilityModifier: mechanic.usesAbility,
+            recharges: usesRechargesFromImport(mechanic.usesRecharge),
+          }
+        : mechanic.usesProficiency
+          ? {
+              type: "proficiency",
+              recharges: usesRechargesFromImport(mechanic.usesRecharge),
+            }
+          : mechanic.usesFixed == null && mechanic.classResourceKey
+            ? {
+                type: "class_resource",
+                classResourceKey: mechanic.classResourceKey,
+                classResourceAmount: mechanic.classResourceCost ?? 1,
+                ...(mechanic.classResourceCostMode
+                  ? { classResourceCostMode: mechanic.classResourceCostMode }
+                  : {}),
+                ...(mechanic.classResourceCostAbility
+                  ? { classResourceCostAbility: mechanic.classResourceCostAbility }
+                  : {}),
+              }
+            : {
+                type: "fixed",
+                fixedAmount: mechanic.usesFixed ?? 1,
+                recharges: usesRechargesFromImport(mechanic.usesRecharge),
+              }
+      // "Spend another resource to restore a use" — UsesConfig.restoreByResource/restoreBySpellSlot
+      // already exist and are exercised by hand-written presets (e.g. Beguiling Magic rider); the
+      // schema just never routed alternateRefresh into them. actionCost has no matching UsesConfig
+      // field (restores are modeled as passive bookkeeping, not their own activatable ability) and
+      // is intentionally left off.
+      const alternateRefresh = mechanic.alternateRefresh
+      // A per-rest cap and a resource price can apply to the same activation.
+      // Renewal prices remain separate (restoreByResource), never a second charge.
+      if (uses.type !== "class_resource" && mechanic.classResourceKey && !alternateRefresh) {
+        uses.classResourceKey = mechanic.classResourceKey
+        uses.classResourceAmount = mechanic.classResourceCost ?? 1
+        uses.classResourceCostMode = mechanic.classResourceCostMode
+        uses.classResourceCostAbility = mechanic.classResourceCostAbility
+      }
+      if (alternateRefresh?.spendSpellSlotMinLevel != null) {
+        uses.restoreBySpellSlot = {
+          minSpellLevel: alternateRefresh.spendSpellSlotMinLevel,
+          restores: 1,
+        }
+      } else if (alternateRefresh?.spendResourceKey) {
+        uses.restoreByResource = {
+          resourceKey: alternateRefresh.spendResourceKey,
+          resourceAmount: alternateRefresh.spendAmount ?? 1,
+          restores: 1,
+        }
+      }
+      return {
+        ruleId: "ai.uses",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: usesInstance(instanceId, uses, ctx.featureName ?? "Limited uses"),
+      }
+    }
+    case "equipment_and_magic_items": {
+      const itemOptions = (mechanic.itemOptions ?? []).map((item) => item.trim()).filter(Boolean)
+      if (!itemOptions.length && mechanic.allowCustom !== true) return null
+      return {
+        ruleId: "ai.equipment_and_magic_items",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(
+          instanceId,
+          characteristicCatalogRefId("equipment_and_magic_items"),
+          [
+            {
+              id: modId(instanceKey(ctx, "equipment_and_magic_items")),
+              type: "equipment_and_magic_items",
+              mode: "create_mundane",
+              itemOptions,
+              choiceCount: mechanic.choiceCount ?? 1,
+              allowCustom: mechanic.allowCustom === true,
+            },
+          ],
+        ),
+      }
+    }
+    case "player_note": {
+      return {
+        ruleId: "ai.player_note",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("player_note"), [
+          {
+            id: modId(instanceKey(ctx, "player_note")),
+            type: "player_note",
+            prompt: mechanic.notePrompt?.trim() || "Player notes",
+            placeholder: mechanic.notePlaceholder?.trim() || "",
+            target: mechanic.noteTarget ?? "feature",
+          },
+        ]),
+      }
+    }
+    case "inventory_container": {
+      const contentKinds = (mechanic.contentKinds?.length
+        ? mechanic.contentKinds
+        : ["freeform"]) as Array<"equipment" | "corpse" | "companion" | "freeform">
+      return {
+        ruleId: "ai.inventory_container",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("inventory_container"), [
+          {
+            id: modId(instanceKey(ctx, "inventory_container")),
+            type: "inventory_container",
+            containerName: mechanic.containerName?.trim() || null,
+            capacityMode: mechanic.capacityMode ?? "slot_count",
+            capacityAmount: mechanic.capacityAmount ?? null,
+            capacityLabel: mechanic.capacityLabel?.trim() || null,
+            contentKinds,
+            maxCreatureSize: mechanic.maxCreatureSize ?? null,
+            linkHostItem: mechanic.linkHostItem === true,
+            attachToEquipmentNames: mechanic.attachToEquipmentNames ?? [],
+            label: matchedPhrase || mechanic.containerName || ctx.featureName || "Container",
+          },
+        ]),
+      }
+    }
+    case "grant_feat": {
+      const categories = (mechanic.featCategories?.length
+        ? mechanic.featCategories
+        : ["General"]) as FeatPickCategory[]
+      const characteristic = grantFeatCharacteristic(categories, mechanic.featCount ?? 1)
+      return {
+        ruleId: "ai.grant_feat",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, GRANT_FEAT_CATALOG_ID, [characteristic]),
+      }
+    }
+    case "grant_creature": {
+      const names = mechanic.creatureNames?.filter((n) => n.trim()) ?? []
+      if (!names.length) return null
+      const characteristic = grantCreatureCharacteristic(names, {
+        count: mechanic.featCount ?? mechanic.choiceCount ?? 1,
+        countByLevel: mechanic.choiceCountByLevel?.filter(
+          (row) => Number.isFinite(row.level) && Number.isFinite(row.count),
+        ),
+        combinedCrByLevel: mechanic.creatureCombinedCrByLevel?.filter(
+          (row) => Number.isFinite(row.level) && Number.isFinite(row.count),
+        ),
+        choiceOptions: mechanic.creatureChoiceOptions?.filter((n) => n.trim()),
+        pickOnRest: mechanic.creaturePickOnRest,
+        pickerTitle: mechanic.creaturePickerTitle,
+        polymorph: mechanic.creaturePolymorph === true,
+      })
+      return {
+        ruleId: "ai.grant_creature",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, GRANT_CREATURE_CATALOG_ID, [characteristic]),
+      }
+    }
+    case "spellcasting_ability": {
+      const ability = mechanic.spellcastingAbility
+      const abilityOptions = mechanic.spellcastingAbilityOptions ?? []
+      if (!ability && !abilityOptions.length) return null
+      const defaultAbility = ability ?? abilityOptions[0]
+      if (!defaultAbility) return null
+      return {
+        ruleId: "ai.spellcasting_ability",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("spellcasting_ability"), [
+          {
+            id: modId(instanceKey(ctx, "spell_ability")),
+            type: "spellcasting_ability",
+            ability: defaultAbility,
+            ...(abilityOptions.length ? { abilityOptions } : {}),
+            label:
+              mechanic.spellChoiceLabel ??
+              (abilityOptions.length
+                ? `${abilityOptions.map(titleCaseWords).join(", ")} spellcasting choice`
+                : `${defaultAbility} spellcasting`),
+            ...(mechanic.requiresSheetToggle ? { requiresSheetToggle: mechanic.requiresSheetToggle } : {}),
+          },
+        ]),
+      }
+    }
+    case "extra_wield_slots": {
+      const extraSlots = mechanic.choiceCount ?? 1
+      const phrase = `${matchedPhrase} ${mechanic.sourcePhrase ?? ""}`
+      const lightOnly = /\blight\b/i.test(phrase)
+      return {
+        ruleId: "ai.extra_wield_slots",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("extra_wield_slots"), [
+          {
+            id: modId(instanceKey(ctx, "extra_wield")),
+            type: "extra_wield_slots",
+            extraSlots,
+            allowedProperties: lightOnly ? ["light"] : [],
+            label: lightOnly
+              ? "Extra hands: wield a Light weapon"
+              : "Extra hands: additional wield slot",
+          },
+        ]),
+      }
+    }
+    case "attunement_slots": {
+      if (mechanic.attunementTotal == null && mechanic.attunementBonus == null) return null
+      return {
+        ruleId: "ai.attunement_slots",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, "cat_char_attunement_slots", [
+          {
+            id: modId(instanceKey(ctx, "attune")),
+            type: "attunement_slots",
+            ...(mechanic.attunementTotal != null ? { totalSlots: mechanic.attunementTotal } : {}),
+            ...(mechanic.attunementBonus != null ? { bonusSlots: mechanic.attunementBonus } : {}),
+            label:
+              mechanic.attunementTotal != null
+                ? `Attune to ${mechanic.attunementTotal} magic items`
+                : `+${mechanic.attunementBonus} attunement slots`,
+          },
+        ]),
+      }
+    }
+    case "skill_check_alternate_ability": {
+      if (!mechanic.alternateAbility) return null
+      return {
+        ruleId: "ai.skill_check_alternate_ability",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("skill_check_alternate_ability"), [
+          {
+            id: modId(instanceKey(ctx, "skill_alt_ability")),
+            type: "skill_check_alternate_ability",
+            ability: mechanic.alternateAbility,
+            skills: mechanic.alternateSkills ?? [],
+            ...(mechanic.requiresSheetToggle
+              ? { limitations: [createModifierLimitation({
+                  kind: "sheet_toggle",
+                  rule: "requires_active",
+                  value: mechanic.requiresSheetToggle,
+                })] }
+              : {}),
+          },
+        ]),
+      }
+    }
+    case "saving_throw_alternate_ability": {
+      if (!mechanic.alternateAbility) return null
+      return {
+        ruleId: "ai.saving_throw_alternate_ability",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("saving_throw_alternate_ability"), [
+          {
+            id: modId(instanceKey(ctx, "save_alt_ability")),
+            type: "saving_throw_alternate_ability",
+            ability: mechanic.alternateAbility,
+            saves: mechanic.alternateSaves ?? [],
+          },
+        ]),
+      }
+    }
+    case "forced_save_ability_remap": {
+      if (!mechanic.toSaveAbility) return null
+      return {
+        ruleId: "ai.forced_save_ability_remap",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("forced_save_ability_remap"), [
+          {
+            id: modId(instanceKey(ctx, "forced_save_remap")),
+            type: "forced_save_ability_remap",
+            fromAbility: (mechanic.fromSaveAbility as "any" | "STR" | "DEX" | "CON" | "INT" | "WIS" | "CHA") ?? "any",
+            toAbility: mechanic.toSaveAbility,
+            scope: mechanic.forcedSaveScope ?? "your_features",
+          },
+        ]),
+      }
+    }
+    case "weapon_ability_override": {
+      if (!mechanic.alternateAbility && !mechanic.treatAsFinesse) return null
+      return {
+        ruleId: "ai.weapon_ability_override",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("weapon_ability_override"), [
+          {
+            id: modId(instanceKey(ctx, "weapon_ability")),
+            type: "weapon_ability_override",
+            excludedWeaponProperties: mechanic.excludedWeaponProperties ?? [],
+            ability: mechanic.alternateAbility ?? "dexterity",
+            appliesTo: mechanic.weaponAbilityAppliesTo ?? "both",
+            scope: mechanic.weaponAbilityScope ?? "all",
+            weaponNames: mechanic.weaponNames ?? [],
+            treatAsFinesse: Boolean(mechanic.treatAsFinesse),
+            whenDamageDice: mechanic.whenDamageDice ?? [],
+          },
+        ]),
+      }
+    }
+    case "weapon_sheet_badge": {
+      const label =
+        mechanic.badgeLabel?.trim() ||
+        mechanic.alertSummary?.trim() ||
+        matchedPhrase.trim() ||
+        "Weapon rider"
+      return {
+        ruleId: "ai.weapon_sheet_badge",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("weapon_sheet_badge"), [
+          {
+            id: modId(instanceKey(ctx, "weapon_sheet_badge")),
+            type: "weapon_sheet_badge",
+            label,
+            description: mechanic.badgeDescription?.trim() || mechanic.alertSummary?.trim() || label,
+            whenDamageDice: mechanic.whenDamageDice ?? [],
+            includeUnarmed: Boolean(mechanic.includeUnarmed),
+            requireFirearm: Boolean(mechanic.requireFirearm),
+            appliesTo: mechanic.weaponAbilityScope ?? "all",
+            weaponNames: mechanic.weaponNames ?? [],
+          },
+        ]),
+      }
+    }
+    case "grant_custom_ability": {
+      const abilityNames = (mechanic.abilityNames ?? [])
+        .map((name) => name.trim())
+        .filter(Boolean)
+      if (!abilityNames.length) return null
+      return {
+        ruleId: "ai.grant_custom_ability",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("grant_custom_ability"), [
+          {
+            id: modId(instanceKey(ctx, "grant_custom_ability")),
+            type: "grant_custom_ability",
+            abilityNames,
+            label: matchedPhrase || `Gain ${abilityNames.join(", ")}`,
+          },
+        ]),
+      }
+    }
+    case "hit_dice_restore": {
+      const amount = mechanic.hitDiceRestoreAmount ?? mechanic.amount
+      if (amount == null || amount < 1) return null
+      const amountByLevel = (mechanic.hitDiceRestoreByLevel ?? []).map((row) => ({
+        level: row.level,
+        mode: "fixed" as const,
+        fixed: row.amount,
+      }))
+      if (!amountByLevel.some((row) => row.fixed === amount)) {
+        amountByLevel.unshift({ level: 1, mode: "fixed", fixed: amount })
+      }
+      return {
+        ruleId: "ai.hit_dice_restore",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("hit_dice_restore"), [
+          {
+            id: modId(instanceKey(ctx, "hit_dice_restore")),
+            type: "hit_dice_restore",
+            amount,
+            amountByLevel,
+            restoreOn: mechanic.restoreOnRest === "long_rest" ? "long_rest" : "short_rest",
+            label: ctx.featureName ?? "Restore Hit Point Dice",
+          },
+        ]),
+      }
+    }
+    case "spell_list_access": {
+      const spellNames = mechanic.spellNames?.map((name) => name.trim()).filter(Boolean) ?? []
+      if (!spellNames.length) return null
+      return {
+        ruleId: "ai.spell_list_access", confidence: aiConfidence(mechanic), matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("spell_list_access"), [{
+          id: modId(instanceKey(ctx, "spell_list_access")), type: "spell_list_access", classNames: [], spellNames,
+        }]),
+      }
+    }
+    case "modify_custom_ability": {
+      const abilityNames = (mechanic.abilityNames ?? [])
+        .map((name) => name.trim())
+        .filter(Boolean)
+      if (!abilityNames.length && !mechanic.abilityFilter) return null
+      const addendum = mechanic.abilityAddendum?.trim() || matchedPhrase || null
+      if (!addendum && !mechanic.removeUseLimit && !mechanic.resourceCostWaiver && !mechanic.resourceCostReduction && !mechanic.checkBonusDieOverride && mechanic.usesFixed == null) return null
+      return {
+        ruleId: "ai.modify_custom_ability",
+        confidence: aiConfidence(mechanic),
+        matchedPhrase,
+        instance: charInstance(instanceId, characteristicCatalogRefId("modify_custom_ability"), [
+          {
+            id: modId(instanceKey(ctx, "modify_custom_ability")),
+            type: "modify_custom_ability",
+            checkBonusDieOverride: mechanic.checkBonusDieOverride,
+            ...(mechanic.usesFixed != null ? { usesOverride: {
+              type: "fixed" as const, fixedAmount: mechanic.usesFixed,
+              recharges: usesRechargesFromImport(mechanic.usesRecharge),
+            } } : {}),
+            removeUseLimit: mechanic.removeUseLimit,
+            abilityFilter: mechanic.abilityFilter,
+            resourceCostWaiver: mechanic.resourceCostWaiver,
+            resourceCostReduction: mechanic.resourceCostReduction,
+            abilityNames,
+            addendum,
+            label: matchedPhrase || `Upgrades ${abilityNames.join(", ")}`,
+          },
+        ]),
+      }
+    }
+    default:
+      return toUnresolvedMechanic(mechanic, ctx)
+  }
+}
+
+/** Convert AI mechanics[] into catalog detections plus explicit unresolved leftovers. */
+export function parseAiMechanics(
+  mechanics: ImportMechanic[] | undefined,
+  ctx: DetectFeatureContext,
+): ParsedAiMechanics {
+  if (!mechanics?.length) return { detections: [], unresolved: [] }
+  const detections: DetectedModifier[] = []
+  const unresolved: UnresolvedMechanic[] = []
+  for (const mechanic of mechanics) {
+    const result = buildFromMechanic(mechanic, ctx)
+    if (!result) continue
+    if (isUnresolvedMechanic(result)) unresolved.push(result)
+    else detections.push(result)
+  }
+  return { detections, unresolved }
+}
+
+/** Convert validated AI mechanics[] entries into detected modifier instances. */
+export function aiMechanicsToDetections(
+  mechanics: ImportMechanic[] | undefined,
+  ctx: DetectFeatureContext,
+): DetectedModifier[] {
+  return parseAiMechanics(mechanics, ctx).detections
+}

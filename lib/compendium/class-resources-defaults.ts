@@ -1,0 +1,221 @@
+import type { ClassResource } from "@/lib/types"
+import { spellSlotResourceUsesForCasterType } from "@/lib/compendium/spell-slots"
+
+const LONG_REST = [{ rest: "long_rest" as const }]
+const SHORT_OR_LONG_REST = [{ rest: "short_rest" as const }, { rest: "long_rest" as const }]
+const SHORT_PLUS_ONE_AND_LONG = [
+  { rest: "short_rest" as const, amount: 1 },
+  { rest: "long_rest" as const },
+]
+
+const CHANNEL_DIVINITY_DESCRIPTION =
+        "Spent when you use Channel Divinity or a feature that requires it. Cleric options include Preserve Life and Turn Undead; Paladin options include Sacred Weapon and similar oath features. Regain 1 expended use on a Short Rest and all expended uses on a Long Rest."
+
+const SPELL_SLOTS_FULL: ClassResource = {
+  id: "spell_slots",
+  name: "Spell Slots",
+  description:
+    "Spell slots per long rest at each character level follow standard full-caster progression (1st–9th level slots per the class table).",
+  uses: spellSlotResourceUsesForCasterType("full"),
+}
+
+const SPELL_SLOTS_HALF: ClassResource = {
+  id: "spell_slots",
+  name: "Spell Slots",
+  description:
+    "Spell slots per long rest follow half-caster progression (slots begin at class level 2).",
+  uses: spellSlotResourceUsesForCasterType("half"),
+}
+
+/** Artificer 2024: half-caster pace but slots begin at level 1 (use class explicit_slot_progression). */
+const SPELL_SLOTS_ARTIFICER: ClassResource = {
+  id: "spell_slots",
+  name: "Spell Slots",
+  description:
+    "Spell slots per long rest follow the Artificer Features table (half-caster pace with slots from level 1).",
+  uses: spellSlotResourceUsesForCasterType("half"),
+}
+
+/** Default class resource pools for SRD classes (2024 rules). */
+export const SRD_CLASS_RESOURCES_BY_NAME: Record<string, ClassResource[]> = {
+  Barbarian: [
+    {
+      id: "rage",
+      name: "Rage",
+      description:
+        "Spent when you use the Rage feature (Bonus Action) to enter a Rage. 2 uses at level 1, 3 at 3, 4 at 6, 5 at 12, 6 at 17. Regain 1 expended use on a Short Rest and all expended uses on a Long Rest.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        recharges: SHORT_PLUS_ONE_AND_LONG,
+        atLevelTable: [
+          { level: 1, count: 2 },
+          { level: 3, count: 3 },
+          { level: 6, count: 4 },
+          { level: 12, count: 5 },
+          { level: 17, count: 6 },
+        ],
+      },
+    },
+  ],
+  Bard: [
+    {
+      id: "bardic_inspiration",
+      name: "Bardic Inspiration",
+      description:
+        "Spent when you grant Bardic Inspiration to a creature (Bonus Action). The inspiration die starts at d6 and becomes d8 at level 5, d10 at level 10, and d12 at level 15. Uses equal to Charisma modifier (minimum 1). Recharges on a long rest. Font of Inspiration (level 5): also recharges on a short rest, and you can expend a spell slot to regain one use.",
+      uses: {
+        type: "ability_modifier",
+        abilityModifier: "CHA",
+        recharges: LONG_REST,
+        restoreBySpellSlot: { minSpellLevel: 1, restores: 1 },
+        dieType: "d6",
+        dieSidesByLevel: [
+          { level: 1, count: 6 },
+          { level: 5, count: 8 },
+          { level: 10, count: 10 },
+          { level: 15, count: 12 },
+        ],
+      },
+    },
+    SPELL_SLOTS_FULL,
+  ],
+  Cleric: [
+    {
+      id: "channel_divinity",
+      name: "Channel Divinity",
+      description: CHANNEL_DIVINITY_DESCRIPTION,
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        recharges: SHORT_PLUS_ONE_AND_LONG,
+        atLevelTable: [
+          { level: 2, count: 2 },
+          { level: 6, count: 3 },
+          { level: 18, count: 4 },
+        ],
+      },
+    },
+    SPELL_SLOTS_FULL,
+  ],
+  Druid: [
+    {
+      id: "wild_shape",
+      name: "Wild Shape",
+      description:
+        "Spent when you use Wild Shape (Bonus Action) to assume a Beast form. 2 uses at level 2, 3 at 6, 4 at 17. Regain 1 expended use on a Short Rest and all expended uses on a Long Rest.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        recharges: SHORT_PLUS_ONE_AND_LONG,
+        atLevelTable: [
+          { level: 2, count: 2 },
+          { level: 6, count: 3 },
+          { level: 17, count: 4 },
+        ],
+      },
+    },
+    SPELL_SLOTS_FULL,
+  ],
+  Fighter: [
+    {
+      id: "second_wind",
+      name: "Second Wind",
+      description:
+        "Spent when you use Second Wind (Bonus Action) to regain Hit Points (1d10 + Fighter level). 2 uses at level 1, 3 at 4, 4 at 10. Regain 1 expended use on a Short Rest and all expended uses on a Long Rest.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        recharges: SHORT_PLUS_ONE_AND_LONG,
+        atLevelTable: [
+          { level: 1, count: 2 },
+          { level: 4, count: 3 },
+          { level: 10, count: 4 },
+        ],
+      },
+    },
+  ],
+  Monk: [
+    {
+      id: "focus_points",
+      name: "Focus Points",
+      description:
+        "Spent on Monk's Focus techniques (Flurry of Blows, Patient Defense, Step of the Wind, and similar Focus features). Pool equal to Monk level. Recharges on a short or long rest.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "multiply_level",
+        recharges: SHORT_OR_LONG_REST,
+        atLevelTable: [{ level: 1, count: 1 }],
+      },
+    },
+  ],
+  Paladin: [
+    {
+      id: "channel_divinity",
+      name: "Channel Divinity",
+      description: CHANNEL_DIVINITY_DESCRIPTION,
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        recharges: SHORT_PLUS_ONE_AND_LONG,
+        atLevelTable: [
+          { level: 3, count: 2 },
+          { level: 11, count: 3 },
+        ],
+      },
+    },
+    {
+      id: "lay_on_hands",
+      name: "Lay on Hands",
+      description:
+        "Healing pool for Lay On Hands — spend points to restore Hit Points or end poison/disease. Pool equal to 5 × Paladin level. Recharges on a long rest.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "multiply_level",
+        recharges: LONG_REST,
+        atLevelTable: [{ level: 1, count: 5 }],
+      },
+    },
+    SPELL_SLOTS_HALF,
+  ],
+  Ranger: [
+    SPELL_SLOTS_HALF,
+  ],
+  Rogue: [],
+  Sorcerer: [
+    {
+      id: "sorcery_points",
+      name: "Sorcery Points",
+      description:
+        "Spent on Metamagic and Font of Magic options (convert spell slots, create slots, enhance spells). Pool equal to Sorcerer level. Recharges on a long rest.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "multiply_level",
+        recharges: LONG_REST,
+        atLevelTable: [{ level: 1, count: 1 }],
+      },
+    },
+    SPELL_SLOTS_FULL,
+  ],
+  Warlock: [
+    {
+      id: "pact_magic_slots",
+      name: "Pact Magic Slots",
+      description:
+        "Pact Magic spell slots — all slots are the same level and recharge on a short or long rest. 1 slot at level 1, 2 at levels 2–10, 3 at 11–16, 4 at 17–20.",
+      uses: {
+        type: "at_level",
+        atLevelMode: "tier",
+        recharges: SHORT_OR_LONG_REST,
+        atLevelTable: [
+          { level: 1, count: 1 },
+          { level: 2, count: 2 },
+          { level: 11, count: 3 },
+          { level: 17, count: 4 },
+        ],
+      },
+    },
+  ],
+  Wizard: [SPELL_SLOTS_FULL],
+  Artificer: [SPELL_SLOTS_ARTIFICER],
+}

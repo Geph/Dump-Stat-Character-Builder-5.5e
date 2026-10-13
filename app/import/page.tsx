@@ -1,0 +1,2092 @@
+"use client"
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { ImportContentTypeHintSelect } from "@/components/import-content-type-hint-select"
+import { ClipboardImportPanel } from "@/components/import/clipboard-import-panel"
+import { FirstVisitContentPicker } from "@/components/import/first-visit-content-picker"
+import { ImportSubclassMatchSelect } from "@/components/import/import-subclass-match-select"
+import { ImportWorkflowGuidancePanel } from "@/components/import/import-workflow-guidance-panel"
+import { ImportContentPreviewPanel } from "@/components/import/import-content-preview-panel"
+import { ImportBackgroundFeatGapPanel } from "@/components/import/import-background-feat-gap-panel"
+import { ImportClaimCoveragePanel } from "@/components/import/import-claim-coverage-panel"
+import { ImportModifierReviewPanel } from "@/components/import/import-modifier-review-panel"
+import { ImportReportPanel, ImportTokenSavingsSummary } from "@/components/import/import-report-panel"
+import {
+  ImportConfirmActions,
+  ImportProposalPanel,
+} from "@/components/import/import-proposal-panel"
+import { ImportCollisionPanel } from "@/components/import/import-collision-panel"
+import { ImportCardArtPanel } from "@/components/import/import-card-art-panel"
+import { ImportStagingPanel, type ImportReviewPhase } from "@/components/import/import-staging-panel"
+import {
+  ImportSourceBulkActions,
+  type ImportSourceBulkAction,
+  type ImportSourceBulkTarget,
+} from "@/components/import/import-source-bulk-actions"
+import {
+  ImportAiSettings,
+  importAiRequestBody,
+  useImportAiSettings,
+} from "@/components/import/import-ai-settings"
+import { MainNav } from "@/components/main-nav"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  pageFloatingHintClass,
+} from "@/lib/compendium/editor-field-styles"
+import { SiteFooter } from "@/components/site-footer"
+import {
+  canUseClientByoImport,
+  canUseServerImport,
+  getStorageLabel,
+  isStaticDeploy,
+} from "@/lib/config/deploy-mode"
+import {
+  confirmClientByoJsonImport,
+  runClientByoJsonImport,
+  type ClientByoImportSuccessResult,
+} from "@/lib/import/client-byo-import"
+import { mergeImportedSpellSchools } from "@/lib/compendium/schools-of-magic"
+import { seedLocalSrd } from "@/lib/data/local-seed"
+import { seedLocalExamplePack } from "@/lib/data/local-seed-packs"
+import { invalidateBuilderCompendiumCache } from "@/lib/data/builder-compendium-cache"
+import { EXAMPLE_SEED_PACKS, type ExampleSeedPackId } from "@/lib/seed-packs/pack-ids"
+import type { ExampleSeedFileError } from "@/lib/seed-packs/seed-example-pack"
+import {
+  importDumpStatExportItemsLocal,
+  parseDumpStatExportJson,
+} from "@/lib/data/local-import"
+import {
+  Upload,
+  FileText,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  ClipboardPaste,
+  Info,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react"
+import type { ImportReport } from "@/lib/import/build-import-report"
+import type { ImportTokenSavingsReport } from "@/lib/import/import-route-utils"
+import type { ImportContent } from "@/lib/import/content-schema"
+import {
+  IMPORT_STAGE_CARD_ART_SECTIONS,
+  IMPORT_STAGE_COLLISION_KINDS,
+  IMPORT_STAGE_PREVIEW_KEYS,
+  importModifierMatchesStage,
+  type ImportStage,
+} from "@/lib/import/import-staging"
+import {
+  defaultProposalSelections,
+  type ImportProposalSelections,
+  type ImportProposalSet,
+} from "@/lib/import/import-proposals"
+import {
+  collisionRenamesResolved,
+  defaultCollisionResolutionMap,
+  defaultRenameMap,
+  importCollisionId,
+  importModifierMatchesSkippedCollision,
+  type ImportCollision,
+  type ImportCollisionResolutionMap,
+  type ImportRenameMap,
+} from "@/lib/import/import-collisions"
+import { FoundryImportGuidancePanel } from "@/components/import/foundry-import-guidance-panel"
+import type { FoundryManifestInfo } from "@/lib/import/foundry-types"
+import { readImportApiJson } from "@/lib/import/read-import-api-response"
+import { collectClassClaimCoverage } from "@/lib/import/feature-claims"
+import {
+  collectImportModifierReview,
+  collectUnresolvedImportMechanics,
+  removeImportModifierPreview,
+} from "@/lib/import/import-modifier-previews"
+import {
+  applyBackgroundFeatGrantNarrative,
+  collectBackgroundFeatGrantGaps,
+  type KnownFeat,
+} from "@/lib/import/collect-missing-background-feat-grants"
+import { createClient } from "@/lib/db/client"
+import {
+  buildInitialImportCardArtUrlMap,
+  mergeImportCardArtUrlMap,
+  collectImportCardArtTargets,
+  type ImportCardArtUrlMap,
+} from "@/lib/import/import-card-art"
+import {
+  collectImportContentPreview,
+  omitCollisionsForPreviewSkipKeys,
+  omitPreviewItemsBySkipKeys,
+  previewSkipKeysForSkippedCollisions,
+} from "@/lib/import/import-content-preview"
+import { isCardArtOnlyImport } from "@/lib/import/apply-card-art-import"
+import { useAppPresentationMode } from "@/components/settings/use-app-presentation-mode"
+import {
+  renameImportClassAtIndex,
+  renameImportSubclassAtIndex,
+} from "@/lib/import/rename-import-preview"
+import {
+  SPELLS_PDF_MAX_PAGES,
+  maxPdfPagesForContentTypeHint,
+  pageCountInRange,
+  validatePdfPageLimit,
+  validatePastedSourceTextLength,
+} from "@/lib/import/import-source-limits"
+
+type ImportStatus =
+  | "idle"
+  | "uploading"
+  | "processing"
+  | "review"
+  | "success"
+  | "partial"
+  | "error"
+type ImportTab = "clipboard" | "pdf" | "pack"
+
+const SERVER_IMPORT_TABS: { id: ImportTab; label: string; icon: typeof ClipboardPaste }[] = [
+  { id: "clipboard", label: "BYO LLM", icon: ClipboardPaste },
+  { id: "pdf", label: "PDF / JSON", icon: Upload },
+]
+
+const STATIC_IMPORT_TABS: { id: ImportTab; label: string; icon: typeof ClipboardPaste }[] = [
+  { id: "clipboard", label: "BYO LLM", icon: ClipboardPaste },
+  { id: "pack", label: "JSON pack", icon: Upload },
+]
+
+const IMPORT_TABS = canUseServerImport()
+  ? SERVER_IMPORT_TABS
+  : STATIC_IMPORT_TABS
+
+const BULK_COLLISION_KIND_BY_SECTION: Partial<Record<string, ImportCollision["kind"]>> = {
+  classes: "class",
+  feats: "feat",
+  species: "species",
+  spells: "spell",
+  backgrounds: "background",
+  abilities: "ability",
+  languages: "language",
+}
+
+const BULK_SKIPPABLE_SECTIONS = new Set([
+  "classes",
+  "species",
+  "backgrounds",
+  "subclasses",
+  "feats",
+  "creatures",
+  "spells",
+  "equipment",
+  "languages",
+])
+
+export default function ImportPage() {
+  const staticMode = isStaticDeploy()
+  const { isCompactOnly } = useAppPresentationMode()
+  const includeCardArt = !isCompactOnly
+  const [activeTab, setActiveTab] = useState<ImportTab>("clipboard")
+  const [pdfFile, setPdfFile] = useState<File | null>(null)
+  const [pdfContentType, setPdfContentType] = useState<"all" | "specific">("all")
+  const [pdfContentTypeHint, setPdfContentTypeHint] = useState("all")
+  const [pdfSpecificContent, setPdfSpecificContent] = useState("")
+  const [pdfPageScope, setPdfPageScope] = useState<"all" | "range">("all")
+  const [pdfPageStart, setPdfPageStart] = useState("")
+  const [pdfPageEnd, setPdfPageEnd] = useState("")
+  const [textContent, setTextContent] = useState("")
+  const [jsonImportText, setJsonImportText] = useState("")
+  const [textContentType, setTextContentType] = useState<string>("all")
+  const [importMaterialSource, setImportMaterialSource] = useState("")
+  const [customAbilityCategory, setCustomAbilityCategory] = useState("")
+  const [classResourceLabels, setClassResourceLabels] = useState("")
+  const [subclassMatch, setSubclassMatch] = useState<{
+    id: string
+    className: string
+  } | null>(null)
+  const [preferSameSourceReplacements, setPreferSameSourceReplacements] = useState(false)
+  const [pdfStatus, setPdfStatus] = useState<ImportStatus>("idle")
+  const [textStatus, setTextStatus] = useState<ImportStatus>("idle")
+  const [seedStatus, setSeedStatus] = useState<ImportStatus>("idle")
+  const [seedPackErrors, setSeedPackErrors] = useState<ExampleSeedFileError[]>([])
+  const [seedPackId, setSeedPackId] = useState<ExampleSeedPackId | null>(null)
+  const [packStatus, setPackStatus] = useState<ImportStatus>("idle")
+  const [packFile, setPackFile] = useState<File | null>(null)
+  const [message, setMessage] = useState("")
+  const [importReport, setImportReport] = useState<ImportReport | null>(null)
+  const [pendingImport, setPendingImport] = useState<{
+    content: ImportContent
+    proposals: ImportProposalSet
+    previewSummary: string
+    source: "pdf" | "text"
+    collisions: ImportCollision[]
+    stages: ImportStage[]
+    stagingSummary: string
+    tokenSavings?: ImportTokenSavingsReport
+    materialSource: string
+    preferSameSourceReplacements?: boolean
+  } | null>(null)
+  const [renameMap, setRenameMap] = useState<ImportRenameMap>({})
+  const [collisionResolutionMap, setCollisionResolutionMap] =
+    useState<ImportCollisionResolutionMap>({})
+  const [cardArtUrlMap, setCardArtUrlMap] = useState<ImportCardArtUrlMap>({})
+  const [previewSkipKeys, setPreviewSkipKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const [reviewStageIndex, setReviewStageIndex] = useState(0)
+  const [reviewPhase, setReviewPhase] = useState<ImportReviewPhase>("content")
+  const [importSourceOpen, setImportSourceOpen] = useState(true)
+  const [confirmingImport, setConfirmingImport] = useState(false)
+  const [proposalSelections, setProposalSelections] = useState<ImportProposalSelections>({
+    classResourceIds: [],
+    customAbilityIds: [],
+  })
+  const [fileInputKey, setFileInputKey] = useState(0)
+  const [showAiInfo, setShowAiInfo] = useState(false)
+  const [showSeedInfo, setShowSeedInfo] = useState(false)
+  const [importAiSettings, setImportAiSettings] = useImportAiSettings()
+  const [serverAiEnabled, setServerAiEnabled] = useState(false)
+  const [foundryGuidance, setFoundryGuidance] = useState<{
+    manifest?: FoundryManifestInfo | null
+    skippedPayload?: {
+      skipped?: { reason: string; count: number; examples: string[] }[]
+      review?: { label: string; detail: string; documentName?: string }[]
+    } | null
+  } | null>(null)
+  const reviewRef = useRef<HTMLDivElement>(null)
+  const reportRef = useRef<HTMLDivElement>(null)
+  const hadPendingImportRef = useRef(false)
+
+  const spellPdfMaxPages = maxPdfPagesForContentTypeHint(pdfContentTypeHint)
+
+  useEffect(() => {
+    if (spellPdfMaxPages != null) setPdfPageScope("range")
+  }, [spellPdfMaxPages])
+
+  const pdfSpellRangePageCount = useMemo(() => {
+    if (spellPdfMaxPages == null || pdfPageScope !== "range") return null
+    const start = parseInt(pdfPageStart, 10)
+    const end = parseInt(pdfPageEnd, 10)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) return null
+    return pageCountInRange(start, end)
+  }, [spellPdfMaxPages, pdfPageScope, pdfPageStart, pdfPageEnd])
+
+  const pdfSpellRangeOverLimit =
+    spellPdfMaxPages != null &&
+    pdfSpellRangePageCount != null &&
+    pdfSpellRangePageCount > spellPdfMaxPages
+
+  useEffect(() => {
+    if (!canUseServerImport()) return
+    let cancelled = false
+    fetch("/api/import/ai-config")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { configuredProviders?: string[] } | null) => {
+        if (!cancelled && data) {
+          setServerAiEnabled((data.configuredProviders?.length ?? 0) > 0)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const modifierReviewRows = useMemo(
+    () => (pendingImport ? collectImportModifierReview(pendingImport.content) : []),
+    [pendingImport],
+  )
+  const unresolvedMechanics = useMemo(
+    () => (pendingImport ? collectUnresolvedImportMechanics(pendingImport.content) : []),
+    [pendingImport],
+  )
+  const claimCoverage = useMemo(
+    () => (pendingImport ? collectClassClaimCoverage(pendingImport.content) : []),
+    [pendingImport],
+  )
+  const collisionSkipKeys = useMemo(() => {
+    if (!pendingImport) return new Set<string>()
+    return previewSkipKeysForSkippedCollisions(
+      pendingImport.content,
+      pendingImport.collisions,
+      collisionResolutionMap,
+    )
+  }, [collisionResolutionMap, pendingImport])
+  const effectivePreviewSkipKeys = useMemo(() => {
+    if (!collisionSkipKeys.size) return previewSkipKeys
+    const next = new Set(previewSkipKeys)
+    for (const key of collisionSkipKeys) next.add(key)
+    return next
+  }, [collisionSkipKeys, previewSkipKeys])
+  /** Collision-step skips only — keep content-step skips visible so they can be undone. */
+  const hiddenCollisionSkipKeys = useMemo(() => {
+    if (!collisionSkipKeys.size) return collisionSkipKeys
+    const hidden = new Set<string>()
+    for (const key of collisionSkipKeys) {
+      if (!previewSkipKeys.has(key)) hidden.add(key)
+    }
+    return hidden
+  }, [collisionSkipKeys, previewSkipKeys])
+  const chosenCollisions = useMemo(() => {
+    if (!pendingImport) return []
+    return omitCollisionsForPreviewSkipKeys(
+      pendingImport.content,
+      pendingImport.collisions,
+      previewSkipKeys,
+    )
+  }, [pendingImport, previewSkipKeys])
+  const visibleModifierReviewRows = useMemo(() => {
+    if (!pendingImport) return modifierReviewRows
+    return modifierReviewRows.filter(
+      (row) =>
+        !importModifierMatchesSkippedCollision(
+          row.sourceLabel,
+          pendingImport.collisions,
+          collisionResolutionMap,
+        ),
+    )
+  }, [collisionResolutionMap, modifierReviewRows, pendingImport])
+  const visibleUnresolvedMechanics = useMemo(() => {
+    if (!pendingImport) return unresolvedMechanics
+    return unresolvedMechanics.filter(
+      (entry) =>
+        !importModifierMatchesSkippedCollision(
+          entry.sourceLabel,
+          pendingImport.collisions,
+          collisionResolutionMap,
+        ),
+    )
+  }, [collisionResolutionMap, pendingImport, unresolvedMechanics])
+
+  const pendingBackgroundsGrantFeats = Boolean(
+    pendingImport?.content.backgrounds?.some((background) => background.feat_granted?.trim()),
+  )
+
+  const [libraryFeats, setLibraryFeats] = useState<KnownFeat[] | null>(null)
+  useEffect(() => {
+    if (!pendingBackgroundsGrantFeats) {
+      setLibraryFeats(null)
+      return
+    }
+    let cancelled = false
+    const db = createClient()
+    void (async () => {
+      try {
+        const { data } = await db.from("feats").select("name, category")
+        if (cancelled) return
+        const rows = (data as { name?: unknown; category?: unknown }[] | null) ?? []
+        setLibraryFeats(
+          rows
+            .map((row) => ({
+              name: String(row.name ?? ""),
+              category: typeof row.category === "string" ? row.category : null,
+            }))
+            .filter((row) => row.name),
+        )
+      } catch {
+        if (!cancelled) setLibraryFeats([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [pendingBackgroundsGrantFeats, pendingImport])
+
+  const backgroundFeatGaps = useMemo(() => {
+    if (!pendingImport || !pendingBackgroundsGrantFeats || libraryFeats === null) return []
+    return collectBackgroundFeatGrantGaps(pendingImport.content, libraryFeats)
+  }, [pendingImport, pendingBackgroundsGrantFeats, libraryFeats])
+
+  const backgroundFeatGateBlocking =
+    pendingBackgroundsGrantFeats && (libraryFeats === null || backgroundFeatGaps.length > 0)
+
+  const handleKeepFeatGrantsAsNarrative = () => {
+    if (!backgroundFeatGaps.length) return
+    const names = backgroundFeatGaps.map((gap) => gap.backgroundName)
+    setPendingImport((current) =>
+      current
+        ? { ...current, content: applyBackgroundFeatGrantNarrative(current.content, names) }
+        : null,
+    )
+  }
+
+  const isCardArtReview = Boolean(
+    pendingImport && isCardArtOnlyImport(pendingImport.content),
+  )
+  const stagedReview = Boolean(
+    pendingImport?.stagingSummary && pendingImport.stages.length > 0,
+  )
+  const activeReviewStage = stagedReview
+    ? pendingImport!.stages[
+        Math.min(Math.max(reviewStageIndex, 0), pendingImport!.stages.length - 1)
+      ]
+    : null
+
+  const stageModifierRows = useMemo(() => {
+    if (!activeReviewStage) return visibleModifierReviewRows
+    return visibleModifierReviewRows.filter((row) =>
+      importModifierMatchesStage(row.sourceLabel, activeReviewStage.id),
+    )
+  }, [visibleModifierReviewRows, activeReviewStage])
+  const stageUnresolvedMechanics = useMemo(() => {
+    if (!activeReviewStage) return visibleUnresolvedMechanics
+    return visibleUnresolvedMechanics.filter((entry) =>
+      importModifierMatchesStage(entry.sourceLabel, activeReviewStage.id),
+    )
+  }, [visibleUnresolvedMechanics, activeReviewStage])
+
+  const allCardArtTargets = useMemo(
+    () =>
+      pendingImport && includeCardArt
+        ? collectImportCardArtTargets(pendingImport.content, {
+            defaultSource: pendingImport.materialSource,
+            skippedKeys: effectivePreviewSkipKeys,
+          })
+        : [],
+    [includeCardArt, pendingImport, effectivePreviewSkipKeys],
+  )
+  const stageCardArtSections = activeReviewStage
+    ? IMPORT_STAGE_CARD_ART_SECTIONS[activeReviewStage.id]
+    : undefined
+  const stageHasModifiers =
+    stageModifierRows.length > 0 || stageUnresolvedMechanics.length > 0
+  const stageHasCardArt = Boolean(
+    includeCardArt &&
+      stageCardArtSections?.some((section) =>
+        allCardArtTargets.some((target) => target.section === section),
+      ),
+  )
+  const isLastReviewStage = stagedReview
+    ? reviewStageIndex >= pendingImport!.stages.length - 1
+    : true
+
+  const collisionsForStage = (stage: ImportStage | null | undefined) => {
+    if (!pendingImport) return []
+    if (!stage) return chosenCollisions
+    const kinds = new Set(IMPORT_STAGE_COLLISION_KINDS[stage.id])
+    return chosenCollisions.filter((collision) => kinds.has(collision.kind))
+  }
+
+  const stageCollisions = collisionsForStage(activeReviewStage)
+  const stageHasConflicts = stageCollisions.length > 0
+
+  const reviewPhasesForStage = (stage: ImportStage): ImportReviewPhase[] => {
+    const phases: ImportReviewPhase[] = ["content"]
+    if (collisionsForStage(stage).length > 0) phases.push("conflicts")
+    const hasCardArt =
+      includeCardArt &&
+      IMPORT_STAGE_CARD_ART_SECTIONS[stage.id].some((section) =>
+        allCardArtTargets.some((target) => target.section === section),
+      )
+    if (hasCardArt) phases.push("card-art")
+    if (
+      visibleModifierReviewRows.some((row) => importModifierMatchesStage(row.sourceLabel, stage.id)) ||
+      visibleUnresolvedMechanics.some((entry) =>
+        importModifierMatchesStage(entry.sourceLabel, stage.id),
+      )
+    ) {
+      phases.push("modifiers")
+    }
+    return phases
+  }
+  const firstReviewPhaseForStage = (stage: ImportStage): ImportReviewPhase =>
+    reviewPhasesForStage(stage)[0] ?? "content"
+  const activeReviewPhases = activeReviewStage
+    ? reviewPhasesForStage(activeReviewStage)
+    : (["content"] as ImportReviewPhase[])
+  const activeReviewPhaseIndex = activeReviewPhases.indexOf(reviewPhase)
+
+  const goPreviousReview = () => {
+    if (!stagedReview || !pendingImport) return
+    if (activeReviewPhaseIndex > 0) {
+      setReviewPhase(activeReviewPhases[activeReviewPhaseIndex - 1])
+      return
+    }
+    if (reviewStageIndex <= 0) return
+    const prevIndex = reviewStageIndex - 1
+    const prevStage = pendingImport.stages[prevIndex]
+    const previousPhases = reviewPhasesForStage(prevStage)
+    setReviewStageIndex(prevIndex)
+    setReviewPhase(previousPhases[previousPhases.length - 1])
+  }
+
+  const goNextReview = () => {
+    if (!stagedReview || !pendingImport) return
+    if (activeReviewPhaseIndex >= 0 && activeReviewPhaseIndex < activeReviewPhases.length - 1) {
+      setReviewPhase(activeReviewPhases[activeReviewPhaseIndex + 1])
+      return
+    }
+    if (isLastReviewStage) return
+    const nextIndex = reviewStageIndex + 1
+    const nextStage = pendingImport.stages[nextIndex]
+    setReviewStageIndex(nextIndex)
+    setReviewPhase(firstReviewPhaseForStage(nextStage))
+  }
+
+  const stageCollisionsResolved = collisionRenamesResolved(
+    stageCollisions,
+    collisionResolutionMap,
+    renameMap,
+  )
+  const allCollisionsResolved = pendingImport
+    ? collisionRenamesResolved(
+        chosenCollisions,
+        collisionResolutionMap,
+        renameMap,
+      )
+    : true
+  const reviewReadyToConfirm =
+    allCollisionsResolved &&
+    (!stagedReview ||
+      (isLastReviewStage && activeReviewPhaseIndex === activeReviewPhases.length - 1))
+
+  const canGoPreviousReview =
+    stagedReview && (activeReviewPhaseIndex > 0 || reviewStageIndex > 0)
+  const canGoNextReview =
+    stagedReview &&
+    (reviewPhase !== "conflicts" || stageCollisionsResolved) &&
+    (activeReviewPhaseIndex < activeReviewPhases.length - 1 || !isLastReviewStage)
+
+  const stagePreviewKeys = activeReviewStage
+    ? IMPORT_STAGE_PREVIEW_KEYS[activeReviewStage.id]
+    : undefined
+
+  const stageSkipAllTargets = useMemo(() => {
+    if (!pendingImport || reviewPhase !== "content") return []
+    const sections = omitPreviewItemsBySkipKeys(
+      collectImportContentPreview(
+        pendingImport.content,
+        stagePreviewKeys ? { sectionKeys: stagePreviewKeys } : undefined,
+      ),
+      hiddenCollisionSkipKeys,
+    )
+    return sections.flatMap((section) =>
+      section.items.map((item) => ({
+        sectionKey: item.sectionKey,
+        sourceIndex: item.sourceIndex,
+        name: item.name,
+      })),
+    )
+  }, [hiddenCollisionSkipKeys, pendingImport, reviewPhase, stagePreviewKeys])
+
+  const handlePreviewSkipKeysChange = (next: Set<string>) => {
+    setPreviewSkipKeys(next)
+    if (!next.size) return
+    setCardArtUrlMap((current) => {
+      let changed = false
+      const updated = { ...current }
+      for (const key of next) {
+        if (key in updated && updated[key]) {
+          updated[key] = ""
+          changed = true
+        }
+      }
+      return changed ? updated : current
+    })
+  }
+
+  const handleSourceBulkAction = (
+    _source: string,
+    targets: ImportSourceBulkTarget[],
+    action: ImportSourceBulkAction,
+  ) => {
+    if (!pendingImport) return
+
+    setPreviewSkipKeys((current) => {
+      const next = new Set(current)
+      for (const target of targets) {
+        if (!BULK_SKIPPABLE_SECTIONS.has(target.sectionKey)) continue
+        const key = `${target.sectionKey}:${target.sourceIndex}`
+        if (action === "skip") next.add(key)
+        else next.delete(key)
+      }
+      return next
+    })
+
+    if (action === "skip") {
+      setCardArtUrlMap((current) => {
+        let changed = false
+        const updated = { ...current }
+        for (const target of targets) {
+          const key = `${target.sectionKey}:${target.sourceIndex}`
+          if (key in updated && updated[key]) {
+            updated[key] = ""
+            changed = true
+          }
+        }
+        return changed ? updated : current
+      })
+    }
+
+    const collisionIds = new Set(
+      targets.flatMap((target) => {
+        const kind = BULK_COLLISION_KIND_BY_SECTION[target.sectionKey]
+        return kind ? [importCollisionId(kind, target.name)] : []
+      }),
+    )
+    if (!collisionIds.size) return
+    setCollisionResolutionMap((current) => {
+      const next = { ...current }
+      for (const collision of pendingImport.collisions) {
+        if (collisionIds.has(collision.id)) {
+          next[collision.id] = action
+        }
+      }
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!pendingImport?.proposals) {
+      setProposalSelections({ classResourceIds: [], customAbilityIds: [] })
+      return
+    }
+    setProposalSelections(defaultProposalSelections(pendingImport.proposals))
+  }, [pendingImport?.proposals])
+
+  useEffect(() => {
+    if (!stagedReview || !activeReviewPhases.length) return
+    if (!activeReviewPhases.includes(reviewPhase)) {
+      setReviewPhase(activeReviewPhases[0])
+    }
+  }, [activeReviewPhases, reviewPhase, stagedReview])
+
+  useEffect(() => {
+    if (!pendingImport) {
+      hadPendingImportRef.current = false
+      setCardArtUrlMap({})
+      setPreviewSkipKeys(new Set())
+      setReviewStageIndex(0)
+      setReviewPhase("content")
+      return
+    }
+
+    if (!hadPendingImportRef.current) {
+      hadPendingImportRef.current = true
+      setReviewStageIndex(0)
+      setReviewPhase(
+        pendingImport.stages[0]
+          ? firstReviewPhaseForStage(pendingImport.stages[0])
+          : "content",
+      )
+      setPreviewSkipKeys(new Set())
+      setCardArtUrlMap(
+        includeCardArt ? buildInitialImportCardArtUrlMap(pendingImport.content) : {},
+      )
+      return
+    }
+
+    setCardArtUrlMap((current) => {
+      if (!includeCardArt) return {}
+      return mergeImportCardArtUrlMap(
+        buildInitialImportCardArtUrlMap(pendingImport.content),
+        current,
+      )
+    })
+  }, [pendingImport, includeCardArt])
+
+  useEffect(() => {
+    if (!pendingImport) return
+    reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [pendingImport])
+
+  const isReviewingImport = Boolean(pendingImport)
+  useEffect(() => {
+    setImportSourceOpen(!isReviewingImport)
+  }, [isReviewingImport])
+
+  useEffect(() => {
+    if (!importReport) return
+    reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [importReport])
+
+  const handleRemoveModifierPreview = (previewId: string) => {
+    setPendingImport((current) =>
+      current
+        ? { ...current, content: removeImportModifierPreview(current.content, previewId) }
+        : null,
+    )
+  }
+
+  const handleRenameImportPreview = (
+    kind: "class" | "subclass",
+    sourceIndex: number,
+    nextName: string,
+  ) => {
+    if (kind === "subclass") {
+      setPendingImport((current) =>
+        current
+          ? {
+              ...current,
+              content: renameImportSubclassAtIndex(current.content, sourceIndex, nextName),
+            }
+          : null,
+      )
+      return
+    }
+
+    const oldName = pendingImport?.content.classes?.[sourceIndex]?.name
+    if (!oldName) return
+
+    setPendingImport((current) => {
+      if (!current) return null
+      const content = renameImportClassAtIndex(current.content, sourceIndex, nextName)
+      const newName = content.classes?.[sourceIndex]?.name
+      if (!newName || newName === oldName) return { ...current, content }
+
+      const newId = importCollisionId("class", newName)
+      const collisions = current.collisions.map((collision) => {
+        if (collision.kind !== "class" || collision.incomingName !== oldName) return collision
+        return { ...collision, id: newId, incomingName: newName }
+      })
+      return { ...current, content, collisions }
+    })
+
+    const oldId = importCollisionId("class", oldName)
+    const newId = importCollisionId("class", nextName.trim())
+    if (oldId === newId) return
+
+    setRenameMap((map) => {
+      if (!(oldId in map)) return map
+      const next = { ...map }
+      next[newId] = next[oldId]
+      delete next[oldId]
+      return next
+    })
+    setCollisionResolutionMap((map) => {
+      if (!(oldId in map)) return map
+      const next = { ...map }
+      next[newId] = next[oldId]
+      delete next[oldId]
+      return next
+    })
+  }
+
+  const resetImportForm = () => {
+    setPendingImport(null)
+    setRenameMap({})
+    setCollisionResolutionMap({})
+    setCardArtUrlMap({})
+    setPreviewSkipKeys(new Set())
+    setPdfFile(null)
+    setPackFile(null)
+    setPdfContentType("all")
+    setPdfContentTypeHint("all")
+    setPdfSpecificContent("")
+    setPdfPageScope("all")
+    setPdfPageStart("")
+    setPdfPageEnd("")
+    setTextContent("")
+    setJsonImportText("")
+    setTextContentType("all")
+    setFoundryGuidance(null)
+    setPdfStatus("idle")
+    setTextStatus("idle")
+    setFileInputKey((key) => key + 1)
+  }
+
+  const clearPendingImport = () => {
+    resetImportForm()
+  }
+
+  const formatImportError = (data: {
+    error?: string
+    code?: string
+    completedChunks?: number
+    totalChunks?: number
+    manifest?: FoundryManifestInfo
+    foundry?: {
+      skipped?: { reason: string; count: number; examples: string[] }[]
+      review?: { label: string; detail: string; documentName?: string }[]
+    }
+  }) => {
+    if (data.code === "foundry_manifest" && data.manifest) {
+      setFoundryGuidance({ manifest: data.manifest })
+    } else if (data.code === "foundry_no_importable" || data.code === "foundry_unsupported") {
+      setFoundryGuidance({ skippedPayload: data.foundry ?? null })
+    } else {
+      setFoundryGuidance(null)
+    }
+    let message = data.error || "Import failed"
+    if (data.completedChunks != null && data.totalChunks != null && data.totalChunks > 0) {
+      message += ` (${data.completedChunks}/${data.totalChunks} sections completed before failure)`
+    }
+    if (data.code === "quota_exceeded" || data.code === "rate_limit") {
+      message += " Try BYO LLM import, or a different server AI model."
+    }
+    return message
+  }
+
+  const applyImportSuccess = (
+    data: {
+      report?: ImportReport
+      breakdown?: Record<string, number>
+      count?: number
+      pagesParsed?: { from?: number; to?: number; total?: number }
+      discoveredSpellSchools?: string[]
+    } | ClientByoImportSuccessResult,
+  ) => {
+    const addedSchools =
+      "discoveredSpellSchools" in data && data.discoveredSpellSchools?.length
+        ? mergeImportedSpellSchools(data.discoveredSpellSchools)
+        : []
+    setImportReport(data.report ?? null)
+    const breakdownText = data.breakdown
+      ? Object.entries(data.breakdown)
+          .filter(([, count]) => (count as number) > 0)
+          .map(([type, count]) => `${count} ${type}`)
+          .join(", ")
+      : ""
+    const pagesText =
+      "pagesParsed" in data && data.pagesParsed?.from
+        ? ` (pages ${data.pagesParsed.from}–${data.pagesParsed.to} of ${data.pagesParsed.total})`
+        : ""
+    const schoolsText =
+      addedSchools.length > 0
+        ? ` Added school${addedSchools.length === 1 ? "" : "s"} of magic: ${addedSchools.join(", ")}.`
+        : ""
+    invalidateBuilderCompendiumCache()
+    setMessage(
+      (data.report?.headline ??
+        `Successfully imported ${data.count ?? 0} items${breakdownText ? `: ${breakdownText}` : ""}${pagesText}`) +
+        schoolsText,
+    )
+    resetImportForm()
+  }
+
+  const handleConfirmImport = async (selections: ImportProposalSelections) => {
+    if (!pendingImport) return
+
+    setConfirmingImport(true)
+    setMessage("")
+    setImportReport(null)
+
+    try {
+      if (staticMode) {
+        const data = await confirmClientByoJsonImport({
+          pendingContent: pendingImport.content,
+          selections,
+          materialSource: pendingImport.materialSource,
+          renameMap,
+          collisions: pendingImport.collisions,
+          collisionResolutionMap,
+          cardArtUrlMap: includeCardArt ? cardArtUrlMap : {},
+          preferSameSourceReplacements: Boolean(pendingImport.preferSameSourceReplacements),
+          skippedPreviewKeys: previewSkipKeys,
+        })
+        applyImportSuccess(data)
+        setTextStatus("success")
+        return
+      }
+
+      const response = await fetch("/api/import/text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmImport: true,
+          pendingContent: pendingImport.content,
+          proposalSelections: selections,
+          renameMap,
+          collisionResolutionMap,
+          collisions: pendingImport.collisions,
+          materialSource: pendingImport.materialSource,
+          cardArtUrlMap: includeCardArt ? cardArtUrlMap : {},
+          includeCardArt,
+          skippedPreviewKeys: [...previewSkipKeys],
+          preferSameSourceReplacements: Boolean(pendingImport.preferSameSourceReplacements),
+        }),
+      })
+
+      const parsed = await readImportApiJson(response)
+      if (!parsed.ok) {
+        if (pendingImport.source === "pdf") setPdfStatus("error")
+        else setTextStatus("error")
+        setMessage(parsed.message)
+        return
+      }
+      const data = parsed.data
+
+      if (response.ok) {
+        applyImportSuccess(data)
+      } else {
+        if (pendingImport.source === "pdf") setPdfStatus("error")
+        else setTextStatus("error")
+        setMessage(formatImportError(data))
+      }
+    } catch (err) {
+      if (pendingImport.source === "pdf") setPdfStatus("error")
+      else setTextStatus("error")
+      setMessage(err instanceof Error ? err.message : "Failed to complete import.")
+    } finally {
+      setConfirmingImport(false)
+    }
+  }
+
+  const handlePdfUpload = async () => {
+    if (!pdfFile) return
+
+    setPdfStatus("uploading")
+    setMessage("")
+    setImportReport(null)
+    setFoundryGuidance(null)
+    setPendingImport(null)
+
+    if (pdfPageScope === "range") {
+      const start = parseInt(pdfPageStart, 10)
+      const end = parseInt(pdfPageEnd, 10)
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        setPdfStatus("error")
+        setMessage("Enter a valid start and end page number.")
+        return
+      }
+      if (start < 1 || end < 1) {
+        setPdfStatus("error")
+        setMessage("Page numbers must be 1 or greater.")
+        return
+      }
+      if (start > end) {
+        setPdfStatus("error")
+        setMessage("Start page must be less than or equal to end page.")
+        return
+      }
+      const pageLimit = validatePdfPageLimit({
+        contentTypeHint: pdfContentTypeHint,
+        pageRange: { first: start, last: end },
+        totalPages: end,
+      })
+      if (!pageLimit.ok) {
+        setPdfStatus("error")
+        setMessage(pageLimit.message)
+        return
+      }
+    } else if (spellPdfMaxPages != null) {
+      setPdfStatus("error")
+      setMessage(
+        `Spell imports require a page range of at most ${spellPdfMaxPages} pages.`,
+      )
+      return
+    }
+
+    const formData = new FormData()
+    formData.append("pdf", pdfFile)
+    formData.append("contentType", pdfContentType)
+    formData.append("contentTypeHint", pdfContentTypeHint)
+    formData.append("pageScope", pdfPageScope)
+    if (pdfContentTypeHint === "subclasses" && subclassMatch) {
+      formData.append("subclassMatchClassName", subclassMatch.className)
+    }
+    if (pdfContentTypeHint === "classes" && preferSameSourceReplacements) {
+      formData.append("preferSameSourceReplacements", "true")
+    }
+    formData.append("materialSource", importMaterialSource)
+    if (pdfPageScope === "range") {
+      formData.append("pageStart", pdfPageStart)
+      formData.append("pageEnd", pdfPageEnd)
+    }
+    if (pdfContentType === "specific" && pdfSpecificContent) {
+      formData.append("specificContent", pdfSpecificContent)
+    }
+    const aiBody = importAiRequestBody(importAiSettings)
+    if (aiBody.aiProvider) formData.append("aiProvider", aiBody.aiProvider)
+    if (aiBody.aiModel) formData.append("aiModel", aiBody.aiModel)
+
+    try {
+      setPdfStatus("processing")
+      const response = await fetch("/api/import/pdf", {
+        method: "POST",
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        if (data.needsConfirmation) {
+          setPdfStatus("review")
+          const collisions = (data.collisions ?? []) as ImportCollision[]
+          setRenameMap(defaultRenameMap(collisions))
+          setCollisionResolutionMap(
+            defaultCollisionResolutionMap(collisions, data.pendingContent as ImportContent),
+          )
+          setPendingImport({
+            content: data.pendingContent as ImportContent,
+            proposals: data.proposals as ImportProposalSet,
+            previewSummary: (data.previewSummary as string) ?? "",
+            source: "pdf",
+            collisions,
+            stages: (data.stages ?? []) as ImportStage[],
+            stagingSummary: (data.stagingSummary as string) ?? "",
+            tokenSavings: data.tokenSavings as ImportTokenSavingsReport | undefined,
+            materialSource: importMaterialSource,
+            preferSameSourceReplacements:
+              pdfContentTypeHint === "classes" ? preferSameSourceReplacements : false,
+          })
+          setMessage("")
+          return
+        }
+        applyImportSuccess(data)
+      } else {
+        setPdfStatus("error")
+        setMessage(formatImportError(data))
+      }
+    } catch (err) {
+      setPdfStatus("error")
+      setMessage(err instanceof Error ? err.message : "Failed to upload file. Please try again.")
+    }
+  }
+
+  const submitTextImport = async (payload: {
+    text: string
+    importMode?: "byo-json" | "server-ai"
+  }) => {
+    setTextStatus("processing")
+    setMessage("")
+    setImportReport(null)
+    setFoundryGuidance(null)
+    setPendingImport(null)
+
+    const sameSourceOpt =
+      textContentType === "classes" ? preferSameSourceReplacements : false
+
+    try {
+      if (staticMode && payload.importMode === "byo-json") {
+        const data = await runClientByoJsonImport(payload.text, importMaterialSource, {
+          preferSameSourceReplacements: sameSourceOpt,
+        })
+        if ("needsConfirmation" in data && data.needsConfirmation) {
+          setTextStatus("review")
+          setRenameMap(defaultRenameMap(data.collisions))
+          setCollisionResolutionMap(
+            defaultCollisionResolutionMap(data.collisions, data.pendingContent),
+          )
+          setPendingImport({
+            content: data.pendingContent,
+            proposals: data.proposals,
+            previewSummary: data.previewSummary,
+            source: "text",
+            collisions: data.collisions,
+            stages: data.stages,
+            stagingSummary: data.stagingSummary,
+            materialSource: importMaterialSource,
+            preferSameSourceReplacements: sameSourceOpt,
+          })
+          setMessage("")
+          return
+        }
+        if ("success" in data) {
+          applyImportSuccess(data)
+        }
+        setTextStatus("success")
+        return
+      }
+
+      const response = await fetch("/api/import/text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: payload.text,
+          contentType: textContentType,
+          importMode: payload.importMode,
+          materialSource: importMaterialSource,
+          preferSameSourceReplacements: sameSourceOpt,
+          customAbilityCategory:
+            textContentType === "abilities" ? customAbilityCategory.trim() || undefined : undefined,
+          classResourceLabels:
+            textContentType === "abilities" ? classResourceLabels.trim() || undefined : undefined,
+          subclassMatchClassName:
+            textContentType === "subclasses" ? subclassMatch?.className : undefined,
+          ...(payload.importMode === "server-ai" ? importAiRequestBody(importAiSettings) : {}),
+        }),
+      })
+
+      const parsed = await readImportApiJson(response)
+      if (!parsed.ok) {
+        setTextStatus("error")
+        setMessage(parsed.message)
+        return
+      }
+      const data = parsed.data
+
+      if (response.ok) {
+        if (data.needsConfirmation) {
+          setTextStatus("review")
+          const collisions = (data.collisions ?? []) as ImportCollision[]
+          setRenameMap(defaultRenameMap(collisions))
+          setCollisionResolutionMap(
+            defaultCollisionResolutionMap(collisions, data.pendingContent as ImportContent),
+          )
+          setPendingImport({
+            content: data.pendingContent as ImportContent,
+            proposals: data.proposals as ImportProposalSet,
+            previewSummary: (data.previewSummary as string) ?? "",
+            source: "text",
+            collisions,
+            stages: (data.stages ?? []) as ImportStage[],
+            stagingSummary: (data.stagingSummary as string) ?? "",
+            tokenSavings: data.tokenSavings as ImportTokenSavingsReport | undefined,
+            materialSource: importMaterialSource,
+            preferSameSourceReplacements: sameSourceOpt,
+          })
+          const warning = typeof data.warning === "string" ? data.warning.trim() : ""
+          setMessage(warning)
+          return
+        }
+        applyImportSuccess(data)
+      } else {
+        setTextStatus("error")
+        setMessage(formatImportError(data))
+      }
+    } catch (err) {
+      setTextStatus("error")
+      setMessage(err instanceof Error ? err.message : "Failed to import text. Please try again.")
+    }
+  }
+
+  const handleJsonImport = () => {
+    if (!jsonImportText.trim()) return
+    void submitTextImport({ text: jsonImportText, importMode: "byo-json" })
+  }
+
+  const handleServerAiImport = () => {
+    if (!textContent.trim()) return
+    const sourceLimit = validatePastedSourceTextLength(textContent)
+    if (!sourceLimit.ok) {
+      setTextStatus("error")
+      setMessage(sourceLimit.message)
+      return
+    }
+    void submitTextImport({ text: textContent, importMode: "server-ai" })
+  }
+
+  const formatSeedBreakdown = (breakdown: Record<string, number> | undefined) =>
+    breakdown
+      ? ` (${Object.entries(breakdown)
+          .filter(([, n]) => (n as number) > 0)
+          .map(([k, n]) => `${n} ${k}`)
+          .join(", ")})`
+      : ""
+
+  const handleSeedSRD = async (): Promise<boolean> => {
+    setSeedStatus("processing")
+    setMessage("")
+
+    try {
+      if (staticMode) {
+        const data = await seedLocalSrd()
+        setSeedStatus("success")
+        setMessage(
+          `Loaded ${data.total} SRD items into ${getStorageLabel()}${formatSeedBreakdown(data.breakdown)}`,
+        )
+        return true
+      }
+
+      const response = await fetch("/api/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ includeCardArt }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        setSeedStatus("success")
+        setMessage(
+          `Successfully seeded ${data.total} SRD items${formatSeedBreakdown(data.breakdown)}`,
+        )
+        return true
+      } else {
+        setSeedStatus("error")
+        setMessage(data.error || "Failed to seed database")
+      }
+    } catch (err) {
+      setSeedStatus("error")
+      setMessage(err instanceof Error ? err.message : "Failed to seed database. Please try again.")
+    }
+    return false
+  }
+
+  const applySeedPackResult = (
+    packId: ExampleSeedPackId,
+    data: {
+      total?: number
+      label?: string
+      breakdown?: Record<string, number>
+      errors?: ExampleSeedFileError[]
+      partial?: boolean
+      filesSucceeded?: number
+      filesAttempted?: number
+      error?: string
+    },
+    storageSuffix: string,
+  ) => {
+    const errors = Array.isArray(data.errors) ? data.errors : []
+    setSeedPackId(packId)
+    setSeedPackErrors(errors)
+    const label = data.label ?? packId
+    const breakdown = formatSeedBreakdown(data.breakdown)
+    if (errors.length === 0) {
+      setSeedStatus("success")
+      setMessage(`Loaded ${data.total ?? 0} items${storageSuffix}${breakdown}`)
+      return
+    }
+    if ((data.filesSucceeded ?? 0) > 0 || data.partial) {
+      setSeedStatus("partial")
+      setMessage(
+        `Partially loaded ${data.total ?? 0} ${label} items (${data.filesSucceeded ?? 0}/${data.filesAttempted ?? "?"} files)${storageSuffix}${breakdown}. ${errors.length} file(s) failed — retry or dismiss below.`,
+      )
+      return
+    }
+    setSeedStatus("error")
+    setMessage(data.error || errors.map((e) => `${e.fileLabel}: ${e.message}`).join("\n"))
+  }
+
+  const handleSeedExamplePack = async (
+    packId: ExampleSeedPackId,
+    onlyFileIndexes?: number[],
+  ): Promise<boolean> => {
+    setSeedStatus("processing")
+    setMessage("")
+    if (!onlyFileIndexes?.length) {
+      setSeedPackErrors([])
+      setSeedPackId(packId)
+    }
+
+    try {
+      if (staticMode) {
+        const data = await seedLocalExamplePack(packId, { onlyFileIndexes })
+        applySeedPackResult(packId, data, ` into ${getStorageLabel()}`)
+        return !(data.errors?.length)
+      }
+
+      const response = await fetch("/api/seed/packs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packId, includeCardArt, onlyFileIndexes }),
+      })
+      const data = await response.json()
+
+      if (response.ok || (Array.isArray(data.errors) && data.errors.length > 0)) {
+        applySeedPackResult(packId, data, "")
+        return response.ok && !data.errors?.length
+      } else {
+        setSeedStatus("error")
+        setSeedPackErrors([])
+        setMessage(data.error || "Failed to seed example pack")
+      }
+    } catch (err) {
+      setSeedStatus("error")
+      setSeedPackErrors([])
+      setMessage(err instanceof Error ? err.message : "Failed to seed example pack. Please try again.")
+    }
+    return false
+  }
+
+  const handleJsonPackImport = async () => {
+    if (!packFile) return
+    setPackStatus("processing")
+    setMessage("")
+
+    try {
+      const raw = await packFile.text()
+      const items = parseDumpStatExportJson(raw)
+      if (!items?.length) {
+        setPackStatus("error")
+        setMessage("Invalid Dump Stat JSON export file.")
+        return
+      }
+      const data = await importDumpStatExportItemsLocal(items)
+      setPackStatus("success")
+      const breakdownText = Object.entries(data.breakdown)
+        .filter(([, count]) => count > 0)
+        .map(([type, count]) => `${count} ${type}`)
+        .join(", ")
+      setMessage(
+        `Imported ${data.count} items${breakdownText ? `: ${breakdownText}` : ""} into ${getStorageLabel()}`,
+      )
+    } catch (err) {
+      setPackStatus("error")
+      setMessage(err instanceof Error ? err.message : "Failed to import JSON pack.")
+    }
+  }
+
+  const getStatusIcon = (status: ImportStatus) => {
+    switch (status) {
+      case "processing":
+      case "uploading":
+        return <Loader2 className="w-5 h-5 animate-spin" />
+      case "review":
+        return <Info className="w-5 h-5 text-primary" />
+      case "success":
+        return <CheckCircle className="w-5 h-5 text-success" />
+      case "partial":
+        return <AlertCircle className="w-5 h-5 text-orange" />
+      case "error":
+        return <AlertCircle className="w-5 h-5 text-destructive" />
+      default:
+        return null
+    }
+  }
+
+  const isSuccessMessage =
+    pdfStatus === "success" ||
+    seedStatus === "success" ||
+    textStatus === "success" ||
+    packStatus === "success"
+
+  const isPartialMessage = seedStatus === "partial"
+
+  const isReviewMessage = pdfStatus === "review" || textStatus === "review"
+
+  const SRD_SEED_DESCRIPTION = staticMode
+    ? "Load or reset the bundled SRD 5.2.1 into browser storage (IndexedDB). First visit auto-seeds; use this button to reload after clearing data."
+    : "Populate your database with bundled SRD 5.2.1 content: 12 classes, 12 subclasses, 9 species, backgrounds, 340 spells, 17 feats, and 100+ equipment entries (parsed from the SRD, not a hand-picked sample)."
+
+  const EXAMPLE_CONTENT_INFO = staticMode
+    ? "Load a bundled example content pack into browser storage (IndexedDB). More packs beyond the free SRD will show up here over time."
+    : "Populate your database with a bundled example content pack. More packs beyond the free SRD will show up here over time."
+
+  return (
+    <div id="import-root" className="min-h-screen bg-background flex flex-col">
+      <MainNav />
+      <FirstVisitContentPicker importContent={(id) => id === "srd" ? handleSeedSRD() : handleSeedExamplePack(id)} />
+
+      <main id="import-main" className="relative mx-auto w-full max-w-4xl px-4 py-8">
+        {/* SRD quickseed — upper right (in-flow on mobile, floating on sm+) */}
+        <div className="flex justify-end mb-4 sm:mb-0 sm:absolute sm:top-8 sm:right-4 z-20">
+          <div className="relative">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={seedStatus === "processing"}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl font-bold text-sm shadow-lg hover:bg-primary/90 transition-colors disabled:opacity-50 whitespace-nowrap"
+                >
+                  {getStatusIcon(seedStatus)}
+                  <span className="hidden sm:inline">
+                    {seedStatus === "processing"
+                      ? "Seeding..."
+                      : staticMode
+                        ? "Load Example Content"
+                        : "Seed Example Content"}
+                  </span>
+                  <span className="sm:hidden">
+                    {seedStatus === "processing" ? "Seeding..." : "Examples"}
+                  </span>
+                  {seedStatus !== "processing" && <ChevronDown className="w-3.5 h-3.5 opacity-70" />}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80">
+                <DropdownMenuLabel>Example content packs</DropdownMenuLabel>
+                <DropdownMenuItem
+                  onSelect={() => void handleSeedSRD()}
+                  disabled={seedStatus === "processing"}
+                  className="flex flex-col items-start gap-0.5 py-2 cursor-pointer"
+                >
+                  <span className="font-semibold">SRD 5.2.1</span>
+                  <span className="text-xs text-muted-foreground leading-snug">
+                    Free 5e SRD content: 12 classes, 12 subclasses, 9 species, spells, feats & equipment.
+                  </span>
+                </DropdownMenuItem>
+                {EXAMPLE_SEED_PACKS.map((pack) => (
+                  <DropdownMenuItem
+                    key={pack.id}
+                    onSelect={() => void handleSeedExamplePack(pack.id)}
+                    disabled={seedStatus === "processing"}
+                    className="flex flex-col items-start gap-0.5 py-2 cursor-pointer"
+                  >
+                    <span className="font-semibold">{pack.label}</span>
+                    <span className="text-xs text-muted-foreground leading-snug">{pack.description}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <button
+              type="button"
+              aria-label="About example content"
+              aria-expanded={showSeedInfo}
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowSeedInfo((open) => !open)
+              }}
+              className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-primary/30 bg-background text-primary shadow-sm hover:bg-muted transition-colors"
+            >
+              <Info className="w-3 h-3" />
+            </button>
+            <AnimatePresence>
+              {showSeedInfo && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute top-full right-0 mt-2 w-72 sm:w-80 p-4 rounded-xl border border-primary/20 bg-card shadow-xl z-30"
+                >
+                  <p className="text-xs font-bold uppercase tracking-wide text-primary mb-1.5">
+                    Example content
+                  </p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{EXAMPLE_CONTENT_INFO}</p>
+                  <p className="text-xs text-muted-foreground/80 leading-relaxed mt-2">{SRD_SEED_DESCRIPTION}</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        <div id="import-header" className="mb-8 sm:pr-56">
+          <h1 className="text-4xl font-black text-foreground">Import Content</h1>
+          {staticMode && (
+            <p className={`${pageFloatingHintClass} mt-2`}>
+              Storage: {getStorageLabel()}. PDF and server AI import require a hosted deployment with
+              MySQL. The BYO LLM tab uses the same prompt → paste workflow as the hosted app.
+            </p>
+          )}
+        </div>
+
+        {foundryGuidance ? (
+          <div className="mb-6">
+            <FoundryImportGuidancePanel
+              manifest={foundryGuidance.manifest}
+              skippedPayload={foundryGuidance.skippedPayload ?? undefined}
+            />
+          </div>
+        ) : null}
+
+        {message && !importReport && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`p-4 rounded-xl mb-6 ${
+              isSuccessMessage
+                ? "bg-success/10 text-success border border-success/20"
+                : isPartialMessage
+                  ? "bg-orange/10 text-foreground border border-orange/30"
+                  : isReviewMessage
+                    ? "bg-primary/10 text-foreground border border-primary/20"
+                    : "bg-destructive/10 text-destructive border border-destructive/20"
+            }`}
+          >
+            <div className="whitespace-pre-wrap">{message}</div>
+            {seedPackErrors.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <ul className="list-disc pl-5 text-sm space-y-1">
+                  {seedPackErrors.map((err) => (
+                    <li key={`${err.fileIndex}-${err.fileLabel}`}>
+                      <span className="font-semibold">{err.fileLabel}:</span> {err.message}
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {seedPackId && (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold hover:bg-muted"
+                      onClick={() =>
+                        void handleSeedExamplePack(
+                          seedPackId,
+                          seedPackErrors.map((e) => e.fileIndex),
+                        )
+                      }
+                      disabled={seedStatus === "processing"}
+                    >
+                      Retry failed files
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold hover:bg-muted"
+                    onClick={() => {
+                      setSeedPackErrors([])
+                      if (seedStatus === "partial" || seedStatus === "error") {
+                        setSeedStatus(seedStatus === "partial" ? "success" : "idle")
+                        if (seedStatus === "error") setMessage("")
+                      }
+                    }}
+                  >
+                    Dismiss errors
+                  </button>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {pendingImport && (
+          <motion.div
+            id="import-review"
+            ref={reviewRef}
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 w-full scroll-mt-24 space-y-4"
+          >
+            {pendingImport.tokenSavings ? (
+              <ImportTokenSavingsSummary savings={pendingImport.tokenSavings} />
+            ) : null}
+            {stagedReview && pendingImport.stagingSummary ? (
+              <ImportStagingPanel
+                stages={pendingImport.stages}
+                summary={pendingImport.stagingSummary}
+                activeIndex={reviewStageIndex}
+                phase={reviewPhase}
+                hasConflicts={stageHasConflicts}
+                hasCardArt={stageHasCardArt}
+                hasModifiers={stageHasModifiers}
+                onNext={goNextReview}
+                canNext={canGoNextReview}
+                onBack={goPreviousReview}
+                canBack={Boolean(canGoPreviousReview)}
+                toolbarMid={
+                  reviewPhase === "content" && !isCardArtReview && stageSkipAllTargets.length > 0 ? (
+                    <ImportSourceBulkActions
+                      source={pendingImport.materialSource}
+                      targets={stageSkipAllTargets}
+                      onAction={handleSourceBulkAction}
+                      actions={["skip"]}
+                    />
+                  ) : undefined
+                }
+                footerEnd={
+                  reviewReadyToConfirm && !backgroundFeatGateBlocking ? (
+                    <ImportConfirmActions
+                      compact
+                      confirming={confirmingImport}
+                      onCancel={clearPendingImport}
+                      onConfirm={() => void handleConfirmImport(proposalSelections)}
+                    />
+                  ) : undefined
+                }
+                conflictsChildren={
+                  <ImportCollisionPanel
+                    key={`collisions-${activeReviewStage?.id ?? "all"}`}
+                    collisions={stageCollisions}
+                    value={renameMap}
+                    onChange={setRenameMap}
+                    resolutionMap={collisionResolutionMap}
+                    onResolutionChange={setCollisionResolutionMap}
+                    variant={isCardArtReview ? "card-art" : "default"}
+                  />
+                }
+                contentChildren={
+                  <ImportContentPreviewPanel
+                    key={`preview-${activeReviewStage?.id ?? "all"}`}
+                    content={pendingImport.content}
+                    previewSummary={pendingImport.previewSummary}
+                    defaultSource={pendingImport.materialSource}
+                    sectionKeys={stagePreviewKeys}
+                    hideSummary
+                    embedded
+                    showModifierReviewHint={stageHasModifiers}
+                    onRenameItem={isCardArtReview ? undefined : handleRenameImportPreview}
+                    skippedKeys={previewSkipKeys}
+                    hiddenKeys={hiddenCollisionSkipKeys}
+                    onSkippedKeysChange={isCardArtReview ? undefined : handlePreviewSkipKeysChange}
+                    onSourceBulkAction={isCardArtReview ? undefined : handleSourceBulkAction}
+                  />
+                }
+                cardArtChildren={
+                  stageHasCardArt ? (
+                    <ImportCardArtPanel
+                      key={`card-art-${activeReviewStage?.id ?? "all"}`}
+                      content={pendingImport.content}
+                      value={cardArtUrlMap}
+                      onChange={setCardArtUrlMap}
+                      sections={stageCardArtSections}
+                      defaultSource={pendingImport.materialSource}
+                      skippedKeys={effectivePreviewSkipKeys}
+                      embedded
+                      onSourceBulkAction={handleSourceBulkAction}
+                    />
+                  ) : null
+                }
+                modifiersChildren={
+                  stageHasModifiers ? (
+                    <>
+                      <ImportModifierReviewPanel
+                        key={`modifiers-${activeReviewStage?.id ?? "all"}`}
+                        rows={stageModifierRows}
+                        unresolved={stageUnresolvedMechanics}
+                        onRemoveModifier={handleRemoveModifierPreview}
+                        variant="review"
+                        embedded
+                      />
+                      {claimCoverage.length > 0 ? (
+                        <ImportClaimCoveragePanel reports={claimCoverage} embedded />
+                      ) : null}
+                    </>
+                  ) : null
+                }
+              />
+            ) : (
+              <>
+                <ImportContentPreviewPanel
+                  content={pendingImport.content}
+                  previewSummary={pendingImport.previewSummary}
+                  defaultSource={pendingImport.materialSource}
+                  showModifierReviewHint={
+                    visibleModifierReviewRows.length > 0 || visibleUnresolvedMechanics.length > 0
+                  }
+                  cardArtUrls={includeCardArt ? cardArtUrlMap : undefined}
+                  onCardArtChange={includeCardArt ? setCardArtUrlMap : undefined}
+                  onRenameItem={isCardArtReview ? undefined : handleRenameImportPreview}
+                  skippedKeys={previewSkipKeys}
+                  hiddenKeys={hiddenCollisionSkipKeys}
+                  onSkippedKeysChange={isCardArtReview ? undefined : handlePreviewSkipKeysChange}
+                  onSourceBulkAction={isCardArtReview ? undefined : handleSourceBulkAction}
+                />
+                <ImportCollisionPanel
+                  collisions={stageCollisions}
+                  value={renameMap}
+                  onChange={setRenameMap}
+                  resolutionMap={collisionResolutionMap}
+                  onResolutionChange={setCollisionResolutionMap}
+                  variant={isCardArtReview ? "card-art" : "default"}
+                />
+                {visibleModifierReviewRows.length > 0 || visibleUnresolvedMechanics.length > 0 ? (
+                  <ImportModifierReviewPanel
+                    rows={visibleModifierReviewRows}
+                    unresolved={visibleUnresolvedMechanics}
+                    onRemoveModifier={handleRemoveModifierPreview}
+                    variant="review"
+                  />
+                ) : null}
+                {claimCoverage.length > 0 ? (
+                  <ImportClaimCoveragePanel reports={claimCoverage} />
+                ) : null}
+                {includeCardArt ? (
+                  <ImportCardArtPanel
+                    content={pendingImport.content}
+                    value={cardArtUrlMap}
+                    onChange={setCardArtUrlMap}
+                    excludeSections={["classes", "subclasses"]}
+                    skippedKeys={effectivePreviewSkipKeys}
+                  />
+                ) : null}
+              </>
+            )}
+            {backgroundFeatGaps.length > 0 ? (
+              <ImportBackgroundFeatGapPanel
+                gaps={backgroundFeatGaps}
+                onKeepAsNarrative={handleKeepFeatGrantsAsNarrative}
+                onCancelImport={clearPendingImport}
+              />
+            ) : null}
+            {reviewReadyToConfirm && !backgroundFeatGateBlocking ? (
+              <ImportProposalPanel
+                proposals={pendingImport.proposals}
+                confirming={confirmingImport}
+                onConfirm={handleConfirmImport}
+                onCancel={clearPendingImport}
+                hideActions={Boolean(stagedReview)}
+                selections={proposalSelections}
+                onSelectionsChange={setProposalSelections}
+              />
+            ) : null}
+          </motion.div>
+        )}
+
+        {importReport && (
+          <motion.div
+            id="import-report"
+            ref={reportRef}
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 scroll-mt-24"
+          >
+            <ImportReportPanel
+              report={importReport}
+              onDismiss={() => setImportReport(null)}
+            />
+          </motion.div>
+        )}
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-card/75 backdrop-blur rounded-2xl border-2 border-border overflow-hidden"
+        >
+          {isReviewingImport ? (
+            <button
+              type="button"
+              onClick={() => setImportSourceOpen((open) => !open)}
+              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-muted/30 transition-colors"
+              aria-expanded={importSourceOpen}
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-foreground">Import source</p>
+                <p className="text-xs text-muted-foreground">
+                  {importSourceOpen
+                    ? "Hide BYO LLM / PDF tools while reviewing"
+                    : "Collapsed while you review — expand to change source or start over"}
+                </p>
+              </div>
+              {importSourceOpen ? (
+                <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+            </button>
+          ) : null}
+
+          {(!isReviewingImport || importSourceOpen) && (
+            <>
+              {/* Tab bar */}
+              <div
+                role="tablist"
+                aria-label="Import source"
+                className={`flex gap-1 p-2 bg-muted/40 ${isReviewingImport ? "border-t border-border" : ""} border-b border-border`}
+              >
+                {IMPORT_TABS.map((tab) => {
+                  const Icon = tab.icon
+                  const isActive = activeTab === tab.id
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`flex flex-1 sm:flex-none items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition-colors ${
+                        isActive
+                          ? "bg-background text-foreground shadow-sm border border-border/60"
+                          : "text-muted-foreground hover:text-foreground hover:bg-background/60"
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? "text-primary" : ""}`} />
+                      {tab.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="p-6">
+                <AnimatePresence mode="wait">
+                  {activeTab === "pack" && (
+                    <motion.div
+                      key="pack"
+                      role="tabpanel"
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  <p className="text-muted-foreground mb-4">
+                    Upload a Dump Stat JSON export (single item or bulk section export from the compendium).
+                    Use compendium export buttons to share content packs between devices.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <label className="flex-1">
+                      <input
+                        key={`pack-file-${fileInputKey}`}
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={(e) => setPackFile(e.target.files?.[0] || null)}
+                        className="hidden"
+                      />
+                      <div className="flex items-center justify-center gap-2 px-4 py-3 bg-primary/10 border border-primary/20 rounded-xl cursor-pointer hover:bg-primary/15 transition-colors">
+                        <Upload className="w-5 h-5 text-primary" />
+                        <span className="font-medium truncate">
+                          {packFile ? packFile.name : "Choose JSON pack..."}
+                        </span>
+                      </div>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleJsonPackImport}
+                      disabled={!packFile || packStatus === "processing"}
+                      className="flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:bg-primary/90 transition-colors disabled:opacity-50"
+                    >
+                      {getStatusIcon(packStatus)}
+                      {packStatus === "processing" ? "Importing..." : "Import pack"}
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
+              {(canUseServerImport() || canUseClientByoImport()) && activeTab === "clipboard" && (
+                <motion.div
+                  key="clipboard"
+                  role="tabpanel"
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  {staticMode ? (
+                    <p className="text-muted-foreground mb-4">
+                      Same workflow as the hosted app: set defaults, copy the extraction prompt into
+                      your own LLM, then paste the structured JSON below. Content saves to{" "}
+                      {getStorageLabel()} — no API keys required.
+                    </p>
+                  ) : (
+                    <p className="text-muted-foreground mb-4">
+                      Copy an extraction prompt into your own LLM (or use server AI when configured),
+                      then paste structured JSON to review and import.
+                    </p>
+                  )}
+                  <ClipboardImportPanel
+                    contentType={textContentType}
+                    onContentTypeChange={setTextContentType}
+                    materialSource={importMaterialSource}
+                    onMaterialSourceChange={setImportMaterialSource}
+                    customAbilityCategory={customAbilityCategory}
+                    onCustomAbilityCategoryChange={setCustomAbilityCategory}
+                    classResourceLabels={classResourceLabels}
+                    onClassResourceLabelsChange={setClassResourceLabels}
+                    subclassMatch={subclassMatch}
+                    onSubclassMatchChange={setSubclassMatch}
+                    preferSameSourceReplacements={preferSameSourceReplacements}
+                    onPreferSameSourceReplacementsChange={setPreferSameSourceReplacements}
+                    sourceText={textContent}
+                    onSourceTextChange={setTextContent}
+                    jsonText={jsonImportText}
+                    onJsonTextChange={setJsonImportText}
+                    status={textStatus}
+                    serverAiEnabled={!staticMode && serverAiEnabled}
+                    importAiSettings={importAiSettings}
+                    onImportAiSettingsChange={setImportAiSettings}
+                    onImportJson={handleJsonImport}
+                    onServerAiImport={
+                      !staticMode && serverAiEnabled ? handleServerAiImport : undefined
+                    }
+                  />
+                </motion.div>
+              )}
+
+              {canUseServerImport() && activeTab === "pdf" && (
+                <motion.div
+                  key="pdf"
+                  role="tabpanel"
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  transition={{ duration: 0.15 }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <p className="text-muted-foreground flex-1">
+                      Upload a Dump Stat JSON export or a Foundry VTT dnd5e item export directly, or
+                      extract text from a PDF when server AI is configured. For PDF homebrew without
+                      server keys, use the BYO LLM tab with your own LLM.
+                    </p>
+                    {serverAiEnabled ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowAiInfo(!showAiInfo)}
+                        className="p-1.5 text-muted-foreground hover:text-orange transition-colors shrink-0"
+                        title="How does server AI processing work?"
+                      >
+                        <Info className="w-4 h-4" />
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {!serverAiEnabled ? (
+                    <div className="mb-4 rounded-xl border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                      Server AI is not configured on this host. Upload{" "}
+                      <code className="text-xs">.json</code> export files here, or use{" "}
+                      <strong className="font-medium text-foreground">BYO LLM</strong> to extract PDF
+                      text elsewhere and paste structured JSON.
+                    </div>
+                  ) : null}
+
+                  {serverAiEnabled && showAiInfo && (
+                    <div className="mb-4 p-4 bg-orange/10 rounded-xl border border-orange/20">
+                      <h3 className="font-bold text-orange mb-2">How AI Processing Works</h3>
+                      <p className="text-sm text-muted-foreground mb-2">
+                        PDF and text imports use an AI model (OpenAI, Anthropic, or Google Gemini) to
+                        parse and structure D&D content. Set one API key on the server:{" "}
+                        <code className="text-xs">OPENAI_API_KEY</code>,{" "}
+                        <code className="text-xs">ANTHROPIC_API_KEY</code>, or{" "}
+                        <code className="text-xs">GOOGLE_GENERATIVE_AI_API_KEY</code>.
+                      </p>
+                      <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                        <li>Keys stay on the server — never in the browser</li>
+                        <li>Optional: <code className="text-xs">IMPORT_AI_PROVIDER</code> (openai, anthropic, google)</li>
+                        <li>GPT-4o mini is the recommended low-cost default; override via Import settings or <code className="text-xs">IMPORT_AI_MODEL</code></li>
+                        <li>Extracts classes, species, spells, feats, equipment, and more</li>
+                        <li>Understands D&D 2024 rules (species vs race, background bonuses)</li>
+                        <li>Large PDFs are processed in multiple sections automatically (no 50k truncation)</li>
+                        <li>Optionally import only a specific page range (e.g. pages 12–24)</li>
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <ImportWorkflowGuidancePanel />
+
+                    {serverAiEnabled ? (
+                      <ImportAiSettings value={importAiSettings} onChange={setImportAiSettings} />
+                    ) : null}
+
+                    <ImportContentTypeHintSelect
+                      value={pdfContentTypeHint}
+                      onChange={setPdfContentTypeHint}
+                      focusRingClassName="focus:ring-orange"
+                    />
+                    {pdfContentTypeHint === "subclasses" ? (
+                      <ImportSubclassMatchSelect
+                        value={subclassMatch}
+                        onChange={setSubclassMatch}
+                        focusRingClassName="focus:ring-orange"
+                        enabled
+                      />
+                    ) : null}
+                    {pdfContentTypeHint === "classes" ? (
+                      <label className="inline-flex items-start gap-2 max-w-lg text-sm text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={preferSameSourceReplacements}
+                          onChange={(event) => setPreferSameSourceReplacements(event.target.checked)}
+                          className="mt-0.5 rounded border-border text-orange focus:ring-orange"
+                        />
+                        <span>
+                          Has replacements for other SRD content, such as spells or feats
+                          <span className="block text-xs text-muted-foreground/80 mt-0.5">
+                            Prefer matching spells and feats from the import Source over base SRD
+                            entries with the same name.
+                          </span>
+                        </span>
+                      </label>
+                    ) : null}
+
+                    <div className="flex flex-wrap gap-4 items-center">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="pdfContentType"
+                          checked={pdfContentType === "all"}
+                          onChange={() => setPdfContentType("all")}
+                          className="w-4 h-4 accent-orange"
+                        />
+                        <span className="text-sm text-foreground">Extract all content</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="pdfContentType"
+                          checked={pdfContentType === "specific"}
+                          onChange={() => setPdfContentType("specific")}
+                          className="w-4 h-4 accent-orange"
+                        />
+                        <span className="text-sm text-foreground">Specific content only</span>
+                      </label>
+                    </div>
+
+                    {pdfContentType === "specific" && (
+                      <input
+                        type="text"
+                        placeholder="e.g., Fighter class features, Fireball spell, Elf species..."
+                        value={pdfSpecificContent}
+                        onChange={(e) => setPdfSpecificContent(e.target.value)}
+                        className="w-full px-4 py-2 bg-muted rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-orange text-sm"
+                      />
+                    )}
+
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-orange/80">Pages to import</p>
+                      <div className="flex flex-wrap gap-4 items-center">
+                        <label
+                          className={`flex items-center gap-2 ${spellPdfMaxPages != null ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+                        >
+                          <input
+                            type="radio"
+                            name="pdfPageScope"
+                            checked={pdfPageScope === "all"}
+                            disabled={spellPdfMaxPages != null}
+                            onChange={() => setPdfPageScope("all")}
+                            className="w-4 h-4 accent-orange"
+                          />
+                          <span className="text-sm text-foreground">All pages</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="pdfPageScope"
+                            checked={pdfPageScope === "range"}
+                            onChange={() => setPdfPageScope("range")}
+                            className="w-4 h-4 accent-orange"
+                          />
+                          <span className="text-sm text-foreground">Page range</span>
+                        </label>
+                      </div>
+                      {pdfPageScope === "range" && (
+                        <div className="flex flex-wrap items-center gap-3">
+                          <label className="flex items-center gap-2 text-sm text-foreground">
+                            From
+                            <input
+                              type="number"
+                              min={1}
+                              placeholder="1"
+                              value={pdfPageStart}
+                              onChange={(e) => setPdfPageStart(e.target.value)}
+                              className="w-24 px-3 py-2 bg-muted rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-orange"
+                            />
+                          </label>
+                          <label className="flex items-center gap-2 text-sm text-foreground">
+                            To
+                            <input
+                              type="number"
+                              min={1}
+                              placeholder={spellPdfMaxPages != null ? String(spellPdfMaxPages) : "10"}
+                              value={pdfPageEnd}
+                              onChange={(e) => setPdfPageEnd(e.target.value)}
+                              className="w-24 px-3 py-2 bg-muted rounded-xl text-foreground focus:outline-none focus:ring-2 focus:ring-orange"
+                            />
+                          </label>
+                          <span className="text-xs text-muted-foreground">1-based page numbers</span>
+                        </div>
+                      )}
+                      {spellPdfMaxPages != null ? (
+                        <p className="text-xs text-muted-foreground">
+                          Spell imports are limited to {SPELLS_PDF_MAX_PAGES} pages per pass
+                          {pdfSpellRangeOverLimit && pdfSpellRangePageCount != null
+                            ? ` — current range is ${pdfSpellRangePageCount} pages.`
+                            : "."}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <label className="flex-1">
+                        <input
+                          key={`pdf-file-${fileInputKey}`}
+                          type="file"
+                          accept=".pdf,.json,application/json"
+                          onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
+                          className="hidden"
+                        />
+                        <div className="flex items-center justify-center gap-2 px-4 py-3 bg-orange/10 border border-orange/20 rounded-xl cursor-pointer hover:bg-orange/15 transition-colors">
+                          <FileText className="w-5 h-5 text-orange" />
+                          <span className="font-medium truncate">
+                            {pdfFile ? pdfFile.name : "Choose PDF or JSON file..."}
+                          </span>
+                        </div>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handlePdfUpload}
+                        disabled={
+                          !pdfFile ||
+                          pdfStatus === "processing" ||
+                          pdfStatus === "uploading" ||
+                          (pdfPageScope === "range" && (!pdfPageStart.trim() || !pdfPageEnd.trim())) ||
+                          pdfSpellRangeOverLimit
+                        }
+                        className="flex items-center justify-center gap-2 px-6 py-3 bg-orange text-orange-foreground rounded-xl font-bold hover:bg-orange/90 transition-all glow-orange disabled:opacity-50"
+                      >
+                        {getStatusIcon(pdfStatus)}
+                        {pdfStatus === "processing" ? "Processing..." : "Import"}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+            </AnimatePresence>
+          </div>
+            </>
+          )}
+        </motion.div>
+      </main>
+      <SiteFooter />
+    </div>
+  )
+}

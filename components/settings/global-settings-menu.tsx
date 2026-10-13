@@ -1,0 +1,400 @@
+"use client"
+
+import { useState } from "react"
+import { Settings, ExternalLink, Bug, LayoutGrid, Sparkles } from "lucide-react"
+import Link from "next/link"
+import { useAppTheme, APP_THEMES } from "@/components/providers/app-theme-provider"
+import {
+  getAppVersion,
+  getDeployMode,
+  getStorageLabel,
+} from "@/lib/config/deploy-mode"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import { SiteGraphicsSettings } from "@/components/settings/site-graphics-settings"
+import { ClearCompendiumSection } from "@/components/settings/clear-compendium-section"
+import { useBuilderLayout } from "@/components/settings/use-builder-layout"
+import { useAppPresentationMode } from "@/components/settings/use-app-presentation-mode"
+import { useDefaultMidjourneyGraphics } from "@/components/settings/use-default-midjourney-graphics"
+import { useGmDashboardNav } from "@/components/settings/use-gm-dashboard-nav"
+import { useResumeLastCharacter } from "@/components/settings/use-resume-last-character"
+import { useManualSkillAbility } from "@/components/settings/use-manual-skill-ability"
+import { useWelcomeSplashSuppress } from "@/components/settings/use-welcome-splash-suppress"
+import { useSearchAutocomplete } from "@/components/settings/use-search-autocomplete"
+import { useDisplayNonCombatActions } from "@/components/settings/use-display-non-combat-actions"
+import { cn } from "@/lib/utils"
+
+const GITHUB_ISSUES_URL = "https://github.com/Geph/Dump-Stat-Character-Builder-5.5e/issues"
+
+const BUILDER_LAYOUT_OPTIONS = [
+  {
+    id: "visual" as const,
+    label: "Visual",
+    description: "Card art and richer pickers in the builder and compendium.",
+    icon: Sparkles,
+  },
+  {
+    id: "compact" as const,
+    label: "Compact",
+    description: "Dense lists without card art so more fits on screen.",
+    icon: LayoutGrid,
+  },
+]
+
+const TAB_TRIGGER_CLASS =
+  "rounded-lg border border-transparent px-2 py-2 text-xs sm:px-3 sm:text-sm data-[state=active]:border-border data-[state=active]:bg-muted data-[state=active]:shadow-none"
+
+export function GlobalSettingsMenu() {
+  const { theme, setTheme } = useAppTheme()
+  const { layout: builderLayout, setLayout: setBuilderLayout } = useBuilderLayout()
+  const { isCompactOnly } = useAppPresentationMode()
+  const { disabled: hideDefaultMidjourney, setDisabled: setHideDefaultMidjourney } =
+    useDefaultMidjourneyGraphics()
+  const { enabled: gmDashboardNavEnabled, setEnabled: setGmDashboardNavEnabled } = useGmDashboardNav()
+  const { enabled: resumeLastCharacter, setEnabled: setResumeLastCharacter } = useResumeLastCharacter()
+  const { enabled: manualSkillAbility, setEnabled: setManualSkillAbility } = useManualSkillAbility()
+  const { enabled: searchAutocomplete, setEnabled: setSearchAutocomplete } =
+    useSearchAutocomplete()
+  const { enabled: displayNonCombatActions, setEnabled: setDisplayNonCombatActions } =
+    useDisplayNonCombatActions()
+  const { suppressed: hideWelcomeSplash, setSuppressed: setHideWelcomeSplash } =
+    useWelcomeSplashSuppress()
+  const [open, setOpen] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="shrink-0 rounded-xl border-2 border-border bg-card hover:bg-muted"
+          aria-label="Settings"
+        >
+          <Settings className="w-5 h-5" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-xl">
+        <DialogHeader className="border-b border-border px-6 py-4 text-left">
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription>Theme, preferences, and about.</DialogDescription>
+        </DialogHeader>
+
+        <Tabs defaultValue="theme" className="gap-0">
+          <div className="border-b border-border px-4 pt-3 sm:px-6">
+            <TabsList className="grid h-auto w-full grid-cols-3 gap-1 bg-transparent p-0">
+              <TabsTrigger value="theme" className={TAB_TRIGGER_CLASS}>
+                Theme
+              </TabsTrigger>
+              
+              <TabsTrigger value="options" className={TAB_TRIGGER_CLASS}>
+                Options
+              </TabsTrigger>
+              <TabsTrigger value="about" className={TAB_TRIGGER_CLASS}>
+                About
+              </TabsTrigger>
+            </TabsList>
+          </div>
+
+          <div className="max-h-[min(70vh,32rem)] overflow-y-auto px-6 py-4 lg:max-h-[min(80vh,42rem)]">
+            <TabsContent value="theme" className="mt-0 space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Card layout</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {isCompactOnly
+                    ? "This edition uses compact lists without artwork."
+                    : "Default Visual or Compact presentation for the character builder and compendium. You can still toggle it on those pages, however if you selected compact mode from the initial choice on the home page visual art may not import."}
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {BUILDER_LAYOUT_OPTIONS.filter(
+                    (option) => !isCompactOnly || option.id === "compact",
+                  ).map((option) => {
+                    const Icon = option.icon
+                    const active = builderLayout === option.id
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setBuilderLayout(option.id)}
+                        aria-pressed={active}
+                        className={cn(
+                          "flex flex-col gap-1 rounded-xl border-2 p-3 text-left transition-colors",
+                          active
+                            ? "border-primary bg-primary/5"
+                            : "border-border hover:bg-muted/60",
+                        )}
+                      >
+                        <span className="flex items-center gap-2 font-semibold text-foreground">
+                          <Icon className="h-4 w-4" />
+                          {option.label}
+                        </span>
+                        <span className="text-xs text-muted-foreground leading-snug">
+                          {option.description}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="border-t border-border pt-4 space-y-3">
+                <p className="text-sm font-semibold text-foreground">Color theme</p>
+                <p className="text-xs text-muted-foreground">
+                  Choose a color theme for the app interface.
+                </p>
+                <ul className="space-y-2">
+                  {APP_THEMES.map((t) => (
+                    <li key={t.id}>
+                      <button
+                        type="button"
+                        onClick={() => setTheme(t.id)}
+                        className={cn(
+                          "flex w-full items-start gap-3 rounded-xl border-2 p-3 text-left transition-colors",
+                          theme === t.id
+                            ? "border-primary bg-primary/5"
+                            : "border-border hover:bg-muted/60",
+                        )}
+                      >
+                        <span className="mt-0.5 flex shrink-0 gap-1" aria-hidden>
+                          {t.swatches.map((color, i) => (
+                            <span
+                              key={i}
+                              className="h-4 w-4 rounded-full border border-border/80"
+                              style={{ background: color }}
+                            />
+                          ))}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-foreground">{t.label}</span>
+                          <span className="block text-xs text-muted-foreground leading-snug">
+                            {t.description}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="graphics" className="mt-0 space-y-4">
+              {!isCompactOnly ? (
+                <SiteGraphicsSettings onStatus={setStatus} />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Background graphics are hidden in Compact Only mode. Choose Visual + Compact on the
+                  home page splash to re-enable them.
+                </p>
+              )}
+              <div className="border-t border-border pt-4">
+                <p className="text-sm font-semibold text-foreground">
+                  Disable default Midjourney graphics
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                  Hides bundled portraits automatically attached to seeded or imported content (SRD,
+                  PHB, Ravenloft, and similar). Home page photos go blank unless you uploaded
+                  replacements above. Your own custom card art stays.
+                </p>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={hideDefaultMidjourney}
+                    onChange={(event) => {
+                      setHideDefaultMidjourney(event.target.checked)
+                      setStatus(
+                        event.target.checked
+                          ? "Default Midjourney graphics hidden"
+                          : "Default Midjourney graphics enabled",
+                      )
+                    }}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug text-foreground">
+                    Hide bundled default graphics
+                  </span>
+                </label>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="options" className="mt-0 space-y-6">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Navigation</p>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={searchAutocomplete}
+                    onChange={(event) => setSearchAutocomplete(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug">
+                    <span className="font-semibold text-foreground">
+                      Show autocomplete suggestions
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Shows ranked matches and recent searches while typing. Turn this off to keep
+                      search fields as plain text filters.
+                    </span>
+                  </span>
+                </label>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={gmDashboardNavEnabled}
+                    onChange={(event) => setGmDashboardNavEnabled(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug">
+                    <span className="font-semibold text-foreground">
+                      Show GM Dashboard{" "}
+                      <span className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                        (beta)
+                      </span>
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Adds a GM Dashboard link to the header for multi-character table tools.
+                    </span>
+                  </span>
+                </label>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={resumeLastCharacter}
+                    onChange={(event) => setResumeLastCharacter(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug">
+                    <span className="font-semibold text-foreground">Resume last character on Home</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      After the first visit, opening the home page jumps to the last character sheet
+                      you viewed.
+                    </span>
+                  </span>
+                </label>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={hideWelcomeSplash}
+                    onChange={(event) => setHideWelcomeSplash(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug">
+                    <span className="font-semibold text-foreground">
+                      Don&apos;t show home page splash
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Hides the first-visit Visual / Compact / No AI choice overlay. Uncheck to see it
+                      again on the next home page visit.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-foreground">Character sheet</p>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={displayNonCombatActions}
+                    onChange={(event) => setDisplayNonCombatActions(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug">
+                    <span className="font-semibold text-foreground">Display non-combat actions</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Shows Help, Influence, Search, and other out-of-combat standard actions on the
+                      Abilities tab. Click a card for the rules text.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-foreground">House rules</p>
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                  <input
+                    type="checkbox"
+                    checked={manualSkillAbility}
+                    onChange={(event) => setManualSkillAbility(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                  />
+                  <span className="text-sm leading-snug">
+                    <span className="font-semibold text-foreground">
+                      Allow manual ability selection for skills
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      On the character sheet, tap the ability next to a skill name (for example INT on
+                      Arcana) to use a different ability modifier.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <ClearCompendiumSection onStatus={setStatus} />
+            </TabsContent>
+
+            <TabsContent value="about" className="mt-0 space-y-6">
+              <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 space-y-1">
+                <p className="text-xs font-semibold text-foreground">Deployment</p>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px] leading-tight">
+                  <dt className="text-muted-foreground">Version</dt>
+                  <dd className="font-medium text-foreground tabular-nums">{getAppVersion()}</dd>
+                  <dt className="text-muted-foreground">Mode</dt>
+                  <dd className="font-medium text-foreground">{getDeployMode()}</dd>
+                  <dt className="text-muted-foreground">Storage</dt>
+                  <dd className="font-medium text-foreground">{getStorageLabel()}</dd>
+                </dl>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-foreground">Attribution</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Open licenses and third-party credits for bundled content.
+                </p>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 gap-2"
+                  onClick={() => setOpen(false)}
+                >
+                  <Link href="/#home-footer" onClick={() => window.dispatchEvent(new Event("dumpstat:open-attribution"))}>
+                    <ExternalLink className="h-4 w-4" />
+                    Licenses &amp; attribution
+                  </Link>
+                </Button>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-foreground">Feedback</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Report bugs or request features on GitHub.
+                </p>
+                <Button asChild variant="outline" size="sm" className="mt-3 gap-2">
+                  <a href={GITHUB_ISSUES_URL} target="_blank" rel="noopener noreferrer">
+                    <Bug className="h-4 w-4" />
+                    Report an issue on GitHub
+                  </a>
+                </Button>
+              </div>
+            </TabsContent>
+          </div>
+
+          {status ? (
+            <div className="border-t border-border px-6 py-3 text-xs text-foreground bg-muted/30">
+              {status}
+            </div>
+          ) : null}
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  )
+}

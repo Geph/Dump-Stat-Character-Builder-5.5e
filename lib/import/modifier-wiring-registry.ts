@@ -1,0 +1,2340 @@
+/**
+ * BYO / import AI prompt index for Common Modifier auto-wiring.
+ *
+ * When adding a new phrase rule in detect-feature-modifier-rules.ts or a name rule
+ * in FEATURE_NAME_MODIFIER_RULES, add a matching entry here. Tests enforce coverage.
+ */
+import { FEAT_PICK_CATEGORIES } from "@/lib/compendium/class-feature-metadata"
+import {
+  FEATURE_MODIFIER_RULES,
+  FEATURE_NAME_MODIFIER_RULES,
+} from "@/lib/import/detect-feature-modifier-rules"
+
+/** Characteristic / effect kinds BYO LLM may emit in mechanics[] (subset of the Common Modifier catalog). */
+export const AI_MECHANIC_KINDS = [
+  "skills",
+  "tool_proficiencies",
+  "armor_proficiencies",
+  "weapon_proficiencies",
+  "saving_throws",
+  "languages",
+  "spells_known",
+  "ac",
+  "hit_points",
+  "attack_roll_modifiers",
+  "damage_roll_modifiers",
+  "damage_resistance",
+  "damage_immunity",
+  "condition_immunity",
+  "speed",
+  "vision",
+  "uses",
+  "check_roll_modifier",
+  "extra_attack",
+  "grant_feat",
+  "grant_creature",
+  "equipment_and_magic_items",
+  "player_note",
+  "inventory_container",
+  "spellcasting_ability",
+  "attunement_slots",
+  "skill_check_alternate_ability",
+  "saving_throw_alternate_ability",
+  "forced_save_ability_remap",
+  "weapon_ability_override",
+  "weapon_sheet_badge",
+  "weapon_damage_die_override",
+  "turn_start_resource_restore",
+  "turn_start_bonus_grant",
+  "turn_start_trigger",
+  "on_hit_trigger",
+  "resource_ability_menu",
+  "unarmed_strike_damage",
+  "initiative",
+  "telepathy",
+  "temporary_hit_points",
+  "weapon_reach_modifier",
+  "damage_reduction",
+  "movement_grant",
+  "ability_score_override",
+  "healing_received_modifier",
+  "grant_custom_ability",
+  "modify_custom_ability",
+  "spell_list_access",
+  "feature_choice_count_bonus",
+  "power_rider",
+  "replace_feature",
+  "failed_roll_trigger",
+  "d20_test_reaction",
+  "special_attack",
+  "hit_dice_restore",
+  "grant_inspiration",
+  "extra_wield_slots",
+  "unresolved",
+] as const
+
+/**
+ * Catalog suffixes that appear in the INDEX but intentionally have no mechanics[].kind
+ * (ASI pool phrases, movement options, pickers, etc.). Everything else with a concrete
+ * cat_char_* / cat_fx_* suffix must declare mechanicsKind in AI_MECHANIC_KINDS.
+ */
+export const AI_MECHANICS_NARRATIVE_CATALOG_SUFFIXES = new Set([
+  "ability_scores",
+  "movement_option",
+  "feature_option_picker",
+  // Complex nested characteristic — auto-wired by phrase detection, not hand-authored by the LLM.
+  "on_cast_spell_trigger",
+  // Free casts come from "without a spell slot" phrasing; there is no cast_spell mechanics kind.
+  "cast_spell",
+  // Feature-gated pool refresh (Initiative / crit) — not a top-level mechanics[].kind.
+  "class_resource",
+  // Hit-Die / level heals are auto-wired by phrase detection and enrichment presets.
+  "heal_self",
+  "*",
+])
+
+export type WiringTrigger = "description" | "feature_name" | "mechanics" | "srd_preset_name"
+
+export type ModifierWiringEntry = {
+  ruleId: string
+  trigger: WiringTrigger
+  catalog: string
+  /** Example phrasing or exact feature name — preserve in source JSON descriptions. */
+  examples: string[]
+  mechanicsKind?: (typeof AI_MECHANIC_KINDS)[number]
+  notes?: string
+}
+
+const FEAT_CATEGORIES_FOR_IMPORT = FEAT_PICK_CATEGORIES.filter((category) =>
+  ["Origin", "Dark Gift", "General", "Fighting Style", "Epic Boon", "Planar Pact", "Metamagic", "Mystic Technique", "Eldritch Invocation"].includes(
+    category,
+  ),
+)
+
+/** Description-phrase rules — must cover every FEATURE_MODIFIER_RULES id. */
+export const DESCRIPTION_PHRASE_WIRING: ModifierWiringEntry[] = [
+  {
+    ruleId: "proficiency.skills.list",
+    trigger: "description",
+    catalog: "cat_char_skills",
+    examples: [
+      "You gain proficiency in Stealth and Perception",
+      "You are proficient in Athletics",
+    ],
+    mechanicsKind: "skills",
+  },
+  {
+    ruleId: "proficiency.skills.constrained_choice",
+    trigger: "description",
+    catalog: "cat_char_skills",
+    examples: [
+      "Proficiency in one of Animal Handling, Medicine, Nature, or Survival",
+      "choose two of Athletics, Acrobatics, or Stealth",
+    ],
+    mechanicsKind: "skills",
+    notes: "Constrained pool: set choiceCount and the allowed skill list; allowAnySkill false.",
+  },
+  {
+    ruleId: "proficiency.skills.choice",
+    trigger: "description",
+    catalog: "cat_char_skills",
+    examples: [
+      "proficiency in two skills of your choice",
+      "proficiency in one skill",
+      "proficiency and Expertise with any skill of your choice",
+    ],
+    mechanicsKind: "skills",
+    notes: "Use choiceCount in mechanics[] when count is explicit. \"and Expertise\" adds grantExpertise.",
+  },
+  {
+    ruleId: "proficiency.expertise",
+    trigger: "description",
+    catalog: "cat_char_skills",
+    examples: ["expertise in Stealth", "expertise in Thieves' Tools checks"],
+    mechanicsKind: "skills",
+    notes: "Set grantExpertise: true in mechanics[].",
+  },
+  {
+    ruleId: "proficiency.tools",
+    trigger: "description",
+    catalog: "cat_char_tool_proficiencies",
+    examples: ["proficiency with smith's tools", "proficiency with thieves' tools"],
+    mechanicsKind: "tool_proficiencies",
+  },
+  {
+    ruleId: "proficiency.tools.choice",
+    trigger: "description",
+    catalog: "cat_char_tool_proficiencies",
+    examples: ["proficiency in one tool of your choice", "gain two tool proficiencies"],
+    mechanicsKind: "tool_proficiencies",
+    notes: "values [] + choiceCount (player picks).",
+  },
+  {
+    ruleId: "proficiency.tools.expertise",
+    trigger: "description",
+    catalog: "cat_char_tool_proficiencies",
+    examples: [
+      "your proficiency bonus is doubled for any ability check you make that uses any of the tool proficiencies you gained from this class",
+    ],
+    mechanicsKind: "tool_proficiencies",
+    notes: "grantExpertise: true on class tools (empty tools[] = all class-granted tools).",
+  },
+  {
+    ruleId: "attunement.slots.total",
+    trigger: "description",
+    catalog: "cat_char_attunement_slots",
+    examples: [
+      "you can attune to up to four magic items at once",
+      "you can now attune to up to five magic items",
+    ],
+    mechanicsKind: "attunement_slots",
+    notes: "attunementTotal N sets totalSlots (not bonusSlots).",
+  },
+  {
+    ruleId: "proficiency.weapons.martial",
+    trigger: "description",
+    catalog: "cat_char_weapon_proficiencies",
+    examples: ["proficiency with martial weapons"],
+    mechanicsKind: "weapon_proficiencies",
+    notes: 'weaponMode: "martial_weapons"',
+  },
+  {
+    ruleId: "proficiency.armor.heavy",
+    trigger: "description",
+    catalog: "cat_char_armor_proficiencies",
+    examples: ["proficiency with heavy armor"],
+    mechanicsKind: "armor_proficiencies",
+  },
+  {
+    ruleId: "proficiency.armor.medium",
+    trigger: "description",
+    catalog: "cat_char_armor_proficiencies",
+    examples: [
+      "proficiency with medium armor",
+      "proficiency with martial weapons and medium armor",
+    ],
+    mechanicsKind: "armor_proficiencies",
+  },
+  {
+    ruleId: "proficiency.armor.shields",
+    trigger: "description",
+    catalog: "cat_char_armor_proficiencies",
+    examples: ["proficiency with shields", "proficiency with medium armor and shields"],
+    mechanicsKind: "armor_proficiencies",
+  },
+  {
+    ruleId: "proficiency.saves",
+    trigger: "description",
+    catalog: "cat_char_saving_throws",
+    examples: ["proficiency in Strength saving throws"],
+    mechanicsKind: "saving_throws",
+  },
+  {
+    ruleId: "ac.unarmored.ability",
+    trigger: "description",
+    catalog: "cat_char_ac",
+    examples: [
+      "your AC equals 10 + your Dexterity modifier + your Wisdom modifier",
+      "AC equals 13 + your Dexterity modifier",
+    ],
+    mechanicsKind: "ac",
+    notes: "acBase + acAbilities[]",
+  },
+  {
+    ruleId: "ac.unarmored.ten",
+    trigger: "description",
+    catalog: "cat_char_ac",
+    examples: ["AC equals 10 + your Dexterity modifier + your Constitution modifier"],
+    mechanicsKind: "ac",
+  },
+  {
+    ruleId: "ac.flat_bonus",
+    trigger: "description",
+    catalog: "cat_char_ac",
+    examples: [
+      "+1 bonus to your AC while wearing medium armor",
+      "gain a +2 bonus to AC",
+    ],
+    mechanicsKind: "ac",
+    notes: "acFlatBonus adds to existing AC; acBonusAbility (INT etc.) and acBonusMinimum support additive ability bonuses.",
+  },
+  {
+    ruleId: "hp.per_level",
+    trigger: "description",
+    catalog: "cat_char_hit_points",
+    examples: ["hit point maximum increases by 1"],
+    mechanicsKind: "hit_points",
+  },
+  {
+    ruleId: "hp.per_level.alt",
+    trigger: "description",
+    catalog: "cat_char_hit_points",
+    examples: ["+1 hit points per level", "+2 hit points per character level"],
+    mechanicsKind: "hit_points",
+  },
+  {
+    ruleId: "attack.bonus.all",
+    trigger: "description",
+    catalog: "cat_char_attack_roll_modifiers",
+    examples: ["+2 bonus to attack rolls", "+2 bonus to attack rolls with ranged weapons"],
+    mechanicsKind: "attack_roll_modifiers",
+    notes: 'attackTarget from "with ranged/melee weapons"; ignoreHalfCover when "ignore half-cover" appears',
+  },
+  {
+    ruleId: "attack.bonus.ranged",
+    trigger: "description",
+    catalog: "cat_char_attack_roll_modifiers",
+    examples: ["+2 bonus to attack rolls with ranged weapons"],
+    mechanicsKind: "attack_roll_modifiers",
+    notes: 'attackTarget: "ranged"',
+  },
+  {
+    ruleId: "attack.bonus.melee",
+    trigger: "description",
+    catalog: "cat_char_attack_roll_modifiers",
+    examples: ["+2 bonus to melee attack rolls"],
+    mechanicsKind: "attack_roll_modifiers",
+    notes: 'attackTarget: "melee"',
+  },
+  {
+    ruleId: "attack.cover.ignore",
+    trigger: "description",
+    catalog: "cat_char_attack_roll_modifiers",
+    examples: [
+      "your attacks with ranged weapons ignore half-cover",
+      "ranged attacks ignore Half Cover and Three-Quarters Cover",
+    ],
+    mechanicsKind: "attack_roll_modifiers",
+    notes: "ignoreHalfCover / treatThreeQuartersCoverAsHalf; bonus 0 when cover-only",
+  },
+  {
+    ruleId: "attack.critical.scaling",
+    trigger: "description",
+    catalog: "cat_char_attack_roll_modifiers",
+    examples: [
+      "Your attack rolls with Ranged weapons can score a Critical Hit on a roll of 19 or 20 on the d20.",
+      "At level 9, your attack rolls with Ranged weapons score a Critical Hit on a roll of 18–20.",
+      "Your weapon attacks score a critical hit on a roll of 19 or 20. At 15th level, this critical hit range increases again.",
+    ],
+    mechanicsKind: "attack_roll_modifiers",
+    notes: "criticalHitMinimum + criticalHitMinimumByLevel on attack target entry",
+  },
+  {
+    ruleId: "damage.rider.dice",
+    trigger: "description",
+    catalog: "cat_char_damage_roll_modifiers",
+    examples: ["deal an extra 1d6 fire damage"],
+    mechanicsKind: "damage_roll_modifiers",
+    notes:
+      'Always-on extra dice: bonusDice "1d6", damageType "fire". Optional "you can deal an extra" weapon/Unarmed dice are power_rider + weaponDamageMenu, not this kind. Only "against the chosen creatures" / sworn foes: requiresSheetToggle attacking_chosen_foe.',
+  },
+  {
+    ruleId: "damage.weapon.ability_modifier",
+    trigger: "description",
+    catalog: "cat_char_damage_roll_modifiers",
+    examples: [
+      "When you deal damage with a Ranged weapon that doesn't add your ability modifier to the roll, you add your ability modifier nonetheless. If you already add your modifier to the damage roll, the target takes an extra 1d8 damage of the weapon's type.",
+    ],
+    mechanicsKind: "damage_roll_modifiers",
+    notes: "grantAbilityModifierWhenMissing + bonusDiceWhenModifierIncluded on weapon target",
+  },
+  {
+    ruleId: "damage.crit.bonus",
+    trigger: "description",
+    catalog: "cat_char_bonus_damage_riders",
+    examples: [
+      "Whenever you score a critical hit with a weapon attack you deal bonus damage equal to your Fighter level.",
+    ],
+    mechanicsKind: "on_hit_trigger",
+    notes:
+      'Use on_hit_trigger with triggerOn: "crit" + automaticBonus / bonusDice (bonus_damage_riders catalog). Once-per-turn riders like Divine Fury also use on_hit_trigger.',
+  },
+  {
+    ruleId: "damage.crit.maximize",
+    trigger: "description",
+    catalog: "cat_char_on_hit_trigger",
+    examples: [
+      "At 15th level, when you score a critical hit with a weapon attack, you can maximize the damage instead of rolling.",
+    ],
+    mechanicsKind: "on_hit_trigger",
+    notes: 'triggerOn: "crit", maximizeWeaponDamage: true, maximizeWeaponDamageAtLevel',
+  },
+  {
+    ruleId: "check.bonus.resource_die",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "whenever you are forced to make an Intelligence, Wisdom, or Charisma saving throw you gain a bonus to the roll equal to your Exploit Die",
+      "whenever you are forced to make an Intelligence, Wisdom, or Charisma saving throw, you gain a bonus to your roll equal to your Exploit Die",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes:
+      'bonusConfig: { mode: "die", dieScaling: "class_resource", classResourceKey }. Also use for damage rolls (checkCategory omitted / damageDiceFromResourceDie) and multi-beneficiary rolls: targets self|self_and_allies_in_range|chosen_creatures (rangeFeet when not self). Example: roll Bardic Inspiration die for Initiative for you and nearby allies — does not expend the die unless the prose says so.',
+  },
+  {
+    ruleId: "resource.free_use_on_roll",
+    trigger: "description",
+    catalog: "cat_char_resource_ability_menu",
+    examples: [
+      "you can use feat of strength or heroic fortitude without expending an Exploit Die",
+    ],
+    mechanicsKind: "resource_ability_menu",
+    notes: "waiveResourceCost: true, appliesOnRollKinds, appliesOnAbilities, menu options",
+  },
+  {
+    ruleId: "menu.choose_one_named_benefits",
+    trigger: "description",
+    catalog: "cat_char_resource_ability_menu",
+    examples: [
+      "Once per turn when you reduce an enemy to 0 Hit Points, choose one of the following benefits.",
+    ],
+    mechanicsKind: "resource_ability_menu",
+    notes:
+      "waiveResourceCost: true. Parse Name. Description options. Set actionKind on an option when only that pick spends an Action / Bonus Action / Reaction (do not classify the whole feature from one option).",
+  },
+  {
+    ruleId: "resource.expend_psi_points",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "expend 2 psi points to activate this discipline",
+      "you can spend 1 psi point to swap places with your Astral Construct",
+      "by expending 1 psi point",
+    ],
+    mechanicsKind: "uses",
+    notes:
+      'classResourceKey: "psi_points", classResourceCost from match. "unless you expend N psi points" refresh clauses are skipped (not an activation cost).',
+  },
+  {
+    ruleId: "resource.expend_spell_uses",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "When you cast one of your level 1+ Martyr spells, you expend one use of your spell uses in addition to taking Radiant damage",
+    ],
+    mechanicsKind: "uses",
+    notes:
+      'classResourceKey: "spell_uses", classResourceAmount 1. Hit Point Spellcasting still spends current HP separately — do not invent slot progression.',
+  },
+  {
+    ruleId: "heal.turn_start_low_hp",
+    trigger: "description",
+    catalog: "cat_char_turn_start_trigger",
+    examples: [
+      "If you begin your turn with less than half of your hit points remaining, but at least 1 hit point, you regain hit points equal to 5 + your Constitution modifier.",
+    ],
+    mechanicsKind: "turn_start_trigger",
+    notes:
+      "Prefer turn_start_trigger for general turn-start effects (heal, grant temp HP, nested effects). hpBelowFraction: 0.5 for low-HP gate.",
+  },
+  {
+    ruleId: "resource.turn_start_regain_ki",
+    trigger: "description",
+    catalog: "cat_char_turn_start_trigger",
+    examples: [
+      "regain 1 Ki at the start of each of your turns in combat, so long as you are not Incapacitated",
+    ],
+    mechanicsKind: "turn_start_resource_restore",
+    notes:
+      "Narrow restore kind when the effect ONLY refills a pool; otherwise use turn_start_trigger. blockedByConditions when Incapacitated mentioned.",
+  },
+  {
+    ruleId: "resource.turn_start_regain_pool",
+    trigger: "description",
+    catalog: "cat_char_turn_start_trigger",
+    examples: [
+      "regain 1 Psi Die at the start of each of your turns",
+      "regain 1 psionic energy die at the start of each of your turns",
+    ],
+    notes: "Generalized turn-start restore for Psi Dice / Focus / Sorcery Points",
+    mechanicsKind: "turn_start_resource_restore",
+  },
+  {
+    ruleId: "resource.refresh_one_on_initiative_or_crit",
+    trigger: "description",
+    catalog: "cat_fx_class_resource",
+    examples: [
+      "regain one expended Risk Die when you roll initiative or score a critical hit",
+      "Whenever you or your Cohort score a Critical Hit or reduce an enemy to 0 Hit Points, you regain an expended Battle Die.",
+    ],
+    notes: "Do not also set rechargeOnInitiative on the pool — the feature restores one die.",
+  },
+  {
+    ruleId: "technique.on_hit_once_per_turn",
+    trigger: "description",
+    catalog: "cat_char_on_hit_trigger",
+    examples: [
+      "once per turn when you hit a creature with an attack, you can spend 1 Ki to deal extra damage",
+      "the first creature you hit on each of your turns while your Rage is active takes extra damage equal to 1d6 plus half your Barbarian level",
+    ],
+    mechanicsKind: "on_hit_trigger",
+    notes:
+      "Automatic once-per-turn extra damage (Divine Fury while raging, Ki spend on hit). oncePerTurn: true; optional spendResourceKey; bonusDice / scalingMode / damageTypeOptions. Do NOT use for optional \"you can deal extra\" weapon/Unarmed dice — those are power_rider + weaponDamageMenu on the DMG ··· menu.",
+  },
+  {
+    ruleId: "weapon.damage_menu.optional_extra_dice",
+    trigger: "description",
+    catalog: "cat_char_power_rider",
+    examples: [
+      "Once per turn when you deal damage to a creature that is Bloodied, you can deal an extra 1d8 damage to the target",
+      "you can deal an extra 1d8 damage to the target",
+    ],
+    mechanicsKind: "power_rider",
+    notes:
+      "Situational extra weapon/unarmed damage the player opts into. parentPowerNames [Attack, Unarmed Strike], weaponDamageMenu true, selectable true, bonusDice or classResourceKey. Bloodied → defaultSelectedWhenToggle below_half_hp. Not damage_roll_modifiers (always-on) and not on_hit_trigger (weapon chip).",
+  },
+  {
+    ruleId: "weapon.damage_menu.optional_ability_mod",
+    trigger: "description",
+    catalog: "cat_char_power_rider",
+    examples: [
+      "Whenever you deal damage to a creature with a weapon or Unarmed Strike on the first round of combat, you can add your Charisma modifier to the damage roll",
+    ],
+    mechanicsKind: "power_rider",
+    notes:
+      "Optional ability-mod weapon damage (Fierce Start). weaponDamageMenu true + ability. Not a flat damage_roll_modifiers bonus.",
+  },
+  {
+    ruleId: "weapon.damage_menu.expend_resource_dice",
+    trigger: "description",
+    catalog: "cat_char_power_rider",
+    examples: [
+      "you can expend two Battle Dice as a Bonus Action … add the Battle Dice to the attack's damage roll",
+      "expend one Battle Die … the target takes extra Bludgeoning damage equal to the roll of the Battle Die",
+    ],
+    mechanicsKind: "power_rider",
+    notes:
+      "Maneuver damage riders (Vagabond / Captain Battle Dice, Superiority Dice). weaponDamageMenu + classResourceKey + classResourceDieCount (single dice at the pool's die size) + spendClassResourceAmount; riderActionKind bonus when used as a Bonus Action; weaponScope melee for Melee/Unarmed-only maneuvers. Rolling from the DMG menu spends the dice.",
+  },
+  {
+    ruleId: "failed_roll.expend_resource_die",
+    trigger: "description",
+    catalog: "cat_char_failed_roll_trigger",
+    examples: [
+      "When you fail a Wisdom or Charisma check, you can expend one Battle Die to add it to the roll",
+      "when you miss with a ranged attack roll, you can expend one Battle Die and add it to the attack roll",
+    ],
+    mechanicsKind: "failed_roll_trigger",
+    notes:
+      "Spend a maneuver die on your own (or an ally's) failed roll. failed_roll_trigger with spendResourceKey + nested check_roll_modifier bonusConfig die / class_resource.",
+  },
+  {
+    ruleId: "d20_reaction.subtract_resource_die_from_attack",
+    trigger: "description",
+    catalog: "cat_char_d20_test_reaction",
+    examples: [
+      "you can take a Reaction and expend one Battle Die … Subtract the Battle Die from the attack roll",
+    ],
+    mechanicsKind: "d20_test_reaction",
+    notes:
+      "Reaction that subtracts a maneuver die from an enemy attack roll. d20_test_reaction subtract + dieSource resource_die + spendResourceKey.",
+  },
+  {
+    ruleId: "wield.extra_slots.secondary_arms",
+    trigger: "description",
+    catalog: "cat_char_extra_wield_slots",
+    examples: [
+      "Two smaller arms that can manipulate objects/open-close/pick-up or wield a light weapon.",
+    ],
+    mechanicsKind: "extra_wield_slots",
+    notes:
+      "extraSlots 1. allowedProperties [\"light\"] when the extra hands can only hold a Light weapon. Lifts exclusive two-handed + shield / off-hand restriction.",
+  },
+  {
+    ruleId: "check.advantage.initiative",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["You have Advantage on Initiative rolls", "advantage on initiative"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "initiative"',
+  },
+  {
+    ruleId: "incoming.attack.disadvantage.first_round",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "Attacks against you during the first round of combat have Disadvantage.",
+      "attack rolls against you have disadvantage during the first turn of combat",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes:
+      'Nimble Start — incomingAttackMode: "disadvantage" gated on requiresSheetToggle first_turn_of_combat. The sheet files this as a Combat Passive reminder.',
+  },
+  {
+    ruleId: "check.bonus.initiative.ability",
+    trigger: "description",
+    catalog: "cat_char_initiative",
+    examples: [
+      "You gain a bonus to Initiative rolls equal to your Charisma modifier (minimum bonus of +1).",
+    ],
+    mechanicsKind: "initiative",
+    notes: 'mode: "ability_modifier"',
+  },
+  {
+    ruleId: "check.advantage.attack.ranged",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on ranged weapon attack rolls"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "attack"',
+  },
+  {
+    ruleId: "check.advantage.attack.melee",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on melee attack rolls"],
+    mechanicsKind: "check_roll_modifier",
+  },
+  {
+    ruleId: "check.advantage.attack",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on attack rolls"],
+    mechanicsKind: "check_roll_modifier",
+  },
+  {
+    ruleId: "check.advantage.ability",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on Charisma checks"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "ability"',
+  },
+  {
+    ruleId: "check.advantage.track",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["Advantage on ability checks you make to track any creature"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "skill", checkSkills: ["Survival"]',
+  },
+  {
+    ruleId: "save.advantage",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on Constitution saving throws", "Advantage on Strength checks and saving throws"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "save" (pair with a separate "ability" check modifier for "checks and saving throws")',
+  },
+  {
+    ruleId: "save.advantage.death",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["you have Advantage on Death Saving Throws"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "death_save"',
+  },
+  {
+    ruleId: "save.advantage.mental.against_spells",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "Advantage on Intelligence, Wisdom, and Charisma saving throws against spells",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes:
+      'Three save advantages (Int/Wis/Cha) with checkConditionTypes: ["spell"] — Deep Gnome Gnomish Magic Resistance',
+  },
+  {
+    ruleId: "save.advantage.magic",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "You have advantage on saving throws against spells and other magical effects",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "save", checkConditionTypes: ["spell"] — no checkAbility (any save vs magic)',
+  },
+  {
+    ruleId: "save.advantage.frightened",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "You have Advantage on saving throws you make to avoid or end the Frightened condition",
+      "Advantage on saving throws against being Frightened",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "save", checkConditionTypes: ["Frightened"] — prefer over conditionNote',
+  },
+  {
+    ruleId: "check.bonus.ability_checks.die",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "Whenever you make an ability check using Strength or Dexterity, you can add 1d4 to the result.",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes:
+      'checkRollMode: "bonus", checkCategory: "ability", checkAbility per ability, bonusConfig { mode: "die", dieCount, dieType } — keep the sentence shape "Whenever you make an ability check using X or Y, you can add NdM to the result"',
+  },
+  {
+    ruleId: "skill.check.alternate_ability",
+    trigger: "description",
+    catalog: "cat_char_skill_check_alternate_ability",
+    examples: [
+      "You can use Intelligence instead of Strength for Athletics checks",
+      "use Intelligence instead of other ability modifiers when making an Athletics check",
+      "use Intelligence instead of Wisdom when making an Insight check against a creature with Intelligence 6 or higher",
+    ],
+    mechanicsKind: "skill_check_alternate_ability",
+    notes:
+      'alternateAbility + alternateSkills; a leading "While …," clause or trailing "against …" qualifier becomes conditionLabel.',
+  },
+  {
+    ruleId: "weapon.ability.override",
+    trigger: "description",
+    catalog: "cat_char_weapon_ability_override",
+    examples: [
+      "You can use Intelligence instead of Strength or Dexterity for its attack and damage rolls",
+    ],
+    mechanicsKind: "weapon_ability_override",
+    notes:
+      'alternateAbility + weaponAbilityAppliesTo "both" + weaponAbilityScope "all" (Projected Weaponry). Keep "instead of Strength or Dexterity for … attack and damage rolls".',
+  },
+  {
+    ruleId: "check.bonus.initiative.proficiency",
+    trigger: "description",
+    catalog: "cat_char_initiative",
+    examples: [
+      "You can add your proficiency bonus to Perception and initiative rolls.",
+      "When you roll Initiative, you can add your Proficiency Bonus to the roll.",
+    ],
+    mechanicsKind: "initiative",
+    notes:
+      'initiativeMode: "add_proficiency" on cat_char_initiative (not check_roll_modifier). Alert and Prescience. Paired skill mentions (Perception) are NOT auto-wired — add a skills mechanic or separate proficiency sentence if intended.',
+  },
+  {
+    ruleId: "check.advantage.skill",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on Stealth checks"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "skill", checkSkills: ["Stealth"]',
+  },
+  {
+    ruleId: "check.advantage.skill.ability",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["advantage on Intelligence (Arcana) checks made to understand magical traps"],
+    mechanicsKind: "check_roll_modifier",
+    notes: 'checkCategory: "skill", checkSkills from parenthetical',
+  },
+  {
+    ruleId: "resistance.damage.except",
+    trigger: "description",
+    catalog: "cat_char_damage_resistance",
+    examples: [
+      "Resistance to every damage type except Force, Necrotic, Psychic, and Radiant",
+    ],
+    mechanicsKind: "damage_resistance",
+  },
+  {
+    ruleId: "resistance.damage",
+    trigger: "description",
+    catalog: "cat_char_damage_resistance",
+    examples: ["resistance to psychic damage", "resistance to fire and cold damage"],
+    mechanicsKind: "damage_resistance",
+  },
+  {
+    ruleId: "resistance.spell_damage",
+    trigger: "description",
+    catalog: "cat_char_damage_resistance",
+    examples: ["You gain resistance to damage dealt by spells or magical effects"],
+    mechanicsKind: "damage_resistance",
+    notes: 'fromSpells: true (sheet token "Spell damage") — same as damageTypes ["Spells"] in mechanics[].',
+  },
+  {
+    ruleId: "immunity.condition",
+    trigger: "description",
+    catalog: "cat_char_condition_immunity",
+    examples: [
+      "immune to the charmed condition",
+      "immunity to the Charmed and Frightened conditions",
+    ],
+    mechanicsKind: "condition_immunity",
+  },
+  {
+    ruleId: "speed.walk",
+    trigger: "description",
+    catalog: "cat_char_speed",
+    examples: [
+      "walking speed increases by 10 feet",
+      "Primordial Aspect — Lightning: your walking speed increases by 5 feet",
+    ],
+    mechanicsKind: "speed",
+    notes:
+      'speedType: "walk". Primordial Aspect Lightning is automatically gated by primordial_aspect_lightning.',
+  },
+  {
+    ruleId: "speed.fly",
+    trigger: "description",
+    catalog: "cat_char_speed",
+    examples: ["fly speed of 30 feet", "a Fly Speed equal to your Speed and can hover"],
+    mechanicsKind: "speed",
+    notes: 'speedType: "fly"; set canHover: true when the source says you can hover',
+  },
+  {
+    ruleId: "speed.swim",
+    trigger: "description",
+    catalog: "cat_char_speed",
+    examples: ["swim speed of 30 feet"],
+    mechanicsKind: "speed",
+  },
+  {
+    ruleId: "speed.climb",
+    trigger: "description",
+    catalog: "cat_char_speed",
+    examples: ["climb speed of 20 feet"],
+    mechanicsKind: "speed",
+  },
+  {
+    ruleId: "speed.equal_to_walk",
+    trigger: "description",
+    catalog: "cat_char_speed",
+    examples: [
+      "you gain a climbing speed and swimming speed equal to your walking speed",
+      "have a Swim Speed equal to your Speed",
+    ],
+    mechanicsKind: "speed",
+    notes: 'mode: "equal_to_walk" for climb/swim/fly',
+  },
+  {
+    ruleId: "sense.telepathy",
+    trigger: "description",
+    catalog: "cat_char_telepathy",
+    examples: ["You have telepathy with a range of 120 feet"],
+    mechanicsKind: "telepathy",
+  },
+  {
+    ruleId: "sense.telepathy.communicate",
+    trigger: "description",
+    catalog: "cat_char_telepathy",
+    examples: [
+      "You can communicate telepathically with any creature you can see within 30 feet",
+    ],
+    mechanicsKind: "telepathy",
+    notes: "telepathyRangeFeet from the sentence — same wiring as sense.telepathy.",
+  },
+  {
+    ruleId: "vision.darkvision",
+    trigger: "description",
+    catalog: "cat_char_vision",
+    examples: ["darkvision within 60 feet"],
+    mechanicsKind: "vision",
+  },
+  {
+    ruleId: "vision.darkvision.classic_prose",
+    trigger: "description",
+    catalog: "cat_char_vision",
+    examples: [
+      "You can see in dim light within 60 feet of you as if it were bright light, and in darkness as if it were dim light",
+    ],
+    mechanicsKind: "vision",
+    notes: "Classic 5e darkvision prose that never says the word darkvision (Kibbles Night Mode / Arcane Eye).",
+  },
+  {
+    ruleId: "vision.mindsight",
+    trigger: "description",
+    catalog: "cat_char_vision",
+    examples: ["You gain mindsight with a range of 60 feet"],
+    mechanicsKind: "vision",
+    notes:
+      'Wires as visionType "custom" with customType "Mindsight"; preserves an Intelligence threshold and hidden-creature caveat in display text.',
+  },
+  {
+    ruleId: "attack.extra",
+    trigger: "description",
+    catalog: "cat_fx_extra_attack",
+    examples: ["attack twice whenever you take the Attack action"],
+    mechanicsKind: "extra_attack",
+  },
+  {
+    ruleId: "uses.once_short_long_rest",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "once per short or long rest",
+      "you must finish a short or long rest before you can use this feature again",
+      "After you do so, you must finish a short or long rest before you can use it again",
+    ],
+    mechanicsKind: "uses",
+    notes: 'usesFixed: 1, usesRecharge: "both"',
+  },
+  {
+    ruleId: "uses.once_until_rest",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "Once you do, you can't do so again until you finish a long rest.",
+      "Once used, you can't use this talent again until you finish a short or long rest.",
+      "Once you cast it this way, you can't do so again until you finish a long rest.",
+      "Once you create an additional duplicate, you cannot do so again until you finish a short or long rest.",
+      "Once you use this ability, you cannot use it again until you complete a short or long rest.",
+    ],
+    mechanicsKind: "uses",
+    notes:
+      'usesFixed: 1 + usesRecharge from the rest type. Accepts finish or complete. Wire even when an "unless you expend N psi points" alternate refresh follows — that clause is additive.',
+  },
+  {
+    ruleId: "uses.once_regain_after_rest",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "You can create an illusory duplicate in this way once, regaining its use after a long rest.",
+      "You can cast it once without expending any psi points, regaining the ability to do so after a long rest.",
+      "You can use this Metamagic option once, regaining the ability to use it again after completing a long rest.",
+    ],
+    mechanicsKind: "uses",
+    notes: 'usesFixed: 1 + usesRecharge from the rest type. Kibbles-style once + regain phrasing.',
+  },
+  {
+    ruleId: "uses.item_charges",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "This amulet has 3 charges and regains 1d3 expended charges daily at dawn",
+      "This ring has 3 charges, regaining all expended charges when you finish a long rest",
+    ],
+    mechanicsKind: "uses",
+    notes: "fixed charge pool; use specialDescription for dawn or partial recharge wording",
+  },
+  {
+    ruleId: "restore.hit_dice.short_rest",
+    trigger: "description",
+    catalog: "cat_char_hit_dice_restore",
+    examples: [
+      "When you finish a Short Rest, you can choose to regain up to 3 expended Hit Point Dice. Once you use this feature, you can't do so again until you finish a Long Rest. The number of expended Hit Point Dice you regain increases when you reach levels 13 (6 Hit Point Dice) and 17 (10 Hit Point Dice).",
+    ],
+    mechanicsKind: "hit_dice_restore",
+    notes:
+      "hitDiceRestoreAmount + optional hitDiceRestoreByLevel [{ level, amount }]. Pair with a separate uses mechanic (usesFixed 1, usesRecharge long_rest). Do not emit leftover features that only say the amount increases.",
+  },
+  {
+    ruleId: "resource.expend_hit_dice",
+    trigger: "description",
+    catalog: "cat_fx_class_resource",
+    examples: [
+      "You can expend a Hit Die to take this Bonus Action",
+      "Spend 2 Hit Point Dice when you use this feature",
+    ],
+    notes:
+      'Reserved classResourceKey "hit_dice" (aliases hit_point_dice / hit_point_die) reduces the sheet Hit Dice tracker. classResourceChange reduce; classResourceAmount defaults to 1. Do not emit a class_resources.hit_dice row. For heal-from-HD (Miraculous Healing) also emit heal_self healMode hit_dice — the heal dice count is the spend.',
+  },
+  {
+    ruleId: "heal.hit_dice_roll_plus_con",
+    trigger: "description",
+    catalog: "cat_fx_heal_self",
+    examples: ["expend one Hit Die and roll it; you regain Hit Points equal to the roll plus your Constitution modifier"],
+    notes: "heal_self healMode hit_dice + healDiceCount + healAbility CON. The heal dice count is the Hit Die spend (see resource.expend_hit_dice).",
+  },
+  {
+    ruleId: "resource.regain_all_on_use",
+    trigger: "description",
+    catalog: "cat_fx_class_resource",
+    examples: ["As a Bonus Action, you can regain all of your expended Battle Dice"],
+    notes:
+      "Activated refill of a named pool: classResourceKey + classResourceChange reset (increase + classResourceAmount for a partial refill). Pair with the action kind and uses. Not a refresh flag — Use on the sheet regains the expended uses.",
+  },
+  {
+    ruleId: "uses.fixed_rest",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "use this feature 3 times, regaining all expended uses when you finish a long rest",
+    ],
+    mechanicsKind: "uses",
+  },
+  {
+    ruleId: "uses.ability_modifier",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "a number of times equal to your Wisdom modifier (minimum once)",
+      "You can create a number equal to your Intelligence modifier, regaining all uses after a long rest",
+    ],
+    mechanicsKind: "uses",
+    notes: 'usesAbility: "WIS" / "INT"; accepts "a number equal to" as well as "a number of times equal to".',
+  },
+  {
+    ruleId: "uses.proficiency",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: [
+      "a number of times equal to your proficiency bonus, regaining all uses on a long rest",
+      "a number of times equal to your proficiency bonus, regaining all uses when you finish a long rest",
+    ],
+    mechanicsKind: "uses",
+  },
+  {
+    ruleId: "language.known",
+    trigger: "description",
+    catalog: "cat_char_languages",
+    examples: ["You know Sylvan", "You know Common and Elvish"],
+    mechanicsKind: "languages",
+    notes: 'languages: ["Sylvan"] for fixed grants. Language name must be Capitalized — lowercase "you know it/that…" prose is ignored.',
+  },
+  {
+    ruleId: "language.speak_read_write",
+    trigger: "description",
+    catalog: "cat_char_languages",
+    examples: ["You can speak, read, and write Sylvan", "speak, read, and write Infernal"],
+    mechanicsKind: "languages",
+    notes: "Fixed language grant from the classic speak/read/write sentence.",
+  },
+  {
+    ruleId: "language.choice",
+    trigger: "description",
+    catalog: "cat_char_languages",
+    examples: ["learn two languages of your choice", "You know two languages of your choice"],
+    mechanicsKind: "languages",
+    notes: "languageChoiceCount N; choicePool standard | standard_and_rare",
+  },
+  {
+    ruleId: "language.choice.tables",
+    trigger: "description",
+    catalog: "cat_char_languages",
+    examples: ["learn one language of your choice from the language tables in the Player's Handbook"],
+    mechanicsKind: "languages",
+    notes: "languageChoiceCount 1; choicePool standard",
+  },
+  {
+    ruleId: "spell.know_cantrips_named_list",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: ["You learn the Mage Hand and Ray of Frost cantrips"],
+    mechanicsKind: "spells_known",
+    notes: 'spellNames: ["Mage Hand", "Ray of Frost"]',
+  },
+  {
+    ruleId: "spell.know_cantrip",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: ["You know the Druidcraft cantrip"],
+    mechanicsKind: "spells_known",
+    notes: 'spellNames: ["Druidcraft"]',
+  },
+  {
+    ruleId: "spell.know_named",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: ["know Druidcraft", "Knows Shocking Grasp"],
+    mechanicsKind: "spells_known",
+    notes: 'spellNames: ["Druidcraft"] — species lineage prose that omits the word cantrip',
+  },
+  {
+    ruleId: "spell.level_unlock_table",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "<table><tr><td>Level</td><td>Spell</td></tr><tr><td>3</td><td>Longstrider</td></tr><tr><td>5</td><td>Pass without Trace</td></tr></table>",
+    ],
+    mechanicsKind: "spells_known",
+    notes:
+      "Species lineage/legacy option tables only. One spells_known row per unlock level with unlocksAtClassLevel; leveled spells get freeCastPerLongRest 1.",
+  },
+  {
+    ruleId: "spell.can_cast_named",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "You can cast the Beast Sense and Speak with Animals spells but only as Rituals",
+      "You can cast the Commune with Nature spell but only as a Ritual",
+    ],
+    mechanicsKind: "spells_known",
+    notes: 'spellNames + castAsRitual: true when "only as Ritual(s)"; castingAbility from companion sentence',
+  },
+  {
+    ruleId: "spell.gain_cast_named",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "You can cast minor illusion with your psionic powers",
+      "You gain the ability to cast plane shift and teleport",
+    ],
+    mechanicsKind: "spells_known",
+    notes:
+      'Explicit named-spell grants that omit the word "spell"; preserves every concrete name in an "and" list.',
+  },
+  {
+    ruleId: "spell.cantrip.choice",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "learn one other cantrip of your choice from the Divination or Enchantment school of magic",
+      "learn two cantrips of your choice from the Warlock spell list",
+    ],
+    mechanicsKind: "spells_known",
+    notes: "spellChoiceGrants: [{ level: 0, count: 1 }]; spellChoiceLabel names the class list (\"Warlock cantrips\") or school filter",
+  },
+  {
+    ruleId: "spell.always_prepared",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: ["You always have the Detect Magic spell prepared"],
+    mechanicsKind: "spells_known",
+    notes: "alwaysPrepared: true; spells[] is the captured name so the sheet can collect it",
+  },
+  {
+    ruleId: "spell.cast_as_action",
+    trigger: "description",
+    catalog: "cat_fx_cast_spell",
+    examples: ["When you cast this spell, its casting time is an action instead of 1 minute"],
+    notes:
+      "cast_spell with castSpellCastingTime action; still spends a slot. Pair with spell.always_prepared when the same feature also grants the named spell.",
+  },
+  {
+    ruleId: "spell.at_will_no_slot",
+    trigger: "description",
+    catalog: "cat_char_uses",
+    examples: ["You can cast it without a spell slot"],
+    mechanicsKind: "uses",
+    notes: 'uses: { type: "unlimited" }',
+  },
+  {
+    ruleId: "spell.cast_named_without_slot",
+    trigger: "description",
+    catalog: "cat_fx_cast_spell",
+    examples: [
+      "You can cast Identify and Locate Object without a spell slot or components",
+      "You can cast Misty Step without a spell slot",
+    ],
+    notes:
+      'Adds the free cast itself (cast_spell + castSpellWithoutSlot) so the grant is usable on the sheet, not just listed as a known spell. spell.gain_cast_named still makes the spells known. Add "X is your spellcasting ability for these spells" when the feature overrides the class ability, and a uses/rest sentence when the free cast is limited.',
+  },
+  {
+    ruleId: "spell.cast_named_with_this_trait",
+    trigger: "description",
+    catalog: "cat_fx_cast_spell",
+    examples: [
+      "You can cast the Blade Ward spell as a Bonus Action a number of times equal to your Proficiency Bonus",
+      "Starting at 5th level, you can also cast the Pass without Trace spell with this trait",
+    ],
+    notes:
+      'Innate named casts from a trait or feat. "cast X as a Bonus Action" wires on species/feat/background only; "cast X with this trait/feature" is always safe. Starting-at-Nth-level gates the extra named cast_spell with unlocksAtClassLevel. Pair with a uses/rest sentence and spell.gain_cast_named / spell.can_cast_named so the spells are known.',
+  },
+  {
+    ruleId: "spell.cast_via_psi_points",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "You can cast psychic drain by expending 2 psi points",
+      "you can expend 5 psi points to cast animate objects",
+    ],
+    mechanicsKind: "spells_known",
+    notes:
+      "Name the spell explicitly next to the psi cost. The psi spend itself wires separately (resource.expend_psi_points) — keep both in one sentence.",
+  },
+  {
+    ruleId: "spell.cast_named_no_slot",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "You can cast awaken once without expending a spell slot or psi points",
+      "You can cast fire shield without expending psi points",
+    ],
+    mechanicsKind: "spells_known",
+    notes:
+      'Wires the named spell as known; pair with the "Once you do, you can\'t … until you finish a long rest" sentence for the once-per-rest limit.',
+  },
+  {
+    ruleId: "spell.cast_named_at_will",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "You can cast alter self at will without expending a spell slot or psi points",
+      "You gain the ability to cast alter self at will",
+    ],
+    mechanicsKind: "spells_known",
+    notes: 'Named at-will grants — keep the spell name directly after "cast". Prefer over gain_cast_named when "at will" is present.',
+  },
+  {
+    ruleId: "spell.learn_named",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "You gain the cure wounds spell and can cast it as a 1st-level spell by expending 1 psi point",
+      "You learn divide self and can cast it by expending 5 psi points",
+    ],
+    mechanicsKind: "spells_known",
+    notes:
+      'The bare "You learn X." form requires a casting mention in the same feature; prefer "You gain the X spell" phrasing.',
+  },
+  {
+    ruleId: "spell.added_to_effects_list",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: [
+      "The mutate and polymorph spells are added to your Enhancement Alternate Effects list",
+      "Silent image, major image, hallucinatory terrain, and seeming are added to your Telepathy Discipline Alternate Effects list",
+      "You add the spell weird to your alternate effects list, costing 9 psi points",
+    ],
+    mechanicsKind: "spells_known",
+    notes:
+      "Psi-caster talents extending a discipline's castable list — wired as known spells (cast via psi points).",
+  },
+  {
+    ruleId: "weapon.reach.bonus",
+    trigger: "description",
+    catalog: "cat_char_weapon_reach_modifier",
+    examples: [
+      "your reach increases by 5 feet when making melee attacks, interacting with objects, or navigating environments",
+    ],
+    mechanicsKind: "weapon_reach_modifier",
+    notes:
+      "Self reach bonus for melee/unarmed; appliesToUnarmedStrike defaults true. Prefer mechanics[] weapon_reach_modifier when already extracted.",
+  },
+  {
+    ruleId: "grant.metamagic",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: [
+      "You learn one Metamagic option of your choice from the Sorcerer class.",
+    ],
+    mechanicsKind: "grant_feat",
+    notes:
+      'featCategories: ["Metamagic"] — Hedge Mage Manipulate Magic and similar one-option grants. Uses the PHB Metamagic Options catalog, not Alternate Sorcerer knacks.',
+  },
+  {
+    ruleId: "grant.fighting_style",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: ["You gain a Fighting Style feat of your choice"],
+    mechanicsKind: "grant_feat",
+    notes: 'featCategories: ["Fighting Style"] — do NOT use isChoice.',
+  },
+  {
+    ruleId: "grant.creature_companion",
+    trigger: "description",
+    catalog: "cat_char_grant_creature",
+    examples: [
+      "you gain a Basilisk Companion",
+      "you gain a beast companion",
+      "your companion uses the Wolf stat block",
+    ],
+    mechanicsKind: "grant_creature",
+    notes: 'creatureNames: ["Basilisk Companion"] — also import the creature into creatures[]',
+  },
+  {
+    ruleId: "grant.creature.raise_undead",
+    trigger: "description",
+    catalog: "cat_char_grant_creature",
+    examples: ["raising it as a zombie or skeleton under your control"],
+    mechanicsKind: "grant_creature",
+    notes: 'creatureChoiceOptions: ["Zombie", "Skeleton"] — SRD stat blocks resolve by name.',
+  },
+  {
+    ruleId: "grant.creature.mephit_choice",
+    trigger: "description",
+    catalog: "cat_char_grant_creature",
+    examples: [
+      "manifest it as a mephit: an ice mephit for cold, magma mephit for fire, or dust mephit for lightning",
+    ],
+    mechanicsKind: "grant_creature",
+    notes:
+      'creatureChoiceOptions: ["Ice Mephit", "Magma Mephit", "Dust Mephit"] — keep all three mephit names in the option description.',
+  },
+  {
+    ruleId: "grant.fighting_style_feat",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: ["Fighting Style feat of your choice"],
+    mechanicsKind: "grant_feat",
+  },
+  {
+    ruleId: "grant.epic_boon",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: ["You gain an Epic Boon feat of your choice"],
+    mechanicsKind: "grant_feat",
+    notes: 'featCategories: ["Epic Boon"]',
+  },
+  {
+    ruleId: "grant.origin_feat",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: ["You gain an Origin feat"],
+    mechanicsKind: "grant_feat",
+  },
+  {
+    ruleId: "grant.general_feat",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: ["choose a general feat of your choice", "gain one feat of your choice"],
+    mechanicsKind: "grant_feat",
+    notes: 'featCategories: ["General"]',
+  },
+  {
+    ruleId: "grant.asi_classic",
+    trigger: "description",
+    catalog: "cat_char_ability_scores",
+    examples: [
+      "increase one ability score of your choice by 2, or you can increase two ability scores of your choice by 1",
+    ],
+    notes: "mode: asi_pool, points: 2 — overrides grant.asi_by_name when description disagrees",
+  },
+  {
+    ruleId: "grant.asi_fixed_one",
+    trigger: "description",
+    catalog: "cat_char_ability_scores",
+    examples: [
+      "Your Wisdom ability score increases by 1, to a maximum of 20",
+      "Increase your Dexterity score by 1, to a maximum of 20",
+    ],
+    notes:
+      "mode: fixed — one named score only (Expert Cook / Actor). Choice pools (Strength or Dexterity) stay narrative or use a name preset. Feat descriptions only.",
+  },
+  {
+    ruleId: "grant.asi_2024",
+    trigger: "description",
+    catalog: "cat_char_grant_feat",
+    examples: [
+      "You gain the Ability Score Improvement feat or another feat of your choice for which you qualify",
+    ],
+    mechanicsKind: "grant_feat",
+    notes: 'featCategories: ["General"] — explicit 2024 ASI phrasing',
+  },
+  {
+    ruleId: "ac.bonus.while_armored",
+    trigger: "description",
+    catalog: "cat_char_ac",
+    examples: ["+1 AC while wearing armor"],
+    mechanicsKind: "ac",
+    notes: "Sets requiresArmor on flat AC bonus.",
+  },
+  {
+    ruleId: "ac.bonus.while_raging",
+    trigger: "description",
+    catalog: "cat_char_ac",
+    examples: ["+1 AC while raging"],
+    mechanicsKind: "ac",
+    notes: "Requires sheet Rage toggle (requiresSheetToggle: while_raging).",
+  },
+  {
+    ruleId: "action.bonus.dash_disengage.while_raging",
+    trigger: "description",
+    catalog: "cat_fx_movement_option",
+    examples: [
+      "take the Disengage and Dash actions as part of that Bonus Action",
+      "While your Rage is active, you can take a Bonus Action to take both of those actions",
+    ],
+    notes:
+      "Bonus Action activation with while_raging requirement; single sheet action (not separate Dash/Disengage cards).",
+  },
+  {
+    ruleId: "movement.leap.full_speed",
+    trigger: "description",
+    catalog: "cat_fx_movement_option",
+    examples: [
+      "you can expend movement up to your speed in a single bounding leap",
+      "leap in a single bounding leap propelled by telekinetic power",
+    ],
+    notes:
+      "Self movement option (jump) covering up to your full Speed; no action cost (part of normal movement).",
+  },
+  {
+    ruleId: "spell.damage.half_on_save",
+    trigger: "description",
+    catalog: "cat_char_on_cast_spell_trigger",
+    examples: [
+      "When a target succeeds on a saving throw against a damaging Psionic Power … it still takes half damage but suffers no other effects",
+      "a creature that succeeds on its save still takes half the damage and suffers no other effects",
+    ],
+    notes:
+      "Mirrors Evoker Potent Cantrip: on_cast_spell_trigger with damage_reduction (half-on-save, no other effects). Display/reminder characteristic.",
+  },
+  {
+    ruleId: "spell.damage.add_int_psionic_power",
+    trigger: "description",
+    catalog: "cat_char_on_cast_spell_trigger",
+    examples: [
+      "When you deal damage with a psionic discipline power, you can add your Intelligence modifier to the damage dealt",
+      "When a creature suffers damage from one of your psionic discipline powers, you can add your Intelligence modifier to the damage dealt",
+    ],
+    notes:
+      "Psion Empowered Psionics variants. Mirrors Empowered Evocation as a scoped on_cast_spell_trigger reminder.",
+  },
+  {
+    ruleId: "damage.scaling.die_by_level",
+    trigger: "description",
+    catalog: "cat_char_unarmed_strike_damage",
+    examples: ["at 3rd level the die becomes 1d8", "at 5th level ... 2d6"],
+    mechanicsKind: "unarmed_strike_damage",
+    notes: "Parses multiple at-level die tiers into dieByLevel.",
+  },
+  {
+    ruleId: "defensive.evasion",
+    trigger: "description",
+    catalog: "cat_fx_damage_reduction",
+    examples: [
+      "When you're subjected to an effect that allows you to make a Dexterity saving throw to take only half damage, you instead take no damage if you succeed on the saving throw and only half damage if you fail",
+    ],
+    notes:
+      'mode: "evasion" (no damage on Dex save success, half on fail). NOT saving_throw_trigger — that is for reactive abilities. Renamed reskins (Leading Evasion): set basedOnSrdFeature: "Evasion".',
+    mechanicsKind: "damage_reduction",
+  },
+  {
+    ruleId: "defensive.flat_damage_reduction",
+    trigger: "description",
+    catalog: "cat_char_damage_reduction",
+    examples: ["you can reduce the damage taken by 2"],
+    mechanicsKind: "damage_reduction",
+    notes:
+      'mode: "flat"; reductionAmount N; damageTypes optional (default B/P/S). Requires a numeric amount — phrasing like "reduce the damage by the amount rolled" is intentionally ignored.',
+  },
+  {
+    ruleId: "spellcasting.ability",
+    trigger: "description",
+    catalog: "cat_char_spellcasting_ability",
+    examples: [
+      "Intelligence, Wisdom, or Charisma is your spellcasting ability for these spells (choose when you select this feat)",
+      "Intelligence is your spellcasting ability for your Investigator spells",
+      "Wisdom is your spellcasting ability for this spell",
+    ],
+    mechanicsKind: "spellcasting_ability",
+    notes: "spellcastingAbility: intelligence | wisdom | charisma",
+  },
+  {
+    ruleId: "damage.creature_type",
+    trigger: "description",
+    catalog: "cat_char_damage_roll_modifiers",
+    examples: [
+      "when you hit an Aberration with this weapon, the Aberration takes an extra 2d10 Radiant damage",
+    ],
+    mechanicsKind: "damage_roll_modifiers",
+    notes: "bonusDice + damageType + targetCreatureTypes",
+  },
+  {
+    ruleId: "toggle.conditional_grant",
+    trigger: "description",
+    catalog: "cat_char_*",
+    examples: [
+      "it can choose to grant you the following benefits",
+      "while raging",
+      "while below half hit points",
+      "while in this form",
+    ],
+    notes:
+      'requiresSheetToggle on mechanics[] — use a standard key (while_raging, while_wild_shape, etc.) OR a key declared once under new_toggles on the class/subclass. Never invent a one-off toggle key inside a single feature without declaring it.',
+  },
+  {
+    ruleId: "save.bonus.ability_modifier",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: ["add your Intelligence modifier to the saving throw"],
+    mechanicsKind: "check_roll_modifier",
+    notes: "One Step Ahead — ability_modifier bonus on saves.",
+  },
+  {
+    ruleId: "check.advantage.charisma.attuned",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "When you make a Charisma check, roll an additional d20 and take the higher result",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes: "Attuned Argument — Charisma check advantage approximation.",
+  },
+  {
+    ruleId: "spell.telekinetic_movement_buffs",
+    trigger: "description",
+    catalog: "cat_char_spells_known",
+    examples: ["effect of spider climb, feather fall, or levitate"],
+    mechanicsKind: "spells_known",
+    notes: "Telekinetic Movement — always-prepared option spells cast with psi.",
+  },
+  {
+    ruleId: "precognitive.dreams.thp",
+    trigger: "description",
+    catalog: "cat_fx_grant_temp_hp",
+    examples: ["temporary hit points equal to your Intelligence modifier"],
+    mechanicsKind: "temporary_hit_points",
+    notes: "Precognitive Dreams — INT-mod temp HP (companions after long rest).",
+  },
+  {
+    ruleId: "inspiration.heroic.self",
+    trigger: "description",
+    catalog: "cat_fx_grant_inspiration",
+    examples: [
+      "give yourself Heroic Inspiration if you don't have it",
+      "When you begin your Dance, you can give yourself Heroic Inspiration",
+    ],
+    mechanicsKind: "grant_inspiration",
+    notes:
+      "Self grant flips the sheet Inspiration toggle on use. Pair with power_rider parentPowerNames when it rides another power (Heroic Dance → Dance).",
+  },
+  {
+    ruleId: "precognitive.dreams.surprise_immunity",
+    trigger: "description",
+    catalog: "cat_char_condition_immunity",
+    examples: ["you can't be surprised", "you cannot be surprised"],
+    mechanicsKind: "condition_immunity",
+    notes: "Precognitive Dreams — Surprised condition immunity.",
+  },
+  {
+    ruleId: "ability.score.override.physical_surge",
+    trigger: "description",
+    catalog: "cat_char_ability_score_override",
+    examples: [
+      "make your Strength or Dexterity ability score equal to your Intelligence ability score",
+    ],
+    mechanicsKind: "ability_score_override",
+    notes: "Physical Surge — gated by physical_surge_active sheet toggle.",
+  },
+  {
+    ruleId: "healing.received.half_magical",
+    trigger: "description",
+    catalog: "cat_char_healing_received_modifier",
+    examples: ["magical healing effects on you restore only half"],
+    mechanicsKind: "healing_received_modifier",
+    notes: "Magical Anathema — half magical healing received (includes potions).",
+  },
+  {
+    ruleId: "elemental.emotions.save_dice",
+    trigger: "description",
+    catalog: "cat_fx_check_roll_modifier",
+    examples: [
+      "cold lets you add 1d4 to Wisdom saving throws … fire … Constitution … lightning … Dexterity",
+    ],
+    mechanicsKind: "check_roll_modifier",
+    notes: "Elemental Emotions — per-element save dice (player picks active aspect).",
+  },
+  {
+    ruleId: "grant.custom_ability.named_power",
+    trigger: "description",
+    catalog: "cat_char_grant_custom_ability",
+    examples: ["you gain the Telekinetic Weapons psionic power"],
+    mechanicsKind: "grant_custom_ability",
+  },
+  {
+    ruleId: "grant.custom_ability.named_discipline",
+    trigger: "description",
+    catalog: "cat_char_grant_custom_ability",
+    examples: [
+      "granting the psionic discipline of Telepathy",
+      "granting you the psionic discipline Telekinesis",
+      "You gain the psionic discipline of Psychokinetics",
+      "granting you the Enhancement Psionic Discipline",
+    ],
+    mechanicsKind: "grant_custom_ability",
+    notes: "Psion archetype L1 — primary discipline from subclass choice. Optional 'of'; Psychokinetics → Psychokinesis Discipline.",
+  },
+  {
+    ruleId: "grant.custom_ability.named_talent",
+    trigger: "description",
+    catalog: "cat_char_grant_custom_ability",
+    examples: [
+      "you gain the Rift Strike talent",
+      "you gain the psionic talent Mind Devourer",
+    ],
+    mechanicsKind: "grant_custom_ability",
+    notes: "Cunning Strikes / Ravenous Powers — grant nested discipline talent or class talent by name.",
+  },
+  {
+    ruleId: "choice.count.bonus.unlimited_imagination",
+    trigger: "description",
+    catalog: "cat_char_feature_choice_count_bonus",
+    examples: ["select two options from Boundless Imagination"],
+    mechanicsKind: "feature_choice_count_bonus",
+    notes: "Unlimited Imagination — +1 Boundless Imagination pick.",
+  },
+  {
+    ruleId: "choice.count.bonus.skill_thief",
+    trigger: "description",
+    catalog: "cat_char_feature_choice_count_bonus",
+    examples: [
+      "gain an additional number of skill, tool, or language proficiencies from Adaptive Hunter equal to half your proficiency bonus",
+    ],
+    mechanicsKind: "feature_choice_count_bonus",
+    notes: "Skill Thief — Adaptive Hunter slots from half proficiency.",
+  },
+  {
+    ruleId: "power.rider.from_prose",
+    trigger: "description",
+    catalog: "cat_char_power_rider",
+    examples: [
+      "When you use Phase Rift to flicker",
+      "When you cast Enhancing Surge",
+      "When you use a power or alternate effect of psychkinetics",
+      "When you use the Block option of your Guardian Tactics",
+      "When you use the Challenge option of your Guardian Tactics",
+      "gain the benefit of this talent from a range of 30 feet when the creature is killed by one of your Psionic powers",
+    ],
+    mechanicsKind: "power_rider",
+    notes:
+      "Rider talents — alert overlay on related sheet actions. Prefer parentPowerNames + parentMenuOptionNames when the source names a menu option (Block / Challenge / Grasp).",
+  },
+  {
+    ruleId: "feature.replace_improved",
+    trigger: "description",
+    catalog: "cat_char_replace_feature",
+    examples: [
+      "Your Sacrificial Strike improves. When you use this feature, you can choose to take 10 Radiant damage",
+    ],
+    mechanicsKind: "replace_feature",
+    notes:
+      "Functional replacement of a prior feature. Use for Improved / Greater upgrades that change cost or economy, not number-only scaling.",
+  },
+]
+
+/** Feature-name rules — must cover every FEATURE_NAME_MODIFIER_RULES id. */
+export const FEATURE_NAME_WIRING: ModifierWiringEntry[] = [
+  {
+    ruleId: "grant.asi_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_grant_feat",
+    examples: ["Ability Score Improvement"],
+    mechanicsKind: "grant_feat",
+    notes: 'Wires at levels 4/8/12/16 even when description is blank (class table rows). featCategories: ["General"]',
+  },
+  {
+    ruleId: "grant.epic_boon_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_grant_feat",
+    examples: ["Epic Boon"],
+    mechanicsKind: "grant_feat",
+  },
+  {
+    ruleId: "grant.fighting_style_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_grant_feat",
+    examples: ["Fighting Style"],
+    mechanicsKind: "grant_feat",
+    notes: "Class milestone row — still include full rules text in description when available.",
+  },
+  {
+    ruleId: "defensive.evasion_by_name",
+    trigger: "feature_name",
+    catalog: "cat_fx_damage_reduction",
+    examples: ["Evasion"],
+    mechanicsKind: "damage_reduction",
+    notes:
+      'Exact name "Evasion". Renamed reskins: basedOnSrdFeature: "Evasion" + mechanics damage_reduction mode evasion when party-sharing / extra gates differ.',
+  },
+  {
+    ruleId: "weapon.mastery_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_feature_option_picker",
+    examples: ["Weapon Mastery"],
+    notes:
+      "Wire tier table via choices.choiceCountByLevel on the Weapon Mastery feature (not class_resources). Property names and rules come from the Weapon Mastery Properties system catalog (custom_abilities …0004), with SRD defaults as fallback. Selectable weapons are derived from the class's weapon_proficiencies, so keep qualifiers verbatim (\"Martial weapons that have the Finesse or Light property\") instead of emitting an options list.",
+  },
+  {
+    ruleId: "psion.tantrum_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_uses",
+    examples: ["Tantrum"],
+    mechanicsKind: "uses",
+    notes:
+      "Surfaces the Unleashed Mind talent; the sheet steps the Rampage Die on initiative and on damage taken while it is d6 or lower.",
+  },
+  {
+    ruleId: "weapon.damage_menu.finisher_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_power_rider",
+    examples: ["Finisher"],
+    mechanicsKind: "power_rider",
+    notes:
+      "Optional extra weapon damage. Emit power_rider parentPowerNames [Attack, Unarmed Strike], weaponDamageMenu true, classResourceKey finisher, defaultSelectedWhenToggle below_half_hp. Not damage_roll_modifiers or on_hit_trigger.",
+  },
+  {
+    ruleId: "weapon.damage_menu.improved_finisher_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_power_rider",
+    examples: ["Improved Finisher"],
+    mechanicsKind: "power_rider",
+    notes:
+      "Reduced any-target Finisher dice on the weapon DMG ··· menu (bonusDice 1d8). Do not emit on_hit_trigger.",
+  },
+  {
+    ruleId: "weapon.damage_menu.fierce_start_by_name",
+    trigger: "feature_name",
+    catalog: "cat_char_power_rider",
+    examples: ["Fierce Start"],
+    mechanicsKind: "power_rider",
+    notes:
+      "First-round +CHA weapon/Unarmed damage on the DMG ··· menu. weaponDamageMenu true + ability charisma — not a flat damage_roll_modifiers bonus.",
+  },
+]
+
+/**
+ * SRD-standard feature names that auto-wire on import when spelled exactly
+ * (via wildcard presets). Prefer these names for equivalent homebrew features.
+ */
+export const SRD_PRESET_FEATURE_NAMES = [
+  "Ability Score Improvement",
+  "Epic Boon",
+  "Fighting Style",
+  "Weapon Mastery",
+  "Evasion",
+  "Expertise",
+  "Extra Attack",
+  "Second Wind",
+  "Action Surge",
+  "Indomitable",
+  "Sneak Attack",
+  "Cunning Action",
+  "Uncanny Dodge",
+  "Rage",
+  "Wild Shape",
+  "Channel Divinity",
+  "Bardic Inspiration",
+  "Lay On Hands",
+  "Metamagic",
+  "Eldritch Invocations",
+  "Hunter's Prey",
+  "Defensive Tactics",
+  "Danger Sense",
+  "Fast Movement",
+  "Martial Arts",
+  "Mystic Techniques",
+  "Improved Critical",
+  "Tactical Master",
+] as const
+
+/** Patterns from homebrew imports (Gunslinger, point-pool casters, Alternate Fighter, Dancer). */
+export const HOMEBREW_WIRING_PATTERNS = [
+  {
+    source: "Barbarian subclasses (World Tree / Zealot patterns)",
+    guidance: [
+      "Once-per-turn Rage riders (Divine Fury): mechanics kind on_hit_trigger with oncePerTurn, bonusDice, scalingMode half_character_level_round_down, damageTypeOptions when the type is chosen at use, requiresSheetToggle while_raging.",
+      "Temp HP on Rage (Vitality Surge) or turn-start ally THP (Life-Giving Force): temporary_hit_points with amountScaling / amountDice, thpTrigger, and thpTarget.",
+      "Spend Rage to refresh a long-rest feature early (Zealous Presence): uses + alternateRefresh { spendResourceKey: \"rage\", spendAmount: 1, actionCost: \"none\" }.",
+      "Once per active Rage (Fanatical Focus): usesRecharge on_resource_reactivation + gatingResourceKey \"rage\".",
+      "Subclass-only dice pools with no table name (Warrior of the Gods): class_resources with subclass_name + name derived from the feature (\"Warrior of the Gods Dice\").",
+      "Transformation forms (Rage of the Gods): declare new_toggles once on the subclass, then gate flight/resistance/reactions with requiresSheetToggle.",
+      "Extra Weapon Mastery properties alongside the normal one (Battering Roots) are not supported by the runtime yet: preserve the full rules text for manual review and do not emit extra_weapon_mastery. +Reach on Heavy/Versatile uses weapon_reach_modifier.",
+    ],
+  },
+  {
+    source: "Bard colleges (Dance / Glamour patterns)",
+    guidance: [
+      "Renamed SRD features (Leading Evasion ≈ Evasion): set basedOnSrdFeature: \"Evasion\" so name-based auto-wire applies; put party-sharing / extra gates in description and/or mechanics[].",
+      "Beguiling Magic / Mantle of Majesty alternate refresh: ALWAYS wire base usesFixed + usesRecharge from \"Once you use this… until you finish a [rest]\" even when the next sentence adds an early restore — alternateRefresh is additive. Spell-slot restore: alternateRefresh.spendSpellSlotMinLevel (e.g. 3). Resource restore: spendResourceKey + spendAmount (e.g. bardic_inspiration).",
+      "Temp HP from Bardic Inspiration die × N (Mantle of Inspiration): temporary_hit_points with amountScaling class_resource_die, classResourceKey bardic_inspiration, amountMultiplier 2, targetCount by Charisma modifier.",
+      "Roll class-resource die as damage or multi-target Initiative (Bardic Damage / Tandem Footwork): check_roll_modifier or damage_roll_modifiers with bonusConfig dieScaling class_resource + targets.",
+      "Dexterity instead of Strength for Unarmed Strikes: weapon_ability_override (worked example in cheat sheet).",
+      "One-off movement without OA (Inspiring Movement / Mantle of Inspiration tail): movement_grant — not speed.",
+    ],
+  },
+  {
+    source: "Gunslinger / martial homebrew",
+    guidance: [
+      "Extract Risk Dice, Weapon Mastery, Exploit Dice, Superiority Dice, etc. as class_resources[] from the level table (resource_key snake_case).",
+      "Keep spend phrases in feature descriptions: \"expend 1 risk die\", \"spend 2 exploit dice\" — links limited uses to the pool.",
+      "Gunslinger Risk: EVERYONE knows the six base Maneuver Options (Bite the Bullet, Blindfire, Dodge Roll, Grazing Shot, Maverick Spirit, Skin of Your Teeth) — put them in import_proposals.custom_abilities with ability_role knack + source_type class / Gunslinger. Risk feature grants them via grant_custom_ability (enrichment). Do NOT wire Risk as optionsSource class_knacks / Maneuvers Known picker (there is no maneuvers-known column).",
+      "Skin of Your Teeth is easy to drop: Maneuver Options sit BETWEEN Deadeye and Gun Tank in the Mage Hand Press PDF — always extract all six base maneuvers as class content, never attribute that block to Deadeye.",
+      "Subclass [Maneuver] features (Eagle Eye, Fan the Hammer, Ricochet, …) stay as subclass features with \"expend one Risk Die\" in description — optional duplicate custom_abilities rows with source_type subclass / exact subclass name. Do not make them a pick pool.",
+      "Include all nine subclasses: Deadeye, Gun Tank, Gun-Ko Master, High Roller, Musketeer, Pistolero, Spellslinger, Trick Shot, White Hat. Do not omit Pistolero.",
+      "Do NOT paste Captain/Vagabond Battle Die maneuvers (Bolster, Born Leader, Blinding Attack, …) into a Gunslinger-only batch — eligible_classes must include Gunslinger for shared rows (Dodge Roll, Eagle Eye, Skirmish).",
+      "PDF page breaks scramble Spellslinger / Pistolero / White Hat / Trick Shot blocks — verify each feature against its subclass header before emitting.",
+      "Dire Gambit: regain 1 Risk Die on Initiative and on a Critical Hit via a feature-gated class_resource refresh (resourceRefreshOnInitiative + resourceRefreshOnCriticalHit + classResourceAmount 1 / classResourceChange increase). Do not put rechargeOnInitiative on the Risk Dice pool from the level table or from Dire Gambit itself.",
+      "risk_dice uses.dieSidesByLevel: d8→d10→d12 from the Risk Dice column (in addition to atLevelTable counts).",
+      "Quick Draw / initiative features: preserve \"Advantage on Initiative rolls\" wording.",
+      "Fighting Style milestone: name + \"You gain a Fighting Style feat of your choice\" in description.",
+    ],
+  },
+  {
+    source: "Martyr / HP-cost casters",
+    guidance: [
+      "Spell Uses column → class_resources.spell_uses (long rest). Do not invent normal spell-slot progression for Hit Point Spellcasting.",
+      "Max Spell Levels column → class_resources.max_spell_level (special cap), not a pool and not caster_progression full/half/third.",
+      "Set spellcasting.ability to Wisdom when the Spellcasting feature says so, but omit caster_progression / slots — Hit Point Spellcasting is not normal slots.",
+      "Keep the Hit Point Spellcasting table (1st 5 / 2nd 10 / 3rd 20 / 4th 30 / 5th 45). The sheet spends current HP on cast (bypasses Temporary Hit Points). Optionally set spellcasting.hit_point_cost_by_level; enrichment injects the Martyr table on attach.",
+      "Sacrifice grants two named benefits with different action economies — emit Sacrificial Strike and Sacrificial Skill as separate features[] rows at the same level (do not keep them as one Sacrifice blob). Sacrificial Strike is a Bonus Action: after a melee/unarmed hit, extra 10 Radiant to the target (spendHitPoints 5). Sacrificial Skill is a Passive failed_roll_trigger on any failed D20 Test: bonusFixed 5, spendResourceKey hit_points amount 10, refundResourceOnStillFailed (no damage if the test still fails).",
+      "Improved Sacrificial Strike (\"Your Sacrificial Strike improves… you can choose to take 10… extra 20\"): this is a functional replacement, not a rider. Emit replace_feature replacedFeatureNames [\"Sacrificial Strike\"] on the Improved feature, keep it as its own Bonus Action (spendHitPoints 10, extra 20 Radiant). Do not emit power_rider. Keep the choose-to-take sentence and the later \"first time each turn without a Bonus Action\" sentence on the SAME feature (firstUseNoAction / firstUseNoActionFromLevel 17). Do not emit a leftover 17-only row that only says the first use is free.",
+      "Undying: Passive once per Long Rest when dropping to 0 HP (onDropToZeroHp — not a Reaction). Keep \"immediately use your Miraculous Healing (no action required)\"; enrichment sets alsoActivateFeatureNames so the sheet offers a button to fire Miraculous Healing after Undying.",
+      "Miraculous Healing: Bonus Action heal_self with healMode hit_dice (class HD + CON per die) plus class_resource reduce on the reserved hit_dice key. Dice scale 1/2/3/4 at Martyr 1/5/11/17 (heal count is the spend). Do not invent a class_resources.hit_dice row.",
+      "Burden of … Spells features: keep HTML spell tables in description.",
+      "Choose-one benefit lists (Kingslayer: Assault / Break Spells / Shatter Morale): resource_ability_menu with waiveResourceCost and menuOptions [{ name, description, actionKind }]. Assault is actionKind bonus. Do not treat the parent as a Bonus Action just because one option spends one.",
+    ],
+  },
+  {
+    source: "Investigator / ritualist investigators",
+    guidance: [
+      "Ritual Level → class_resources.ritual_level (special cap). Finisher column → resource_key finisher (special NdM rider like 1d8→3d8) — NEVER finisher_dice. Finisher / Improved Finisher themselves are optional weapon-damage riders: power_rider parentPowerNames [\"Attack\", \"Unarmed Strike\"], weaponDamageMenu true, selectable true. Finisher uses classResourceKey \"finisher\" + defaultSelectedWhenToggle \"below_half_hp\" + menuConditionLabel \"Bloodied\". Improved Finisher uses bonusDice \"1d8\" (any target, reduced). Do not emit on_hit_trigger or damage_roll_modifiers for those dice.",
+      "Rushed Incantation + Trinkets → spendable pools (short regain 1 / long all). Keep \"expending a use of your Trinkets\" / Rushed Incantation spend phrasing.",
+      "Subclass Trinkets + Holy Trinkets: one custom_abilities row per named trinket (Dance-styles pattern — each is its own Combat button). ability_role upgrade; subclass rows use source_type subclass / exact archetype name; holy rows use source_type class / Investigator and definition starting with \"Holy Trinket.\". Class Trinkets is NOT a class_upgrades picker — enrichment grants via grant_custom_ability on the subclass Trinkets / Holy Trinkets features.",
+      "All trinkets (subclass and holy) spend the shared class_resources.trinkets pool (classResourceKey \"trinkets\"). Do not give Holy Trinkets its own limitedUses pool.",
+      "Trinkets are physical objects, so enrichment also emits one equipment[] row per trinket (from feature prose only — never invent item text) and grant_equipment on the same umbrella feature. Name-wiring attaches known activations when exact names are present: spell-cast trinkets (Fogstone Periapt / Misty Step, Glass Medallion / Invisibility, Skeleton's Key / Knock, Cold Iron Pendant / Detect Evil and Good, Dead Mist Vial / Fog Cloud, Engraved Lens / Identify, Consecrated Whetstone / Magic Weapon), Gilded Dragon Scale (damage-type Resistance menu), Mimic-Tooth Necklace (Bonus Action 2d8 Acid), and holy Amulet / Ankh / Rune.",
+      "Consecrated Whetstone: Bonus Action free cast of Magic Weapon. Casting prompts for a wielded weapon, turns on magic_weapon_active (+1 attack/damage on that weapon only), and adds a duration reminder. Manage or clear it from the weapon’s Combat ··· menu or the bell reminders panel.",
+      "Ritualist: no normal spell slots / caster_progression — grimoire Ritual casting only. Intelligence is the spellcasting ability for Investigator spells.",
+      "Investigator archetype Occultist (not KibblesTasty Occultist class): Pact Magic → set the subclass spellcasting field (Warlock-style slots from the Occultist Spellcasting table).",
+      "PDF page breaks scramble Antiquarian / Medium / Occultist blocks — verify each feature against its subclass header; Antiquarian higher levels are often truncated in extracts.",
+      "Antiquarian Thesis (Corpus / Mentis / Mortis / Oculus): isChoice + one option per subject; EACH option description has its own Investigator Level | Spells HTML <table> (3/5/7/9 unlocks). Parent description keeps the choose-one + \"treat as Ritual\" / grimoire prose — do NOT mash all four tables into the parent alone. swappableOnRest: false (replace on Investigator level-up only). Enrichment wires spells_known per option with unlocksAtClassLevel + castAsRitual.",
+    ],
+  },
+  {
+    source: "Necromancer / thrall controllers",
+    guidance: [
+      "Charnel Touch pool: class_resources.charnel_touch with uses { type: \"at_level\", atLevelMode: \"multiply_level\", atLevelTable: [{ level: 1, count: 5 }], recharges: [{ rest: \"long_rest\" }] }. NEVER emit type \"multiply_level\" as the uses.type — multiply_level is only atLevelMode.",
+      "Charnel Touch feature: Magic action + class_resource limitedUses with classResourceKey \"charnel_touch\", classResourceAmount 5, classResourceCostMode \"up_to_proficiency_bonus\" (cap 5 × PB). Attach two special_attack profiles: (1) melee Necrotic damageFromResourceSpend + spendResourceOnHit + criticalDamageMultiplier 2; (2) from level 2 Healing your Thralls — healFromResourceSpend true, healTarget \"controlled_companion\", unlocksAtClassLevel 2 (no attack roll; restore HP equal to points spent on a thrall). The sheet asks for points, then either Miss/Hit/Critical for the attack or a thrall picker for the heal.",
+      "Thralls + CR Total columns → special caps (thralls, thrall_cr_total). Fractions like 1/4 are valid CR Total values. Do NOT wire Thralls as optionsSource class_upgrades / resourceKey thralls (that is a control cap, not a pick catalog).",
+      "Import thrall creatures[] with the class; Thralls feature → grant_creature with creatureChoiceOptions (Skeleton, Spirit, Zombie, Bone Beast, Gorger, Deadnaught, Bloodlurk), choiceCountByLevel matching the Thralls column (1/2/3/4/5/6 at 2/3/7/11/15/19), creatureCombinedCrByLevel matching CR Total (1/4, 1/2, 1, 2, 3, 4 at 2/3/5/9/13/17), and creaturePickOnRest short_or_long_rest so the rest overlay offers the pick.",
+      "Improved Thralls is not a player pick: isChoice false, choices.applyTo companion, applyToCompanionFeature Thralls, plus condition_immunity (Charmed, Frightened) so attached thralls receive Avoidance / Necrotic Damage / Turn Immunity.",
+      "Dead Space is a non-combat Magic action (activation.action + sheetDisplay abilitiesActions) with the linked-item choice, 12-corpse uses, player_note, and inventory_container (linkHostItem true so the chosen bag/cloak appears in Gear with Contents). Thrall Rush is onInitiative + combatActions, not an Attack/Bonus Action. Overcharged Thralls is on_creature_death_trigger (ally/thrall) that restores charnel_touch equal to Necromancer level.",
+      "Deadnaught: category companion with HP/HD scaling from Necromancer level; keep Necromantic Bond (level 7 exclusive thrall) and Multiattack scaling in the stat block.",
+      "Full caster: set classes[].spellcasting { ability: \"Intelligence\", caster_progression: \"full\" } (Alternate Necromancers may swap ability — keep INT unless the extract chooses Resurrectionist/Ghoul).",
+      "Lichdom immunities: mechanics kind damage_immunity (not damage_resistance) for Necrotic/Poison; condition_immunity for Exhaustion/Poisoned; vision truesight 120.",
+      "Charnel-spend early refreshes (Lazarus Bolt 20 points, Pharaoh Channel Divinity 15 points): uses + alternateRefresh { spendResourceKey: \"charnel_touch\", spendAmount: N, actionCost: \"none\" }.",
+      "Reanimator Spell-Stitching: keep as subclass feature isChoice options (stitch list + Charnel costs in option text) — do not invent import_proposals.custom_abilities for stitches.",
+      "Subclass spell tables: keep HTML tables; alwaysPrepared spells_known with unlocksAtClassLevel. Fix obvious copy-paste table titles (e.g. Reaper mislabeled Pharaoh).",
+      "Keep spell_list on the class from the official Spell / School / Special tables. Persist stamps those names onto matching catalog rows even when existing spells are linked/skipped, and unions class tags if a later import overwrites the write-up. Do not dump the shared magehandpress-spells catalog into the class JSON. Homebrew-only rows may be stubbed in spells[]; full write-ups belong in a Spells pass.",
+    ],
+  },
+  {
+    source: "Mage Hand Press Warden (not Kibbles)",
+    guidance: [
+      "Distinct from KibblesTasty Warden (Endurance Dice / Primal Manifestations). On name collision, the import UI asks the user what to rename to (suggestion: \"Warden (Mage Hand Press)\").",
+      "Interrupt column → class_resources.interrupt (short regain 1 / long all). Interdict subclass restores 1 Interrupt on Initiative via a feature-gated refresh (not pool rechargeOnInitiative).",
+      "Unyielding Resolve / Improved Resolve: \"While you are Bloodied\" → damage_resistance gated with below_half_hp.",
+      "Guardian Tactics: resource_ability_menu (Block / Challenge / Grasp + Extended Tactics unlock at 14, waive cost); ally/enemy effects remain play-time. Interrupt: reaction + class_resource interrupt. Survive / Selfless Survival / Undying share useShareKey \"survive\".",
+      "Subclass riders: power_rider with parentPowerNames + parentMenuOptionNames (Anointed Block/Stonewall→Block, Death's Gambit→Challenge, Hold the Line/Thunderblast/Grasping Vines→Grasp, Legendary Interruption→Interrupt, Verdant Resilience/Undying→Survive).",
+      "Subclass activations: Roar / Arcane Strike / Earthshatter (combat panel), Mortal Metamagic (Hit Dice menu: Empowered 1 / Quickened 2), Draconic Vengeance (reaction special_attack + spendHitDice 1).",
+      "Grey Watchman Battle Dice: subclass_name on the class_resources proposal; sheet-gated to Grey Watchman; Battle Tactics wires optionsSource class_knacks for maneuvers.",
+    ],
+  },
+  {
+    source: "Point-pool casters (e.g. Psion)",
+    guidance: [
+      "Psi Points + Psi Limit as separate class_resources (pool vs per-use cap).",
+      "Disciplines / talents: isChoice + choices.options[] for player picks; keep psi costs in each option description.",
+      "Preserve prerequisite and level_requirement on nested talent options, including incompatible-with exclusions. Keep specialization_choices separate from talent picks. Base powers, optional augments, alternate-effect spells, and independent talent reactions have separate costs; never charge a spell's psi cost to an unrelated reaction in the same description.",
+      "Distinguish Discipline Talents (nested on the discipline) from Class Talents (ability_role class_talent) — distinct choices.category and resourceKey.",
+      "Use import_proposals.custom_abilities for discipline systems needing builder UI.",
+      "Ephemeral turn-start free points that expire unused and have spend restrictions: mechanics kind turn_start_bonus_grant (not turn_start_resource_restore).",
+      "Play-state engines the sheet already runs — keep the source wording verbatim and do NOT invent class_resources rows, dieSidesByLevel ladders, or new_toggles for them: Rampage Die (Rampaging Power), Flesh Warp's Mutation Die, Mesmerism illusion tokens (Projected Self, Imaginary Ally), Biokinesis Weapon Morph natural weapons, Balance of Power's banked pool, and Perfected Enhancement's temp-HP bonus. Dump Stat owns the die size, token counts, morph toggles, banked amounts, and their reset-on-rest behavior.",
+      "Rampage Die dependants: Uncontrollable Mind → condition_immunity Charmed/Frightened with requiresSheetToggle \"rampage_die_d8_plus\" (never unconditional). Tantrum (class_talent) and Unstoppable Rampage need no mechanics[] — the sheet steps the die on initiative / on damage taken and runs the 0-HP roll from the feature names.",
+      "Empowered Psionics (+INT to psionic power damage) is description-driven (on_cast_spell_trigger reminder); do not model it as damage_roll_modifiers on the subclass.",
+    ],
+  },
+  {
+    source: "Alternate Fighter / exploit martials",
+    guidance: [
+      "Name the class \"Alternate Fighter\" (not bare Fighter). Emit exploit_dice (2→6 at 2/4/8/12/16 + dieSidesByLevel d6→d12) and exploits_known (special 2→11).",
+      "Martial Exploits → optionsSource class_knacks + resourceKey exploits_known + choiceCountByLevel. Shared LaserLlama exploit library → ability_role knack + eligible_classes including Alternate Fighter (Fighter alone fuzzy-matches).",
+      "Fighting Style options: grant_feat Fighting Style + matching feats[] with category \"Fighting Style\". Styles Known scales 1/2/3/4 at 1/6/12/18 (enrichment scales grant count).",
+      "Subclass \"X Exploits\" signature tables → grant_custom_ability. Runecarver/Sylvan Archer/Tinker catalogs → inline choices.options on Rune Carving / Enchanted Shots / Inventive Arsenal — NEVER eligible_classes Alternate Fighter (would pollute Martial Exploits).",
+      "Relentless initiative refill belongs to the level-20 feature (class_resource effect + resourceRefreshOnInitiative), NEVER exploit_dice.uses.rechargeOnInitiative from level 2. It removes the independent rest limit of 3rd-degree exploits but retains their die cost. Martial Superiority grants a player-confirmed, once-per-round resource waiver for known 1st/2nd-degree exploits; do not invent two menu entries from the degree names. 19th level is ASI, not Epic Boon.",
+      "Preserve Second Wind 1 use → 2 at 14 (1d10 + Fighter level healing), Action Surge 1 at 6 → 2 at 20, Indomitable 1 at 9 → 2 at 13 → 3 at 17, and 2/3/4 attacks at 5/11/17. The Fighter enrichment pack attaches editable catalog metadata for these tiers.",
+    ],
+  },
+  {
+    source: "Dancer / performance classes",
+    guidance: [
+      "Dances column → class_resources.dances (spendable uses starting at Dancer 2; short rest regain 1, long rest all). Do not emit a level-1 Dances row.",
+      "Dance Die column → class_resources.dance_die (die size only — special, not a depleting pool).",
+      "Dance feature: Bonus Action; limitedUses class_resource dances. Using Dance activates while_dancing. Graceful Dodge is authored ON Dance as resource_ability_menu on dance_die (bonusConfig die / class_resource dance_die, resourceCost 0, no actionKind, limitations while_dancing) — do not invent a separate Graceful Dodge feature row unless the source lists one. The sheet files no-actionKind die options under Passive and rolls the die on Use.",
+      "Begin Dance turns on while_dancing for style riders; players should not have to flip Dancing by hand.",
+      "Dance Styles picker: isChoice + choices { category: \"Dance Style\", resourceKey: \"dance_styles_known\", optionsSource: \"class_upgrades\", choiceCountByLevel: [{level:2,count:1},{level:13,count:2}] }. The Dance switcher always lists the class defaults (Agile Movement, Elegant Form, Retaliatory Swipe, Spinning Shot) plus subclass styles that keep the \"[Dance Style]\" suffix. Base styles are also custom_abilities with ability_role \"upgrade\". Gate each style's riders on dance_style_* (exclusive group dance_style), not only while_dancing.",
+      "Cheerful / saves vs Frightened: check_roll_modifier with checkConditionTypes [\"Frightened\"] — never conditionNote for named conditions (conditionNote blocks auto-wire).",
+      "Nimble Start / first-round incoming Disadvantage: check_roll_modifier with incomingAttackMode \"disadvantage\" + requiresSheetToggle first_turn_of_combat. The sheet files that as a Combat Passive reminder (flip First turn of combat on round 1). Detect/enrichment stub this if omitted.",
+      "Fierce Start (+CHA to weapon/Unarmed damage on the first round): power_rider parentPowerNames [\"Attack\", \"Unarmed Strike\"], weaponDamageMenu true, ability \"charisma\" — not a flat damage_roll_modifiers bonus. The sheet offers it under Damage modifiers on the weapon DMG menu (alongside Deadly D4s); player opts in on round 1.",
+      "Enemy combat impact without an action (Charm/aura/debuff that subtracts from attack rolls, damage rolls, or saves; or modify_creature rollTarget enemy): do NOT invent Action/Bonus Action/Reaction. Set sheetDisplay combatActions (+ featuresTab). Prefer modify_creature rollTarget \"enemy\" and/or a resource_ability_menu of named picks (no actionKind). The sheet files these as Combat Passive reminders. Examples: Courtesan Beguiling Charm (Bad Influence / Friend of My Friends).",
+      "Heartbreaker / style riders: power_rider parentPowerNames [\"Dance\", \"Enthralling Movement\"] + parentMenuOptionNames [\"Enthralling Movement\"] so the Dance style picker notes the rider (e.g. two Dance Dice Psychic on Enthralling Movement saves).",
+      "Multi-target Extra Attack (Three/Four/Five-Target): keep the distinct feature name; do not emit extra_attack for those — enrichment attaches a power_rider reminder. Higher tiers supersede lower ones via replace_feature (Four replaces Three; Five replaces Four and Three) so only the highest available Passive shows on the sheet.",
+      "Grand Finale is an Attack-action rider while Dance is active (not its own Action). Alternate refresh: uses + alternateRefresh spendResourceKey dances amount 2. Enrichment attaches a power_rider so the weapon DMG menu offers Grand Finale (double damage dice / crit).",
+      "Graceful Dodge / \"add your Dance Die to your AC\": resource_ability_menu on dance_die with bonusConfig { mode: \"die\", dieScaling: \"class_resource\", classResourceKey: \"dance_die\" } (auto-detected from AC + Dance Die phrasing). Same pattern for Battle Dice / superiority / exploit die spends that add the die to a roll — put actionKind on options that spend Action / Bonus Action / Reaction so they stay on the parent menu.",
+      "Deadly D4s: optional 2d4 for 1d4/1d6/Unarmed. Dervish Firearms: optional 3d4 only on Firearm weapons that already deal 2d4 — do NOT emit weapon_damage_die_override. Keep rules text; enrichment adds a power_rider reminder.",
+      "Dervish Fighting (and similar optional weapon riders): emit weapon_sheet_badge with badgeLabel, whenDamageDice [1d4, 1d6], includeUnarmed true so matching Combat weapons show a named info badge. Enrichment attaches this if omitted.",
+      "Extra Finesse: weapon_ability_override treatAsFinesse + whenDamageDice [1d4, 1d6] (not a named-weapon list).",
+      "Momentum tokens: class_resources.momentum with subclass_name Acrobat; uses.type at_level [{level:3,count:1},{level:14,count:3}] with no recharges (combat tracker). Do not invent Momentum for every Dancer.",
+      "Unarmored Defense: 10 + DEX + CHA (accept \"10 plus your Dexterity and Charisma modifiers\").",
+      "Parry and Riposte: reaction uses = DEX mod; short rest amount 1 + long rest all.",
+      "Per-style toggles only when a subclass ability is style-specific (Dueling Stance / Inspiring Chant / Pantomime); generic riders use while_dancing.",
+    ],
+  },
+  {
+    source: "Craftsman / masterwork smiths",
+    guidance: [
+      "Masterwork Bonus column → class_resources.masterwork_bonus (type special Class Cap — NOT a spendable pool). Do not emit uses that spend masterwork_bonus; features that say \"a number of times equal to your Masterwork Bonus\" get their own at_level tier tracker (enrichment).",
+      "Live Masterwork math: enrichment wires attack/damage/AC from Masterwork Bonus gated by sheet toggles masterwork_weapon_active / masterwork_armor_active — keep Masterwork Weapons / Armor feature names intact.",
+      "Thunderlords Power Cell: class_resources.charge_points with subclass_name \"Thunderlords' Guild\" (spendable; multiply_level = Craftsman level; long rest). Keep Shock / Ball Lightning spend phrases.",
+      "Weapon Mastery: choices.choiceCountByLevel from the Weapon Mastery column (not a class_resource).",
+      "Customize Armor / Weapon Enchantment / Armor Enchantment / Bane Weapons: isChoice + swappableOnRest long; enrichment attaches linkedModifiers where possible.",
+      "Extra Craftsman mastery properties + Trappers' traps: custom_abilities with ability_role \"upgrade\". Traps feature: choices { category: \"Trap\", resourceKey: \"traps_known\", optionsSource: \"class_upgrades\" } — subclass-attached upgrades are included when the character has that subclass.",
+      "Zeroed Sights / ignore Half and Three-Quarters Cover: attack_roll_modifiers with ignoreHalfCover + treatThreeQuartersCoverAsHalf (or leave phrasing for detect).",
+      "Instant Crafting uses (2; short regain 1 / long all): enrichment owns Expert Crafting limitedUses — keep the Instant Crafting paragraph.",
+      "Mechanaut's Apparatus: grant_creature + creatures[] row; Cockpit/Frame/Magitech upgrades stay isChoice options.",
+      "Overnight Crafting, Magic Item Crafting tables, Magazine Reload, Folded Steel damage-type swaps, Magnum Opus item creation: narrative / Features-tab unless a fixed passive bonus is stated.",
+    ],
+  },
+  {
+    source: "Warmage / cantrip specialists",
+    guidance: [
+      "Base Warmage is Intelligence cantrip casting only — set classes[].spellcasting { ability: \"Intelligence\" } with NO caster_progression / spell slots.",
+      "Cantrips column → incremental spells_known grants (start at 4, +1 at 3/5/9/13/17/20) — never cumulative absolute totals (4 then 5 then 6 as separate mechanics).",
+      "Tricks column → class_resources.tricks_known (special) + Warmage Tricks optionsSource class_knacks; ability_role knack on trick custom_abilities.",
+      "Cantrip Bonus Dice column → class_resources.cantrip_bonus_dice (special rider for Warmage Edge).",
+      "Arcane Surge → class_resources.arcane_surge (2 at L5, 3 at L11; short regain 1 / long all). Master Warmage restores 1 use on Initiative when none remain via a feature-gated refresh (not pool rechargeOnInitiative).",
+      "Warmage Edge: keep \"add your Intelligence modifier to one damage roll of a cantrip\" phrasing — enrichment wires on_cast_spell_trigger.",
+      "Import Warmage-exclusive cantrips (Force Dart, Force Buckler, etc.) before or with Tricks so prerequisite gates resolve.",
+      "House of Bishops: subclass.spellcasting { ability: Intelligence, caster_progression: third, prepared: true } — Wizard list prepared slots.",
+      "House of Kings Battle Tactics: auto-grant all listed maneuvers with mechanics [{ kind: \"grant_custom_ability\", abilityNames: [\"Blitz\", \"Check\", \"Flash of Brilliance\", \"Gambit\", \"Morale Boost\", \"Stalemate\"] }]. Do not emit linkedModifiers or modifierRefs. This is not a Maneuvers Known / Tricks picker; battle_dice is subclass-scoped with rechargeOnInitiative.",
+    ],
+  },
+  {
+    source: "Occultist / KibblesTasty traditions",
+    guidance: [
+      "KibblesTasty Occultist is Wisdom full caster with Spells Known — set classes[].spellcasting { ability: \"Wisdom\", caster_progression: \"full\", prepared: false }. Not prepared; not Investigator Occultist pact magic.",
+      "Cantrips Known / Spells Known → incremental spells_known grants (cantrips 3 then +1 at 4/10; spells 3 then +1 each level through 18).",
+      "Occult Rites column → class_resources.occult_rites_known (special) + Occult Rites optionsSource class_knacks; ability_role knack. swappableOnRest false — replace on level-up only.",
+      "Emit Occult Traditions in top-level subclasses[] (Witch, Hedge Mage, Oracle, Shaman, Spiritualist, Voidwatcher). Never nest under classes[0].subclasses. Occult Tradition feature is a short unlock blurb — no stub isChoice listing tradition names.",
+      "Tradition-specific rites: keep ability_role knack with source_type subclass / exact tradition name; copy Prerequisite lines (level, coven, mystery, prior rites).",
+      "Coven / Mystery / Eschatological Conclusion / Totem pickers: isChoice + options with HTML spell tables where present; alwaysPrepared spells_known with unlocksAtClassLevel for bonus-spell tiers.",
+      "Name collisions: Occultist tradition Witch ≠ Mage Hand Press Witch class. Keep tradition name \"Witch\" under class_name Occultist.",
+      "Do not dump the shared kibbles-spells catalog into the class JSON when spells[] already exists — merge only missing Kibbles-exclusive rows if needed.",
+    ],
+  },
+  {
+    source: "Beastheart / MCDM companions",
+    guidance: [
+      "Ferocity: companion-owned class_resources.ferocity, uses.type special, no atLevelTable. Gain 1d4 + nearby hostiles each turn; check rampage at 10+. Actions/exploits share this pool. End combat heals then clears it.",
+      "Companion feature → grant_creature with creatureChoiceOptions matching imported creatures[] (category companion, caregiver scaling). Signature attacks: name without parenthetical + tag \"Signature Attack\"; ferocity actions keep tag like \"2 Ferocity\" + unlock_level_*.",
+      "Primal Exploits → optionsSource class_knacks + ability_role knack (class source) + primal_exploits_known special count. WIS is exploit save DC only — never classes[].spellcasting from Primal Exploits.",
+      "Subclass exploits: independent inline choices.options with costs, modifiers and level gates. Separate library rows use class_talent, not base class_knacks; never mix them into Primal Exploits. Swap on level-up, not rests.",
+      "Companion Bond is the subclass unlock. Mystic Connection options match the companion; gate temporary benefits. Companion upgrades use choices.applyTo companion, keeping AC, signature damage and saves off the caregiver. Preserve PB formulas and action unlock levels.",
+      "PDF two-column paste often interleaves Undying Protector (Protector Bond 15) with Allied Weather (Primordial Bond 15) — verify both against the PDF.",
+    ],
+  },
+  {
+    source: "Warden / KibblesTasty bonds",
+    guidance: [
+      "Endurance Dice column → class_resources.endurance_dice (at_level + dieSidesByLevel d8/d10/d12; short/long recharge). Also emit endurance_die_size as a special die-size resource — never fold die size into a second spendable pool.",
+      "Primal Manifestations → class_resources.primal_manifestations (special; never primal_manifestations_known) + optionsSource class_knacks; swappableOnRest false (replace on level-up only). Each manifestation is import_proposals.custom_abilities with ability_role knack + Prerequisite lines.",
+      "Empowered Endurance: regain 1 Endurance Die on Initiative when none remain via a feature-gated class_resource refresh (resourceRefreshCap 1). Do not set rechargeOnInitiative on endurance_dice from the level table.",
+      "Warden Bond is a short unlock blurb; Elemental Soul / Beasthide / Elderheart / Stoneblood / Sunwatcher / Ironbound / Dreadwing / Timetwister / Astral Guardian / Bone Binder live in subclasses[] with class_name Warden. Do not emit \"Warden Bond Feature\" base-class placeholders.",
+      "Name collisions: KibblesTasty Warden ≠ Mage Hand Press Warden (Interrupt / Survive). Keep source header name \"Warden\"; Dump Stat collision UI asks for a rename.",
+      "Do not dump the shared kibbles-spells catalog into the class JSON — bond innate spells stay on subclass features; merge only missing Kibbles-exclusive rows if needed.",
+    ],
+  },
+  {
+    source: "Inventor / KibblesTasty specializations",
+    guidance: [
+      "Upgrades column → class_resources.upgrades with uses.type special (choice count 1→9). Never emit upgrades as a spendable at_level pool with recharges.",
+      "Specialization Upgrade → optionsSource class_upgrades + resourceKey upgrades; swappableOnRest false (exchange on level-up). One custom_abilities row per upgrade with ability_role upgrade — section headers like \"Unrestricted Upgrades\" / \"5th-Level Upgrades\" are NOT ability rows.",
+      "Subclass upgrades: source_type subclass / exact specialization name. Generic Shield Proficiency and Tool Proficiency: source_type class / Inventor.",
+      "Read upgrade tier headings within each PDF column before crossing columns; copy the tier onto each level_requirement and retain named prerequisite chains. An explicit higher-level prerequisite overrides the section tier. Companion-only upgrades must not grant their golem's armor, ability scores, attacks, or immunities to the character.",
+      "INT half caster with Spells Known — classes[].spellcasting { ability: \"Intelligence\", caster_progression: \"half\", prepared: false }. Incremental spellChoiceGrants (3 at 2nd, +1 on odd levels through 19; cap 12). Not Artificer prepared.",
+      "Inventor Specialization is a short unlock blurb; specializations live in subclasses[] (include Cursesmith, Runesmith, Relicsmith when present). Do not emit \"Inventor Specialization feature\" placeholders at 3/5/14.",
+      "Golemsmith Mechanical Golem → grant_creature + creatures[] (category companion); chassis options stay isChoice on the feature. Fleshsmith Thesis of Flesh is isChoice options; thesis-granted upgrades still appear in the upgrade library.",
+      "Runesmith: class_resources.runes_marked with uses.type special + subclass_name Runesmith (cap 2→5). Runic Flare → uses mechanic (PB / short or long). Twin Flares truncated mid-source → keep supplied text + [Source ends mid-entry]; do not invent the ending. Glyph appendix spells may keep school \"… (glyph)\".",
+      "Cursesmith Forbidden Artifact: isChoice with count 2 at 1st (grows with PB); do not also emit those properties as upgrade library rows. Path spell tables stay HTML in each Cursed Path option description.",
+      "Relicsmith Justicar Savant grants an additional Ordained Path pick (isChoice + same options as Ordained Path).",
+      "Do not dump kibbles-spells wholesale when spells[] already has the Inventor list. Stub-only homebrew spells: put provenance in description (Import note: …) — a top-level note field is stripped by the schema.",
+    ],
+  },
+  {
+    source: "Alternate Sorcerer / LaserLlama point-pool",
+    guidance: [
+      "Point-pool CHA full known caster — Sorcery Points cast spells (no slots). Emit class_resources.sorcery_points + spell_limit (special) + metamagics_known (special 2/3/4/5/6 at 2/5/9/14/19). Emit spellcasting.point_pool and progression explicitly. Spell Limit stores point costs 2/3/5/6/7 at levels 1/3/5/7/9, not spell levels. Preserve class ownership when pools share keys.",
+      "Metamagic feature → optionsSource class_knacks + resourceKey metamagics_known + choiceCountByLevel from the Metamagics Known column. Do NOT use grant_feat / PHB Metamagic Options catalog (homebrew list replaces it).",
+      "Metamagic library → import_proposals.custom_abilities with ability_role knack + source_name \"Alternate Sorcerer\" (never invent ability_role metamagic; never source_name Sorcerer — that attaches to SRD Sorcerer). Include eligible_classes and preserve Sorcery Point cost sentences, including variable spell-level costs.",
+      "Do not emit \"Subclass Feature\" placeholders at 6/14/18 — Origins live in subclasses[]. Draconic Sorcery needs Dragon Ancestor (isChoice) + Draconic Resilience + Draconic Sorcery Spells at 3rd; Gem Ancestries are optional isChoice options on Dragon Ancestor.",
+      "Sorcerous Regeneration / Innate Arcanum / Innate Sorcery: keep feature prose; enrichment owns point-pool recharge templates and arcanum presets.",
+    ],
+  },
+  {
+    source: "Alternate Barbarian / LaserLlama exploits",
+    guidance: [
+      "Rage pool uses resource_key \"rage\" (never \"rages\"). Short rest regain 1 / long rest all. Unlimited at 20th → uses.freeUseAfterLevel: 20 (never invent a placeholder count of 100).",
+      "Also emit exploit_dice (at_level + dieSidesByLevel) and exploits_known (special choice count from the Exploits Known column).",
+      "Savage Exploits → optionsSource class_knacks + resourceKey exploits_known + choiceCountByLevel. Shared LaserLlama exploit library → ability_role knack + eligible_classes including Alternate Barbarian (Barbarian alone fuzzy-matches).",
+      "Path pickers with named lists (Giant Bloodline, Draconic Ancestry, Heart of Chaos, Bestial Spirits) should be isChoice when practical. Mutant Mutations nested catalogs may stay HTML unless a real picker is requested.",
+      "Fixed starting gear lines that are not (a)/(b)/(c) choices belong in starting_equipment, not a fake fourth equipment group.",
+    ],
+  },
+  {
+    source: "Alternate Ranger / LaserLlama knacks",
+    guidance: [
+      "Name the class \"Alternate Ranger\" (not bare Ranger) to avoid PHB collision. Knack library source_name must be Alternate Ranger too.",
+      "Emit quarry (WIS-mod spendable + restoreBySpellSlot; Tireless → rechargeOverrides at 10) + quarry_die (special dieSidesByLevel d4→d12) + knacks_known (special).",
+      "Knacks → optionsSource class_knacks + resourceKey knacks_known + choiceCountByLevel; swappableOnRest false (level-up swap only).",
+      "Bounty Hunter Martial Exploits → inline choices.options from the Fighter exploit list — NEVER a second class_knacks picker (shared pool would mix Knacks and Exploits). High Degree → exploit_degree special cap 1/2/3.",
+      "Fighting Style may stay grant_feat Fighting Style when the style list is missing from the paste. Keep undefined cross-refs (e.g. Frozen Revenge) flagged in description rather than inventing them.",
+    ],
+  },
+  {
+    source: "Alternate Monk / LaserLlama techniques",
+    guidance: [
+      "Name the class \"Alternate Monk\" (not bare Monk). Ki pool uses resource_key alternate_monk_ki_points (never bare ki / ki_points / focus_points).",
+      "Emit martial_arts_die (special dieSidesByLevel) + techniques_known (special). Mystic Techniques → optionsSource class_knacks + resourceKey techniques_known + choiceCountByLevel.",
+      "Technique library → ability_role knack + source_name \"Alternate Monk\" + eligible_classes including Alternate Monk.",
+      "Way of the Brawler Savage Exploits → inline choices.options from Brawler-eligible exploits — NEVER a second class_knacks picker (would pollute Techniques). Also emit subclass-scoped exploit_dice / exploits_known / exploit_degree.",
+      "19th level is ASI (not Epic Boon) on this class table. Tradition Signature Techniques are grant_custom_ability and do not consume techniques_known.",
+      "Emit each Signature Technique at its own 3/5/9 unlock level. Preserve Strike-only replacement choices for Open Hand, including their prerequisites. Read every Brawler Exploits Known row, including 5/11/19, not just die-size changes. Brutal Cunning permits Wisdom instead of Strength prerequisites.",
+    ],
+  },
+  {
+    source: "Alternate Rogue / LaserLlama exploits",
+    guidance: [
+      "Name the class \"Alternate Rogue\" (not bare Rogue). Emit exploit_dice (count 2/3/4/5 at 2/5/11/17 + dieSidesByLevel d4→d10) and exploits_known (special 2→8).",
+      "Devious Exploits → optionsSource class_knacks + resourceKey exploits_known + choiceCountByLevel. Shared LaserLlama exploit library → ability_role knack + eligible_classes including Alternate Rogue (Rogue alone fuzzy-matches).",
+      "Subclass \"X Exploits\" signature tables → grant_custom_ability auto-grants (do not count against exploits_known). Saboteur bombs stay subclass-scoped — never eligible_classes Alternate Rogue (would pollute Devious Exploits).",
+      "Level 6 is Uncanny Dodge — do not mash it into \"Expertise (Uncanny Dodge)\". Expertise already scales on the L1 feature.",
+    ],
+  },
+  {
+    source: "Vagabond / Bloodied martials",
+    guidance: [
+      "Battle Dice refill on Initiative: set uses.rechargeOnInitiative: true (table parse adds this for battle_dice automatically).",
+      "Bloodied / Desperate features: gate with requiresSheetToggle below_half_hp (built-in Bloodied state when HP ≤ half max) — phrase \"while you are Bloodied\".",
+      "Battle Tactics / Maneuvers Known: ability_role knack on CLASS maneuvers + optionsSource class_knacks + choiceCountByLevel from the Maneuvers column. Do NOT set choices.resourceKey to battle_dice or invent maneuvers_known. This is NOT the Gunslinger Risk auto-grant pattern.",
+      "Subclass [Maneuver] features (Ambush, Carve, …): keep as subclass features + auto-grant; do NOT put them as ability_role knack (they must not appear in the Maneuvers Known picker and do not count against known).",
+      "Mage Brand Spellbranding: CHA + Sorcerer list cantrips/prepared; cast by expending Battle Dice up to mage_brand_max_slot_level — never normal caster_progression slots. Do not merge the shared magehandpress-spells catalog into the class JSON.",
+      "Wayworn / Desperate Survival: usually narrative (always-Bloodied for features; crits miss while Bloodied).",
+    ],
+  },
+  {
+    source: "Witch / Hex casters",
+    guidance: [
+      "Mage Hand Press Witch is a Charisma full prepared caster — set classes[].spellcasting { ability: \"Charisma\", caster_progression: \"full\", prepared: true }.",
+      "Hexes are Hex:… cantrips on the Witch spell list via spells_known + class_resources.hexes_known (special cap). Do NOT put Hexes in custom_abilities / class_knacks.",
+      "spellChoiceGrants for Hexes/cantrips must be incremental (+1 at each tier) with unlocksAtClassLevel on each grant — never emit cumulative counts (2 then 3 then 4 as separate absolute totals).",
+      "Grand Hexes resource_key is grand_hexes (not grand_hexes_known). Options live on the Grand Hex feature (isChoice + choiceCountByLevel). Abominable Familiar is an option only — never grant_creature on the feature itself.",
+      "Do not dump the shared magehandpress-spells catalog into the class JSON when the class already has spells[]; merge only missing Witch-list rows if needed.",
+    ],
+  },
+  {
+    source: "Captain / battle-dice martials",
+    guidance: [
+      "Battle Dice column on the class table → class_resources.battle_dice (NdM pool notation, e.g. 2d6 → 3d8) with rechargeOnInitiative: true when the source refills on Initiative.",
+      "Battle Tactics auto-grants Bolster, Born Leader, Morale Boost, Rally, and Staggering Strike via grant_custom_ability (ability_role knack). There is no Maneuvers Known column — do NOT wire optionsSource class_knacks (that is Vagabond).",
+      "Maneuver options in abilities[] with \"expend one Battle Die\" — proposed as custom abilities linked to battle_dice.",
+      "Subclass [Maneuver] features are additional named options (sheet combat cards), not pool picks.",
+      "Cohort feature → companion stat block (grant_creature / creatures[]). Cohort Species is a separate isChoice picker (Dragonborn, Dwarf, Elf, Gnome, Goliath, Halfling, Human, Orc, Tiefling) with choices.applyTo: companion and applyToCompanionFeature: Cohort — option modifiers are cohort resistances/saves/skills/Relentless, never player condition_immunity or damage_resistance.",
+      "Wire Weapon Mastery and Fighting Style via standard feature names.",
+      "Valiant Surge: regain 1 Battle Die when you or your Cohort score a Critical Hit or reduce an enemy to 0 HP — feature-gated class_resource refresh (resourceRefreshOnCriticalHit + classResourceAmount 1 / classResourceChange increase) on battle_dice. The sheet files it under Passive. Legendary Commander stays narrative unless a catalog trigger exists.",
+    ],
+  },
+] as const
+
+/** Leave narrative-only — do not force mechanics[] unless a clear passive bonus exists. */
+export const NARRATIVE_ONLY_GUIDANCE = [
+  "Spellcasting progressions and spell-list tables (spells[] / description HTML tables — not modifiers).",
+  "Subclass spell-list features (* Spells) — preserve HTML tables in description.",
+  "Transformation / polymorph stat blocks (Wild Shape forms, Draconic forms) — descriptive unless a fixed AC/speed bonus is stated in prose.",
+  "Social / exploration ribbons without numeric bonuses.",
+  "Reaction timing, advantage on specific story checks, or GM-adjudicated effects without standard phrasing.",
+  "Reaction rerolls or once-per-long-rest reaction riders (e.g. reroll a low Deception check) — keep in description unless a catalog trigger exists; do NOT map to uses.",
+  "Maneuver / discipline / invocation option lists — use isChoice + choices, not grant_feat.",
+  "Common Modifiers only cover effects on the character's own sheet — forced saves, conditions, or miss chances imposed on *other* creatures (e.g. attacker Charisma save or miss, Charm/Frighten on a target) always stay narrative. Do not invent mechanics[] kinds for those.",
+]
+
+function formatWiringSection(title: string, entries: ModifierWiringEntry[]): string {
+  const lines: string[] = [title]
+  let lastCatalog = ""
+  for (const entry of entries) {
+    if (entry.catalog !== lastCatalog) {
+      lines.push(`\n[${entry.catalog}]`)
+      lastCatalog = entry.catalog
+    }
+    const example = entry.examples.map((text) => `"${text}"`).join(" | ")
+    lines.push(`- ${entry.ruleId}: ${example}`)
+    if (entry.notes) lines.push(`  → ${entry.notes}`)
+  }
+  return lines.join("\n")
+}
+
+function formatMechanicsCheatsheet(): string {
+  const lines = [
+    "mechanics[] field cheat sheet (kind → required fields):",
+    `Allowed kind values: ${AI_MECHANIC_KINDS.join(", ")}`,
+    "- skills: skills [\"Stealth\"] OR choiceCount N; grantExpertise true/false. Expertise is one feature — later table repeats (Investigator 9, Bard 9) are extra picks on that same feature, not a second Expertise row.",
+    "- languages: languages [\"Sylvan\"] OR languageChoiceCount N; choicePool standard|standard_and_rare",
+    "- spells_known: spellNames [\"Beast Sense\", \"Speak with Animals\"]; castAsRitual true for ritual-only grants; spellChoiceGrants [{ level: 0, count: 1 }]; spellChoiceLabel for filters. For subclass spell tables that unlock more spells at higher levels (e.g. \"at level 5 you also always have Conjure Animals prepared\"), emit ONE spells_known mechanic PER level tier with unlocksAtClassLevel set to that tier's level — do not lump every tier's spells into one mechanic without it, or they'll all become available at the feature's own (lowest) level.",
+    "- spellcasting_ability: spellcastingAbility intelligence|wisdom|charisma. When the source lets the PLAYER choose (\"your spellcasting ability for it is Intelligence, Wisdom, or Charisma (choose when you select this feat)\"), emit ONE spellcasting_ability mechanic on the PARENT feat/feature and keep that sentence in its description — do not pick one ability yourself and do not repeat the mechanic on each choices option. Dump Stat turns the three-way wording into a build-time pick, and spell grants from the same feat/feature inherit whichever ability the player picks.",
+    "- Free casts (\"without a spell slot\"): there is no cast_spell mechanics kind — keep the sentence verbatim (\"You can cast Identify and Locate Object without a spell slot or components\") and the phrase matcher wires both the known spells and the free cast so it is usable on the sheet. Name the spells directly after \"cast\" and put the slot/component clause after them. Add \"Intelligence is your spellcasting ability for these spells\" when the feature overrides the class ability, and keep any \"Once you do, you can't … until you finish a Long Rest\" sentence so the use limit wires too.",
+    "- tool_proficiencies: tools [\"Smith's Tools\"]; grantExpertise true for doubled tool checks",
+    "- equipment_and_magic_items: itemOptions [\"Bag\", \"Cloak\", \"Backpack\"], choiceCount 1, allowCustom true when the player may name another item",
+    "- player_note: notePrompt, notePlaceholder, noteTarget feature|equipment — adds a persistent editable note on the character sheet. For target assessment, preserve activation and use notes for per-target retry locks; never invent a global rest cap or unconditional skill bonus. Keep the source's named subclass gate, not a duplicate Subclass feature.",
+    "- inventory_container: extradimensional / nested storage opened from Gear. capacityMode slot_count|cubic_feet|weight_lb|unbounded; capacityAmount; capacityLabel; contentKinds [\"corpse\",\"companion\",\"freeform\"] or [\"equipment\"]; linkHostItem true with a create_mundane linked-item choice (Dead Space); attachToEquipmentNames [\"Bag of Holding\"] when the container is the magic item itself",
+    "- attunement_slots: attunementTotal 4 (sets cap) OR attunementBonus 1 (adds to default 3)",
+    "- extra_wield_slots: extra hands that can hold a weapon (Thri-kreen Secondary Arms). choiceCount is extraSlots (default 1). Mention Light when the extra hands can only wield a Light weapon. Lifts exclusive two-handed + shield / off-hand restriction.",
+    "- armor_proficiencies: armor [\"Heavy Armor\", \"Shields\"]",
+    "- weapon_proficiencies: weaponMode martial_weapons | simple_weapons",
+    "- saving_throws: savingThrows [\"Strength\", \"Constitution\"]",
+    "- ac: acBase 10 + acAbilities [\"dexterity\",\"wisdom\"] OR acFlatBonus 1",
+    "- hit_points: hpMode per_level, hpValue 1; hpLevelScope owning_class for class-only scaling",
+    "- attack_roll_modifiers: attackBonus 2, attackTarget all|spell|melee|ranged; use spell for spell-attack-only critical ranges; criticalHitMinimum; criticalHitMinimumByLevel [{ level, fixed: minD20 }]; ignoreHalfCover / treatThreeQuartersCoverAsHalf for cover-ignore phrasing (Zeroed Sights / Sharpshooter-style)",
+    "- damage_roll_modifiers: bonusDice \"1d6\", damageType \"fire\"; grantAbilityModifierWhenMissing; bonusDiceWhenModifierIncluded \"1d8\"; scalingMode half_character_level_round_down|character_level|none (for \"plus half your Class level\" riders); damageTypeOptions [\"Necrotic\",\"Radiant\"] when the player picks the type at trigger time",
+    "- damage_resistance: damageTypes [\"Fire\", \"Psychic\"]; use damageTypes [\"Spells\"] (or \"Spell damage\") for \"Resistance to the damage of spells\" — that routes to fromSpells resistance (sheet token \"Spell damage\"), not a literal elemental type",
+    "- damage_immunity: damageTypes [\"Necrotic\", \"Poison\"] — full immunity to those damage types (e.g. Lichdom). Do not downgrade an immunity to damage_resistance.",
+    "- damage_reduction: reductionMode \"evasion\" (Dex-save half→none/half) OR \"flat\" with reductionAmount N; damageTypes optional for flat (default B/P/S). Kind must be damage_reduction — do not invent other names from cat_fx_damage_reduction / cat_char_damage_reduction.",
+    "- condition_immunity: conditions [\"Charmed\"]",
+    "- speed: speedType walk|fly|swim|climb, speedFeet 10; canHover true when fly speed allows hovering. For \"you gain a Swim/Fly/Climb Speed equal to your Speed\" (i.e. matches your walking speed, not a fixed number), use speedMode \"equal_to_walk\" instead of speedFeet.",
+    "- movement_grant: one-off movement (not a permanent speed increase). distanceMode fixed|fraction_of_speed|full_speed; distanceFeet when fixed; fraction 0.5 when half Speed; trigger freeform starting with bonus_action/reaction/action (e.g. \"bonus_action_spend_bardic\", \"reaction_on_mantle\") — the prefix drives the activation cost; teleport true for \"teleport to a space you can see\" (ignores terrain en route) vs normal ground movement; targets self|self_and_chosen_ally|chosen_creatures_in_range — only \"self\" (the default) is currently wired to a sheet action, others are review-only; provokesOpportunityAttacks false when the source says it doesn't; optional classResourceKey/cost when spending BI etc. (not yet wired — note the spend in description/manual review).",
+    "- vision: visionRangeFeet 60; visionType darkvision|blindsight|truesight|tremorsense (default darkvision — Blind Fighting / Skulker must set blindsight)",
+    "- telepathy: telepathyRangeFeet 120 (passive telepathic communication range)",
+    "- initiative: initiativeMode add_ability_modifier|ability_modifier|flat_bonus|add_proficiency; initiativeAbility charisma (for add_ability_modifier/ability_modifier); initiativeFlatBonus N. add_proficiency is Alert / \"when you roll Initiative, add your Proficiency Bonus\" — this is the characteristic that feeds the printed initiative modifier, not check_roll_modifier. add_ability_modifier ADDS the ability on top of the normal DEX-based roll — use this for \"you can add your Wisdom modifier to the roll\" (the common phrasing, e.g. Ranger's Dread Ambusher). ability_modifier REPLACES DEX as initiative's governing ability entirely — only use when the text says initiative now uses that ability INSTEAD of Dexterity.",
+    "- unarmed_strike_damage: unarmedDie \"1d6\" + damageType \"Slashing\" for a fixed natural weapon; dieByLevel [{ level: 3, die: \"1d8\" }, { level: 5, die: \"2d6\" }] for a martial-arts-style die ladder",
+    "- on_hit_trigger: triggerOn hit|crit; oncePerTurn true/false; bonusDice \"1d6\"; optional automaticBonusMode character_level|half_character_level_round_down; damageType / damageTypeOptions; spendResourceKey + spendResourceAmount; requiresSheetToggle when gated (e.g. while_raging). Use for automatic Divine Fury–style once-per-turn extra damage and crit maximize/bonus riders. Do NOT use for optional \"you can deal extra\" / Bloodied / first-round weapon damage — those belong on the weapon DMG ··· menu via power_rider + weaponDamageMenu.",
+    "- turn_start_trigger: general turn-start effect (heal, grant temp HP via nested text, etc.). Optional hpBelowFraction 0.5, restoreResourceKey/Amount, grantResourceKey/Amount, blockedByConditions. Prefer the narrow kinds below when the effect is ONLY a pool refill or ephemeral bonus grant.",
+    "- turn_start_resource_restore: restoreResourceKey \"psionic_energy_dice\"; restoreResourceAmount 1 — refills a spent pool toward its cap (narrow case of turn_start_trigger)",
+    "- turn_start_bonus_grant: grantResourceKey \"psi_points\"; grantAmount 2; expiresEndOfTurn true; usageRestriction \"…\" — ephemeral bonus units that do NOT refill the main pool; optional grantAmountByLevel [{ level, amount }]",
+    "- resource_ability_menu: classResourceKey (or resourceKey) for the pool; waiveResourceCost true when options can be used free. Prefer structured menuOptions [{ name, description, resourceCost, hitDiceCost?, unlocksAtLevel?, actionKind?, bonusConfig? }] when choices have different costs or action economies; menuAbilityNames [\"Feat of Strength\", \"Heroic Fortitude\"] remains valid for same-cost/name-only menus. When the feature says \"choose one of the following\" and only some picks spend an Action / Bonus Action / Reaction, put actionKind on those options — do not mark the whole feature as that economy. For \"roll this class-resource die and add it to AC / a save / damage\", set bonusConfig { mode: \"die\", dieScaling: \"class_resource\", classResourceKey } and omit actionKind — the sheet files that option under Passive and rolls the die on Use.",
+    "- extra_attack: extraAttackCount is the number of EXTRA attacks beyond the first (1 = attack twice; 2 = attack three times). Preserve special replacement rules such as casting a cantrip in place of one attack in narrative text.",
+    "- power_rider: parentPowerNames [\"Guardian Tactics\", \"Survive\", \"Interrupt\", \"Bombs\"] — sheet alert on those actions. When the rider only applies to one menu option, also set parentMenuOptionNames [\"Block\"] | [\"Challenge\"] | [\"Grasp\"]. For Alchemist Bomb modes set appliesToAttackVariants [\"attack\"] (regular formulas such as Painkiller Bomb) or [\"primed\"] (\"When you prime a Bomb…\", e.g. Timed Demolition) and selectable true when the rider is an optional add-on. Optional alertSummary for the badge text. Situational extra weapon/Unarmed damage (\"you can deal extra…\", Bloodied, first-round +ability): set parentPowerNames [\"Attack\", \"Unarmed Strike\"], weaponDamageMenu true, selectable true, plus bonusDice / dieByLevel / classResourceKey / ability. Bloodied → defaultSelectedWhenToggle \"below_half_hp\" and menuConditionLabel \"Bloodied\". The sheet lists those under Damage modifiers on the weapon DMG ··· menu — do not emit damage_roll_modifiers or on_hit_trigger for them. Do not use power_rider for \"Your X improves\" upgrades that change costs or action economy — those are replace_feature.",
+    "- replace_feature: replacedFeatureNames [\"Sacrificial Strike\"] — hide the named prior feature and use THIS feature as the sheet action. Use when an Improved / Greater / Superior feature changes how the original works (new cost, new action economy, first use free), not when it only scales a number (put amountByLevel / dieByLevel on the original). Pair with the improved feature's own activation. firstUseNoAction + firstUseNoActionFromLevel 17 for \"the first time you use this on each of your turns, you can do so without taking a Bonus Action\".",
+    "- grant_custom_ability: abilityNames [\"Alchemy of Poison\", \"Telepathy\", \"Laughing Gas Bomb\"] — unlock a named custom ability / formula / discovery / discipline already in the batch (or seeded). Prefer this over leaving subclass formula grants unwired.",
+    "- failed_roll_trigger: rollKind attack|ability|skill|save; failedTriggerOn fail|success; targetScope self|allied_creature|target_creature; optional rangeFeet, useReaction, spendResourceKey/spendResourceAmount. For a flat bonus (Guided Strike +10) set bonusFixed 10 — nested as check_roll_modifier. Prefer this over inventing a one-off reaction when the feature adds to a missed/failed (or successful) roll.",
+    "- d20_test_reaction: modifierMode add|subtract; rollKinds [\"ability\",\"skill\",\"attack\",\"save\"]; targetScope; optional rangeFeet and useReaction; dieSource fixed|ability_modifier with fixedDie \"1d4\" or dieAbility. Despite the schema name, set useReaction false when the source says \"whenever\" and does not spend a Reaction.",
+    "- special_attack: attackProfile melee|ranged|emanation|force_save; damageDice \"2d6\" (or bonusDice); damageType/damageTypes; optional saveAbility + saveHalfDamage, areaShape cone|line|sphere|…, areaLengthFeet, rangeFeet, attackName, targetMode single|multi|area. When damage equals a selected variable class-resource spend, set damageFromResourceSpend true; set spendResourceOnHit true when a miss costs nothing, and criticalDamageMultiplier 2 when a Critical Hit doubles that flat damage. When spend instead restores HP with no attack roll (Healing your Thralls), set healFromResourceSpend true, healTarget controlled_companion|choose_ally, and unlocksAtClassLevel when the option unlocks later. Use for Breath Weapon / Bile Blast / Radiance-style activatable attacks that are not weapon Attack action riders. Alchemist Bombs are Dump Stat–preset (attack + explode variants); do not invent a separate attack_roll_modifiers mechanic for Intelligent Explosions INT damage — leave that for the Bomb Explode label / enrichment.",
+    "- hit_dice_restore: regain expended Hit Point Dice when you finish a rest (Divine Respite). hitDiceRestoreAmount 3; optional hitDiceRestoreByLevel [{ level: 13, amount: 6 }, { level: 17, amount: 10 }]; restoreOnRest short_rest (default) or long_rest. Always pair with uses usesFixed 1 / usesRecharge long_rest when the feature is once per Long Rest. Put the scaling sentence on the SAME feature that grants the restore — do not emit leftover features that only say \"the number increases to N\". This is Hit Point Dice (the HD tracker), not current HP.",
+    "- Hit Dice spend uses the reserved classResourceKey \"hit_dice\" (aliases hit_point_dice / hit_point_die) on a class_resource effect (change reduce) or on limitedUses.type class_resource. The sheet tracker is the pool — do not emit class_resources.hit_dice. Phrase detection covers \"expend/spend a Hit Die\".",
+    "- Drop to 0 HP / drop to 1 HP instead (Relentless Endurance, Undying, Survive): this is a Passive trigger, not a Reaction, unless the text spends a Reaction. Keep the \"When you are reduced to 0 Hit Points\" sentence. If you can immediately use another named feature at no action cost, keep that sentence verbatim (\"immediately use your Miraculous Healing\") so the sheet can offer a button for it.",
+    "- Action costs: both 'as a Magic/Utilize action' and 'you can take a Magic/Utilize action' mean activation.action. Preserve Bonus Actions and Reactions. A rest-prepared item can still grant a reusable combat action: retain that action with sheetDisplay combatActions even when the description also mentions crafting/rests. Put selectable actions on their choice options. Do not spend a one-time creation charge on every later summon/use of the created item; per-target restrictions are not one shared daily use.",
+    "- Downtime / rest activities: a minute cost to perform an activity (not an effect duration) belongs on Abilities/rest dialogues. Pure 'when you finish a rest' choices belong on rest overlays. Keep separate in-turn activations visible. Derive feature owners and unlock levels from the source headings and progression table; do not merge adjacent PDF columns or carry a subclass's features into the next subclass.",
+    "- Alchemist: emit a custom_abilities Bomb proposal (ability_role alchemist_bomb) plus bomb_formula upgrades; Potion Brewing should keep the Potions table in description (HTML table with \"Alchemist Level N\" section headers is fine) and is a non-combat Abilities action / short-rest activity (spend/take 10 minutes) — set sheetDisplay abilitiesActions, not combatActions. Potion Mixologist is a Bonus Action on the Combat tab (sheetDisplay combatActions). Do not tag damage_roll_modifiers for Prime Bomb without classResourceKey reagents — enrichment owns Prime Bomb linear scaling on the Bomb ability. Reagents / Potions unlock rows / Experimentalist are structural shells. Recipe / downtime features (Alchemical Resurrection) and reaction stubs (Toxic Recompense, Beguiling Perfume, Counter-Discharge) are enrichment-activated — keep activation prose in description; do not leave them as empty unwired shells.",
+    "- temporary_hit_points: amount N (fixed) OR amountDice \"1d12\" OR amountScaling character_level|class_resource_die|ability_modifier|proficiency. For amountScaling \"character_level\" (\"three times your level\"), put the per-level multiplier in amount (amount: 3), NOT amountMultiplier — amountMultiplier is ONLY for doubling/tripling a class_resource_die roll (\"twice the number rolled on your Bardic Inspiration die\": amountScaling class_resource_die, classResourceKey bardic_inspiration, amountMultiplier 2). For ability_modifier scaling, pair with ability. For proficiency (\"temporary hit points equal to your proficiency bonus\"), use amountScaling proficiency (optional amount/amountMultiplier for N×PB). thpTrigger on_activation|turn_start|on_use|on_hit (field name is thpTrigger, not trigger); thpTarget self|chosen_creature_in_range|allies_in_range (field name is thpTarget, not target; rangeFeet when not self) — self and ally/chosen targets wire with healTarget self|choose_ally on on_activation/on_use; turn_start/on_hit stay unwired. targetCount { mode: \"ability_modifier\", ability: \"charisma\", minimum: 1 } when creature count scales that way; expiresOnTriggerEnd true when THP ends with the gating state",
+    "- grant_inspiration: flips Heroic Inspiration on the sheet. inspirationTarget self (default) or ally. Not Bardic Inspiration. When the grant rides another power (\"when you begin your Dance\"), also emit power_rider with parentPowerNames naming that power.",
+    "- Enemy combat impact with no Action/Bonus Action/Reaction (target subtracts from attack rolls / damage / saves; aura debuffs; Charm riders): set sheetDisplay combatActions; wire modify_creature rollTarget \"enemy\" and/or a no-actionKind resource_ability_menu of named picks. The sheet files these under Combat Passive — do not invent an action economy just to get a card.",
+    "- uses: usesFixed 2, usesRecharge short_rest|long_rest|both|until_item_consumed|on_resource_reactivation; OR usesAbility WIS; OR usesProficiency true when uses equal Proficiency Bonus (Lucky). ALWAYS wire the base usesFixed/usesRecharge from \"Once you use this… until you finish a [rest]\" even when the next sentence adds an alternate early refresh — alternateRefresh is additive, never a reason to omit the base wire. until_item_consumed = resource locked until a crafted/summoned item from this ability is spent or destroyed. on_resource_reactivation + gatingResourceKey \"rage\" = once per (re)activation of that resource/state (Fanatical Focus). alternateRefresh: { spendResourceKey, spendAmount, actionCost } for resource spends OR { spendSpellSlotMinLevel: 3, actionCost } for \"expend a level 3+ spell slot\".",
+    "- temporary_hit_points: amountMinimum sets the minimum resolved HP. Linked special_attack: attackAbility specifies the governing ability, damageAbilityModifier adds damage and damageAbilityFromLevel gates that addition. FeatureEffect healMinimum also supports minimum healing or temporary HP.",
+    "- uses / check_roll_modifier resource spend caps: classResourceKey + classResourceCostMode fixed (default, use classResourceCost) | up_to_proficiency_bonus | up_to_ability_modifier (pair with classResourceCostAbility) | up_to_available (any number of remaining points). Use when the source caps spend per use by a scaling value — e.g. \"expend Exploit Dice (up to your Proficiency Bonus)\" — not a separate Limit class_resource.",
+    "- Concurrent costs: usesFixed + usesRecharge AND classResourceKey + classResourceCost on the same uses mechanic enforce both a rest cap and resource payment. alternateRefresh means a renewal price instead, not a concurrent cost. Preserve ability-score OR groups and skill/tool/language prerequisites verbatim (Strength or Constitution 13, Athletics); they are not names of required abilities.",
+    "- modify_custom_ability: checkBonusDieOverride replaces its check die; usesFixed + usesRecharge replaces its pool. spell_list_access + spellNames expands caster lists without preparing spells.",
+    "- modify_custom_ability: abilityNames for exact names, or abilityFilter {role, eligibleClassNames, minLevel, maxLevel} to match a separately imported library by prerequisite level. removeUseLimit removes only the independent rest cap; resourceCostWaiver is a player-confirmed condition such as once per round; resourceCostReduction is a flat Metamagic point discount (minimum zero). Preserve the shared resource cost. Never infer permanently active AC/saves from a temporary concentration effect; gate its modifiers with the active toggle.",
+    "- Conditional subclass benefits: never turn a post-action movement bonus into permanent speed. Keep unsupported upgrades unresolved; an action reminder is not automatic resolution. Companion imports need full stat blocks, not name-only rows.",
+    "- Progression libraries: preserve each signature grant's unlock level separately from paid choices. Level-up swaps use swappableOnLevelUp, not swappableOnRest. Inline secondary pools must retain option mechanics and level/ability prerequisites. Keep free base uses separate from paid follow-ups. Do not borrow SRD mechanics just because a feature shares its name.",
+    "- Weapon upgrades: excludedWeaponProperties [\"Heavy\",\"Special\"] filters weapon_ability_override and weapon_damage_die_override; onlyIncrease true on the latter upgrades a single die without downgrading larger dice.",
+    "- check_roll_modifier: checkRollMode advantage|disadvantage|bonus; checkCategory save|skill|ability|attack|initiative|death_save; checkAbility/checkSkills. For computed bonuses use bonusConfig { mode: \"ability_modifier\", ability: \"intelligence\", minimum: 1 } (or fixed/proficiency); minimum means the bonus itself is at least that value. checkConditionTypes [\"Frightened\"]|[\"spell\"] for named condition/spell gates; conditionNote ONLY for non-enforcible freeform qualifiers (\"that involves you dancing\") — when conditionNote is set without a recognisable named condition the mechanic is NOT auto-wired (manual review). Prefer checkConditionTypes or requiresSheetToggle over conditionNote. For Death Saving Throws use checkCategory death_save. Resource-die bonuses are not represented by this generic mechanic yet; preserve their spend/roll wording for a preset or manual review rather than inventing bonusDiceFromResource.",
+    "- damage_roll_modifiers: bonusDice \"1d6\", damageType \"fire\"; OR damageBonus 2 + optional damageTarget all|melee|ranged for flat bonuses (Dueling +2); OR die from class resource (classResourceKey + amountScaling class_resource_die) for \"damage equal to a roll of your Bardic Inspiration die\" (note whether the die is expended); plusAbilityModifier true when \"+ your Dexterity modifier\"; targets when allies also benefit.",
+    "- extra_attack: (no extra fields)",
+    `- grant_feat: featCategories ${JSON.stringify(FEAT_CATEGORIES_FOR_IMPORT)}, featCount 1 — use only when the feature GRANTS another feat pick (Fighting Style, Epic Boon, Origin Feat). Never tag the Ability Score Improvement feat itself as grant_feat; its description is an asi_pool (+2 or +1/+1).`,
+    `- grant_creature: creatureNames ["Wolf", "Basilisk Companion"] — grants Creatures & Companions entries on the sheet Companions tab. Prefer importing the matching creatures[] rows in the same batch. companion_stat_block / companion_stat_blocks on abilities or features are also promoted into creatures[] on import. Optional creaturePolymorph true for Wild Shape forms; creatureChoiceOptions when the player picks from a list; creatureCombinedCrByLevel when a combined CR cap scales by level; creaturePickOnRest (short_rest / long_rest / short_or_long_rest) to offer the pick on the rest overlay.`,
+    "- skill_check_alternate_ability: alternateAbility strength|…; alternateSkills [\"Insight\"]; optional requiresSheetToggle",
+    "- saving_throw_alternate_ability: alternateAbility intelligence; alternateSaves [\"Wisdom\"]",
+    "- forced_save_ability_remap: fromSaveAbility WIS|any; toSaveAbility INT; forcedSaveScope your_features|your_spells|all",
+    "- weapon_ability_override: alternateAbility charisma|dexterity; weaponAbilityAppliesTo both|attack|damage; weaponAbilityScope all|melee|ranged|finesse|specific; weaponNames optional; treatAsFinesse + whenDamageDice [\"1d4\",\"1d6\"] for Extra Finesse–style grants. Examples: (1) Charisma for all weapon attacks while transformed; (2) Dexterity instead of Strength for Unarmed Strikes only → alternateAbility \"dexterity\", weaponAbilityAppliesTo \"attack\", weaponAbilityScope \"specific\", weaponNames [\"Unarmed Strike\"]",
+    "- weapon_sheet_badge: badgeLabel + badgeDescription; whenDamageDice [\"1d4\",\"1d6\"]; includeUnarmed; requireFirearm. Named info badge on matching Combat weapons for optional riders (Dervish Fighting / Deadly D4s). Prefer this whenever an ability should appear as a notification on the weapons it applies to — not a die rewrite.",
+    "- weapon_damage_die_override: dieSides N rewrites NdX → Nd(sides) on equipped weapons — rare; never for Dancer Deadly D4s (that is optional 2d4 replacement, not a die rewrite). Not a flat damage_roll_modifiers bonus.",
+    "- weapon_reach_modifier: reachBonusFeet 10; omit weaponPropertyFilter for \"your Unarmed Strike gains reach\" (defaults to applying to Unarmed Strikes); set weaponPropertyFilter [\"Heavy\", \"Versatile\"] instead when only some melee weapons (not Unarmed Strikes) gain the reach",
+    "- Extra Weapon Mastery properties are review-only until the sheet supports adding a second property to a weapon. Preserve the prose and do not emit extra_weapon_mastery or masteryProperties.",
+    "- armor_proficiencies / weapon_proficiencies: list gains in armor[] / weaponMode. Conditional upgrades (\"gain X, or Y instead if you already have X\") stay in description prose only — do not invent a conditionalUpgrade field until the schema supports it.",
+    "- spells_known / spellChoiceGrants: spellChoiceGrants[].level is SPELL level (0 = cantrip, 1–9); use unlocksAtClassLevel when the feature unlocks that pick at a specific character/class level (both fields when the source states both).",
+    "- Sheet toggles: requiresSheetToggle must reference either a standard key (while_raging, while_wild_shape, while_dancing, below_half_hp / Bloodied, etc.) OR a key listed once under new_toggles on the parent class/subclass ({ key, name, grantingFeature }). Declare transformation states (Rage of the Gods form, etc.) in new_toggles before other features reference them. new_toggles goes on the class/subclass object itself (sibling of features[]) — never inside an individual feature. Alchemist optional keys: self_medication_active, counter_discharge_active.",
+    "- Play-state derived toggles: some keys are computed by the sheet from live play-state, so reference them with requiresSheetToggle but NEVER declare them in new_toggles — rampage_die_d8_plus (auto-active while an Unleashed Mind Rampage Die is d8 or larger) and the exclusive weapon_morph_* group (weapon_morph_bone_spike, weapon_morph_flesh_club, weapon_morph_sinew_whip, weapon_morph_viscera_cannon, weapon_morph_chitinous_plating — set when the player Uses that morph option).",
+    "- Renamed / lightly-modified SRD features: set basedOnSrdFeature to the exact INDEX — SRD-standard feature name (e.g. \"Evasion\") while keeping the homebrew display name. Auto-wire applies the base; description/mechanics[] carry deltas (party share, extra gates).",
+    "- targetCount (shared): { mode: \"ability_modifier\", ability: \"charisma\", minimum: 1 } for \"a number of creatures equal to your Charisma modifier (minimum of one)\" — use on temporary_hit_points, movement_grant, and similar targeted effects (not uses.ability_modifier, which is for use counts).",
+    "Always include sourcePhrase (quote the rule sentence) and confidence high|medium|low.",
+    "- unresolved: when NO listed catalog kind fits a mechanic you noticed. Set sourcePhrase to the verbatim rule sentence. Never invent a kind name. Never silently omit a mechanic.",
+  ]
+  return lines.join("\n")
+}
+
+export const SUBCLASS_ACTION_AUDIT_HINT = `Subclass action audit:
+- Preserve parent class, feature names and unlock levels; never borrow from an alternate class or another edition. Check the actual feature text against progression tables; playtest tables can be stale.
+- A trigger following points already spent has no second cost. Regrowth from actual Psi Point expenditure excludes free/Mastery points; keep death-save recovery separate. Reactions taken by a recipient are not reactions spent by the caster. Per-recipient rest locks are not caster daily pools.
+- Split activated sub-powers with their own timing/cost and source description. A continuation does not re-spend the transformation's resource. "As part of" another activation costs no extra action. Preserve concurrent daily caps AND point costs.
+- Upgrade the original pool with rechargeOverrides; share uses via useShareKey. Slot recovery: restoreBySpellSlot {minSpellLevel, restores, pactOnly}; pactOnly requires Pact Magic, never a fabricated pact_slots resource. Preserve unencodable recovery rules.
+- Runtime constellation/adaptation choices are not empty permanent builder pickers. Selectable libraries need every option, source_name, activation, price, and choices.optionsSource class_knacks with pick progression. Movement/attack-replacing maneuvers are Special, not an extra Action.
+- Gate transformation and armor/shield benefits; do not apply ally buffs or random outcomes permanently. Replace upgraded dice, never stack versions. Keep weapon-only riders off Unarmed Strike.
+- Healing: healAbility adds once to healMode dice; bonusByLevel dice rows replace dice at class-level thresholds. Preserve both terms, never use damage bonusConfig for healing.
+- Spell references contain only names, not timing clauses. Preserve ritual-only limits and independent free casts. Include all referenced companion stat blocks as creatures[] with scaling. Keep manual rules intact and emit unresolved rather than claiming automation.`
+
+/** Build the full Common Modifier section for import / BYO prompts. */
+export function buildCommonModifiersImportHint(): string {
+  const sections = [
+    SUBCLASS_ACTION_AUDIT_HINT,
+    `Common Modifier wiring index (auto-linked at import — do NOT output linkedModifiers or modifierRefs)
+
+Dump Stat maps features, traits, and feats to reusable catalog entries. Use TWO complementary strategies:
+1. PRIMARY — Keep mechanical sentences verbatim in description (phrase matcher below).
+2. OPTIONAL — Add mechanics[] when wording is unusual, split across clauses, or you want an explicit hint.
+
+Feat milestones (ASI, Fighting Style feat, Epic Boon): never isChoice — use feature name and/or grant_feat phrasing.
+Player picks between named options (Hunter's Prey, Dance Style, Psionic Discipline): isChoice + choices, not grant_feat.
+Feats that grant a pick from an ability catalog (discipline / class talent / exploit list): isChoice + choices with exact option names — this is NOT a grant_feat milestone.
+
+Catalog ids (generated at import — never emit in JSON):
+- Passive: cat_char_* (skills, ac, grant_feat, uses, speed, …)
+- Active: cat_fx_* (extra_attack, check_roll_modifier, damage_reduction, …)
+Allowed mechanics[].kind values are listed in the cheat sheet below — use those exact strings (e.g. damage_reduction), not invented suffixes of catalog ids.
+If no listed kind fits a mechanic you noticed, emit kind "unresolved" with sourcePhrase set to the verbatim rule sentence. Never invent a kind name. Never silently omit a mechanic.`,
+
+    formatWiringSection("INDEX — Feature name (works with blank class-table descriptions)", FEATURE_NAME_WIRING),
+
+    formatWiringSection("INDEX — Description phrases", DESCRIPTION_PHRASE_WIRING),
+
+    `INDEX — SRD-standard feature names (exact spelling auto-wires on import; prefer for equivalent homebrew):
+${SRD_PRESET_FEATURE_NAMES.map((name) => `- ${name}`).join("\n")}
+Hundreds of additional SRD features wire when names match the seeded compendium — use official names when porting SRD content.
+When the homebrew name differs (e.g. "Leading Evasion"), keep that name and set basedOnSrdFeature to the exact SRD name above.`,
+
+    `INDEX — Class resources (class_resources[], not feature modifiers):
+- Extract columns from level tables: Psi Points, Psi Limit, Rage, Ki, Risk Dice, Battle Dice, Weapon Mastery, Superiority Dice, Exploit Dice, Sorcery Points, Bardic Inspiration, etc.
+- resource_key: snake_case (risk_dice, weapon_mastery, psi_points)
+- name: display name from the table header (e.g. "Psi Points")
+- When a level-scaling pool has NO formal name (source only says "the pool" / "your pool"), derive the display name from the granting feature (e.g. Warrior of the Gods → "Warrior of the Gods Dice") so re-extractions converge — do not invent flavor names
+- uses.type: at_level with atLevelTable [{ level, count }] from the table
+- Set class_name to the parent class. When the pool is introduced entirely in a subclass feature (not on the base class table), also set subclass_name to that subclass's exact name so it is not implied for every member of the class
+- Mention spend/regain in feature descriptions for automatic limited-use linking
+- Alternate early refresh (spend Rage to recharge Zealous Presence): uses.alternateRefresh on the feature's uses mechanic, not a second class_resource`,
+
+    "INDEX — Homebrew patterns",
+    ...HOMEBREW_WIRING_PATTERNS.flatMap((pattern) => [
+      `${pattern.source}:`,
+      ...pattern.guidance.map((line) => `- ${line}`),
+    ]),
+
+    "INDEX — Sheet toggles (new_toggles[]):",
+    "- Standard toggles (while_raging, while_wild_shape, while_dancing, below_half_hp / Bloodied, concentrating, …) need no declaration — use requiresSheetToggle directly.",
+    "- below_half_hp is auto-active while current HP ≤ half max (Bloodied). Prefer \"while you are Bloodied\" in feature text.",
+    "- while_dancing: Use Dance (Begin Dance) turns this on so style riders and Graceful Dodge apply.",
+    "- When a feature invents a new transformation / conditional state (\"while in this form\", Rage of the Gods, etc.), add ONE entry under new_toggles on the class or subclass: { key: \"rage_of_the_gods_form\", name: \"Rage of the Gods\", grantingFeature: \"Rage of the Gods\" }.",
+    "- Derive key as snake_case from the feature name. Sub-benefits (flight, resistance, reaction) then set requiresSheetToggle to that same key.",
+    "- Do not invent mismatched keys silently inside individual mechanics[] rows — declare once, then reference.",
+    "- Derived play-state keys are owned by the sheet and must NOT appear in new_toggles: rampage_die_d8_plus (Rampage Die d8+) and weapon_morph_* (active Weapon Morph option). Reference them from mechanics[] when a benefit only holds in that state — e.g. Uncontrollable Mind's Charmed/Frightened immunity is condition_immunity + requiresSheetToggle \"rampage_die_d8_plus\", never an unconditional immunity.",
+
+    "Leave narrative-only (no mechanics[] unless a clear bonus phrase exists):",
+    ...NARRATIVE_ONLY_GUIDANCE.map((line) => `- ${line}`),
+
+    formatMechanicsCheatsheet(),
+
+    `Example feature with mechanics[]:
+{
+  "level": 2,
+  "name": "Fighting Style",
+  "description": "You gain a Fighting Style feat of your choice.",
+  "mechanics": [{
+    "kind": "grant_feat",
+    "featCategories": ["Fighting Style"],
+    "featCount": 1,
+    "sourcePhrase": "You gain a Fighting Style feat of your choice.",
+    "confidence": "high"
+  }]
+}
+
+Example ephemeral turn-start bonus grant (not a pool refill):
+{
+  "level": 6,
+  "name": "Psionic Empowerment",
+  "description": "At the start of each of your turns, you gain 2 psi points that last until the end of your turn. These points can only be spent on discipline powers, not talents or spell recreation.",
+  "mechanics": [{
+    "kind": "turn_start_bonus_grant",
+    "grantResourceKey": "psi_points",
+    "grantAmount": 2,
+    "expiresEndOfTurn": true,
+    "usageRestriction": "can only be spent on discipline powers, not talents or spell recreation",
+    "sourcePhrase": "At the start of each of your turns, you gain 2 psi points that last until the end of your turn.",
+    "confidence": "high"
+  }]
+}
+
+Example once-per-turn on-hit rider (Divine Fury–style):
+{
+  "level": 3,
+  "name": "Divine Fury",
+  "description": "You can channel divine fury into your weapon strikes. On each of your turns while your Rage is active, the first creature you hit with a weapon takes extra damage equal to 1d6 + half your Barbarian level (round down). Choose Necrotic or Radiant for the damage type each time.",
+  "mechanics": [{
+    "kind": "on_hit_trigger",
+    "triggerOn": "hit",
+    "oncePerTurn": true,
+    "bonusDice": "1d6",
+    "scalingMode": "half_character_level_round_down",
+    "damageTypeOptions": ["Necrotic", "Radiant"],
+    "requiresSheetToggle": "while_raging",
+    "sourcePhrase": "the first creature you hit with a weapon takes extra damage equal to 1d6 + half your Barbarian level",
+    "confidence": "high"
+  }]
+}`,
+  ]
+
+  return sections.join("\n\n")
+}
+
+/** Ensure registry stays in sync with detector rules. */
+export function assertModifierWiringRegistryComplete(): void {
+  const descriptionIds = new Set(DESCRIPTION_PHRASE_WIRING.map((entry) => entry.ruleId))
+  for (const rule of FEATURE_MODIFIER_RULES) {
+    if (!descriptionIds.has(rule.id)) {
+      throw new Error(
+        `modifier-wiring-registry: missing DESCRIPTION_PHRASE_WIRING entry for rule "${rule.id}"`,
+      )
+    }
+  }
+
+  const nameIds = new Set(FEATURE_NAME_WIRING.map((entry) => entry.ruleId))
+  for (const rule of FEATURE_NAME_MODIFIER_RULES) {
+    if (!nameIds.has(rule.id)) {
+      throw new Error(
+        `modifier-wiring-registry: missing FEATURE_NAME_WIRING entry for rule "${rule.id}"`,
+      )
+    }
+  }
+
+  assertPhraseIndexMechanicsKindsCovered()
+}
+
+/**
+ * Fail when an INDEX catalog has no mechanicsKind that exists in AI_MECHANIC_KINDS.
+ * Prevents the model from inventing kind names from catalog ID suffixes (e.g. damage_reduction)
+ * that are documented in the INDEX but missing from Allowed kind values — then silently dropped.
+ */
+export function assertPhraseIndexMechanicsKindsCovered(): void {
+  const kinds = new Set<string>(AI_MECHANIC_KINDS)
+  const problems: string[] = []
+
+  for (const entry of [...DESCRIPTION_PHRASE_WIRING, ...FEATURE_NAME_WIRING]) {
+    const suffix = entry.catalog.replace(/^cat_(?:char|fx)_/, "")
+    if (AI_MECHANICS_NARRATIVE_CATALOG_SUFFIXES.has(suffix)) continue
+
+    if (entry.mechanicsKind) {
+      if (!kinds.has(entry.mechanicsKind)) {
+        problems.push(
+          `${entry.ruleId}: mechanicsKind "${entry.mechanicsKind}" is not in AI_MECHANIC_KINDS`,
+        )
+      }
+      continue
+    }
+
+    if (/^[a-z][a-z0-9_]*$/.test(suffix)) {
+      problems.push(
+        `${entry.ruleId}: catalog ${entry.catalog} has no mechanicsKind — add "${suffix}" (or the correct kind) to AI_MECHANIC_KINDS and set entry.mechanicsKind, or list "${suffix}" in AI_MECHANICS_NARRATIVE_CATALOG_SUFFIXES if it must stay narrative-only`,
+      )
+    }
+  }
+
+  if (problems.length) {
+    throw new Error(
+      `modifier-wiring-registry: INDEX / AI_MECHANIC_KINDS drift (${problems.length}):\n- ${problems.join("\n- ")}`,
+    )
+  }
+}
+
+export type ModifierWiringRegistryCoverage = {
+  phraseRules: { documented: number; total: number; complete: boolean }
+  nameRules: { documented: number; total: number; complete: boolean }
+  mechanicsKinds: number
+  srdPresetNames: number
+  homebrewPatterns: number
+  isComplete: boolean
+}
+
+/** Counts for the BYO wiring index vs live import detectors (shown on import review). */
+export function getModifierWiringRegistryCoverage(): ModifierWiringRegistryCoverage {
+  const phraseRules = {
+    documented: DESCRIPTION_PHRASE_WIRING.length,
+    total: FEATURE_MODIFIER_RULES.length,
+    complete: DESCRIPTION_PHRASE_WIRING.length === FEATURE_MODIFIER_RULES.length,
+  }
+  const nameRules = {
+    documented: FEATURE_NAME_WIRING.length,
+    total: FEATURE_NAME_MODIFIER_RULES.length,
+    complete: FEATURE_NAME_WIRING.length === FEATURE_NAME_MODIFIER_RULES.length,
+  }
+  return {
+    phraseRules,
+    nameRules,
+    mechanicsKinds: AI_MECHANIC_KINDS.length,
+    srdPresetNames: SRD_PRESET_FEATURE_NAMES.length,
+    homebrewPatterns: HOMEBREW_WIRING_PATTERNS.length,
+    isComplete: phraseRules.complete && nameRules.complete,
+  }
+}
+
+export function formatModifierWiringRegistryCoverage(coverage: ModifierWiringRegistryCoverage): string {
+  const phrase = `${coverage.phraseRules.documented}/${coverage.phraseRules.total} phrase rules`
+  const name = `${coverage.nameRules.documented}/${coverage.nameRules.total} name rules`
+  return `BYO wiring index: ${phrase} · ${name} documented`
+}

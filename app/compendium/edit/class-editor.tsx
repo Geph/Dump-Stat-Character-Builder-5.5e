@@ -1,0 +1,1306 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import Link from "next/link"
+import { MainNav } from "@/components/main-nav"
+import { createClient } from "@/lib/db/client"
+import { Plus, X, ChevronDown, Trash2 } from "lucide-react"
+import {
+  CompendiumEditorPanel,
+  CompendiumEditorSection,
+} from "@/components/compendium/compendium-editor-section"
+import { CompendiumDescriptionCardImageRow } from "@/components/compendium/description-card-image-row"
+import { CompendiumEditorHeaderRow } from "@/components/compendium/editor-header-row"
+import {
+  CompendiumEditorToolbar,
+  COMPENDIUM_EDITOR_FORM_ID,
+} from "@/components/compendium/editor-toolbar"
+import type {
+  FeatureChoice,
+  Feature,
+  ClassResource,
+  ClassResourceRow,
+  DndClass,
+  NewToggleDeclaration,
+} from "@/lib/types"
+import { ClassFeatureFields } from "@/components/compendium/class-feature-fields"
+import { CardBlurbField } from "@/components/compendium/card-blurb-field"
+import { CLASS_COMPLEXITY_OPTIONS, formatClassComplexityPhrase, type ClassComplexity } from "@/lib/compendium/class-complexity"
+import { resourcesForClass } from "@/lib/compendium/class-resource-rows"
+import { compendiumEditHref } from "@/lib/compendium/edit-href"
+import { useDuplicateCompendiumItem } from "@/hooks/use-duplicate-compendium-item"
+import { compendiumListHref } from "@/lib/compendium/content-types"
+import { DND_SKILLS } from "@/lib/compendium/constants"
+import { SRD_TOOL_NAMES } from "@/lib/compendium/srd-tool-names"
+import { normalizeCreatorUrl } from "@/components/compendium/source-link-field"
+import { normalizeFeatureRow } from "@/lib/compendium/normalize-feature-activation"
+import { enrichClassesList } from "@/lib/compendium/normalize-class-data"
+import { SpellSlotProgressionTable } from "@/components/compendium/spell-slot-progression-table"
+import { getCasterSlotType, type CasterSlotType } from "@/lib/compendium/spell-slots"
+import { useModifierCatalog } from "@/hooks/use-modifier-catalog"
+import { syncModifierRefs, type LinkedModifierInstance } from "@/lib/compendium/linked-modifiers"
+import { clearModifierReviewPending, featureNeedsModifierReview } from "@/lib/compendium/modifier-review"
+import { cn } from "@/lib/utils"
+import { asCompendiumRow, asCompendiumRows, castCompendiumRow } from "@/lib/data/types"
+import type { CompendiumThemeColorId } from "@/lib/compendium/theme-colors"
+import { RelatedCascadeOptions } from "@/components/compendium/related-cascade-options"
+import {
+  deleteCompendiumTargets,
+  EMPTY_RELATED_CASCADE,
+  findRelatedFeatsAndCompanions,
+  flattenRelatedCascade,
+  type RelatedCascadeGroup,
+} from "@/lib/compendium/related-cascade"
+
+const ABILITIES = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"]
+const ARMOR_TYPES = ["Light armor", "Medium armor", "Heavy armor", "Shields"]
+const WEAPON_TYPES = ["Simple weapons", "Martial weapons", "Specific weapon"]
+const TOOL_OTHER_VALUE = "__other__"
+const TOOL_CHOICE_PRESETS = [
+  "Choose one kind of Artisan's Tools",
+  "Choose one kind of Musical Instrument",
+  "Choose one kind of Gaming Set",
+  "Choose 3 Musical Instruments",
+  "Choose one type of Artisan's Tools or Musical Instrument",
+] as const
+const LEVELS = Array.from({ length: 20 }, (_, i) => i + 1)
+const ABILITY_MODIFIERS = ["STR", "DEX", "CON", "INT", "WIS", "CHA"] as const
+const DIE_TYPES = ["d4", "d6", "d8", "d10", "d12", "d20"] as const
+const SKILLS = [...DND_SKILLS]
+
+// Starting equipment choice structure
+interface EquipmentOption {
+  label: string  // e.g. "(a) a longsword" - display label
+  items: { name: string; quantity: number }[]
+}
+
+interface StartingEquipmentGroup {
+  description: string  // e.g. "Choose one of the following"
+  options: EquipmentOption[]
+}
+
+interface ClassFeature extends Feature {}
+
+interface ClassFormData {
+  name: string
+  description: string
+  card_blurb: string
+  complexity: ClassComplexity | ""
+  hit_die: number
+  primary_ability: string[]
+  saving_throws: string[]
+  armor_proficiencies: string[]
+  weapon_proficiencies: string[]
+  tool_proficiencies: string[]
+  skill_choices: { count: number; options: string[] }
+  features: ClassFeature[]
+  spellcasting: {
+    ability: string
+    starts_at: number
+    caster_progression?: "full" | "half" | "third" | "pact"
+  } | null
+  starting_gold: number
+  starting_equipment_groups: StartingEquipmentGroup[]
+  icon: string | null
+  accent_color: string | null
+  card_image_url: string | null
+  source: string
+  creator_url: string
+  /** Preserved on load/save; no dedicated editor UI yet — see requiresSheetToggle on mechanics. */
+  new_toggles: NewToggleDeclaration[] | null
+}
+
+const defaultClass: ClassFormData = {
+  name: "",
+  description: "",
+  card_blurb: "",
+  complexity: "",
+  hit_die: 8,
+  primary_ability: [],
+  saving_throws: [],
+  armor_proficiencies: [],
+  weapon_proficiencies: [],
+  tool_proficiencies: [],
+  skill_choices: { count: 2, options: [] },
+  features: [{ level: 1, name: "", description: "" }],
+  spellcasting: null,
+  starting_gold: 0,
+  starting_equipment_groups: [],
+  icon: null,
+  accent_color: null,
+  card_image_url: null,
+  source: "Custom",
+  creator_url: "",
+  new_toggles: null,
+}
+
+export default function ClassEditorPage({ id }: { id: string }) {
+  const [form, setForm] = useState<ClassFormData>(defaultClass)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hasSpellcasting, setHasSpellcasting] = useState(false)
+  const [spellSlotsOpen, setSpellSlotsOpen] = useState(false)
+  const [classResources, setClassResources] = useState<ClassResource[]>([])
+  const [classResourceRows, setClassResourceRows] = useState<ClassResourceRow[]>([])
+  const [subclassCount, setSubclassCount] = useState(0)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [relatedCascade, setRelatedCascade] = useState<RelatedCascadeGroup>(EMPTY_RELATED_CASCADE)
+  const [includeRelatedFeats, setIncludeRelatedFeats] = useState(false)
+  const [includeRelatedCreatures, setIncludeRelatedCreatures] = useState(false)
+  const [includeRelatedAbilities, setIncludeRelatedAbilities] = useState(false)
+  const [relatedLoading, setRelatedLoading] = useState(false)
+  const [allSpells, setAllSpells] = useState<{ id: string; name: string }[]>([])
+  const [toolPick, setToolPick] = useState("")
+  const [otherToolInput, setOtherToolInput] = useState("")
+  const router = useRouter()
+  const { handleCopy, copying, copyError, canCopy } = useDuplicateCompendiumItem("classes", id)
+  const { catalog: modifierCatalog } = useModifierCatalog()
+
+  useEffect(() => {
+    const fetchSpells = async () => {
+      const db = createClient()
+      const { data: spells } = await db
+        .from("spells")
+        .select("id, name, level")
+        .order("level")
+        .order("name")
+        .limit(1000)
+      setAllSpells(asCompendiumRows<{ id: string; name: string }>(spells))
+    }
+    fetchSpells()
+  }, [])
+
+  useEffect(() => {
+    if (id && id !== "new") {
+      const fetchClass = async () => {
+        setLoading(true)
+        const db = createClient()
+        const [{ data, error }, { data: resourceRows }, { data: subclassRows }] = await Promise.all([
+          db.from("classes").select("*").eq("id", id).single(),
+          db.from("class_resources").select("*").eq("class_id", id),
+          db.from("subclasses").select("id").eq("class_id", id),
+        ])
+        
+        if (error) {
+          setError("Class not found")
+        } else if (data) {
+          const row = asCompendiumRow(data)
+          if (!row) {
+            setError("Class not found")
+          } else {
+            const [enriched] = enrichClassesList([castCompendiumRow<DndClass>(row)])
+            const spellcasting = enriched.spellcasting
+              ? {
+                  ability: enriched.spellcasting.ability || "Intelligence",
+                  starts_at: enriched.spellcasting.starts_at ?? 1,
+                }
+              : null
+            setForm({
+              name: enriched.name || "",
+              description: enriched.description || "",
+              card_blurb: enriched.card_blurb || "",
+              complexity: enriched.complexity ?? "",
+              hit_die: enriched.hit_die || 8,
+              primary_ability: enriched.primary_ability || [],
+              saving_throws: enriched.saving_throws || [],
+              armor_proficiencies: enriched.armor_proficiencies || [],
+              weapon_proficiencies: enriched.weapon_proficiencies || [],
+              tool_proficiencies: enriched.tool_proficiencies || [],
+              skill_choices: enriched.skill_choices || { count: 2, options: [] },
+              features: (enriched.features || [{ level: 1, name: "", description: "" }]).map((feature: ClassFeature) =>
+                normalizeFeatureRow(feature),
+              ),
+              spellcasting,
+              starting_gold: enriched.starting_gold ?? 0,
+              starting_equipment_groups: (enriched.starting_equipment_groups as StartingEquipmentGroup[]) || [],
+              icon: enriched.icon || null,
+              accent_color: enriched.accent_color || null,
+              card_image_url: (row.card_image_url as string | null) ?? null,
+              source: String(row.source ?? "Custom"),
+              creator_url: String(row.creator_url ?? ""),
+              new_toggles: (row.new_toggles as NewToggleDeclaration[] | null) ?? null,
+            })
+            setHasSpellcasting(!!row.spellcasting)
+            setClassResources(
+              resourcesForClass(id, asCompendiumRows(resourceRows) as unknown as ClassResourceRow[]),
+            )
+            setClassResourceRows(asCompendiumRows(resourceRows) as unknown as ClassResourceRow[])
+            setSubclassCount(asCompendiumRows(subclassRows).length)
+          }
+        }
+        setLoading(false)
+      }
+      fetchClass()
+    }
+  }, [id])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+
+    const db = createClient()
+    const payload = {
+      ...form,
+      card_blurb: form.card_blurb.trim() || null,
+      complexity: form.complexity || null,
+      features: form.features.filter(f => f.name.trim()),
+      spellcasting: hasSpellcasting ? form.spellcasting : null,
+      creator_url: normalizeCreatorUrl(form.creator_url),
+    }
+    
+    if (id === "new") {
+      const { error } = await db.from("classes").insert([payload])
+      if (error) {
+        setError(error.message)
+        setSaving(false)
+        return
+      }
+    } else {
+      const { error } = await db.from("classes").update(payload).eq("id", id)
+      if (error) {
+        setError(error.message)
+        setSaving(false)
+        return
+      }
+    }
+    
+    setSaving(false)
+    router.push("/compendium?tab=classes")
+  }
+
+  const handleExport = () => {
+    const exportData = {
+      type: "dnd-class",
+      version: 1,
+      data: {
+        ...form,
+        features: form.features.filter(f => f.name.trim()),
+        spellcasting: hasSpellcasting ? form.spellcasting : null,
+      }
+    }
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${form.name.toLowerCase().replace(/\s+/g, "-")}-class.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleDelete = () => {
+    setIncludeRelatedFeats(false)
+    setIncludeRelatedCreatures(false)
+    setIncludeRelatedAbilities(false)
+    setRelatedCascade(EMPTY_RELATED_CASCADE)
+    setDeleteConfirmOpen(true)
+    setRelatedLoading(true)
+    void (async () => {
+      try {
+        const db = createClient()
+        const related = await findRelatedFeatsAndCompanions(db, "classes", id)
+        setRelatedCascade(related)
+        if (related.abilities.length > 0) setIncludeRelatedAbilities(true)
+      } catch (err) {
+        console.error("[v0] Failed to load related cascade targets:", err)
+      } finally {
+        setRelatedLoading(false)
+      }
+    })()
+  }
+
+  const confirmDelete = async () => {
+    setDeleting(true)
+    setError(null)
+    const db = createClient()
+    try {
+      const cascadeTargets = flattenRelatedCascade(relatedCascade, {
+        includeFeats: includeRelatedFeats,
+        includeCreatures: includeRelatedCreatures,
+        includeAbilities: includeRelatedAbilities,
+      })
+      if (cascadeTargets.length) {
+        await deleteCompendiumTargets(db, cascadeTargets)
+      }
+
+      const { data: subclassRows } = await db.from("subclasses").select("id").eq("class_id", id)
+      for (const row of asCompendiumRows(subclassRows)) {
+        await db.from("subclasses").delete().eq("id", row.id as string)
+      }
+      const { data: resourceRows } = await db
+        .from("class_resources")
+        .select("id")
+        .eq("class_id", id)
+      for (const row of asCompendiumRows(resourceRows)) {
+        await db.from("class_resources").delete().eq("id", row.id as string)
+      }
+
+      const { error: deleteError } = await db.from("classes").delete().eq("id", id)
+      if (deleteError) {
+        setError(deleteError.message || "Failed to delete class")
+        setDeleting(false)
+        setDeleteConfirmOpen(false)
+        return
+      }
+      router.push("/compendium?tab=classes")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete class")
+      setDeleting(false)
+      setDeleteConfirmOpen(false)
+    }
+  }
+
+  const addFeature = () => {
+    setForm(prev => ({
+      ...prev,
+      features: [...prev.features, { level: 1, name: "", description: "" }]
+    }))
+  }
+
+  const removeFeature = (index: number) => {
+    setForm(prev => ({
+      ...prev,
+      features: prev.features.filter((_, i) => i !== index)
+    }))
+  }
+
+  const updateFeature = (index: number, patch: Partial<ClassFeature>) => {
+    setForm(prev => ({
+      ...prev,
+      features: prev.features.map((f, i) => {
+        if (i !== index) return f
+        return clearModifierReviewPending({ ...f, ...patch })
+      })
+    }))
+  }
+
+  const updateFeatureField = (index: number, field: keyof ClassFeature, value: string | number) => {
+    updateFeature(index, { [field]: value } as Partial<ClassFeature>)
+  }
+
+  const toggleArrayField = (field: "primary_ability" | "saving_throws" | "armor_proficiencies" | "weapon_proficiencies", value: string) => {
+    setForm(prev => ({
+      ...prev,
+      [field]: prev[field].includes(value)
+        ? prev[field].filter(v => v !== value)
+        : [...prev[field], value]
+    }))
+  }
+
+  const addToolProficiency = (tool: string) => {
+    const trimmed = tool.trim()
+    if (!trimmed) return
+    setForm((prev) => {
+      if (prev.tool_proficiencies.some((entry) => entry.toLowerCase() === trimmed.toLowerCase())) {
+        return prev
+      }
+      return { ...prev, tool_proficiencies: [...prev.tool_proficiencies, trimmed] }
+    })
+  }
+
+  const removeToolProficiency = (tool: string) => {
+    setForm((prev) => ({
+      ...prev,
+      tool_proficiencies: prev.tool_proficiencies.filter((entry) => entry !== tool),
+    }))
+  }
+
+  const toggleSkillOption = (skill: string) => {
+    setForm(prev => ({
+      ...prev,
+      skill_choices: {
+        ...prev.skill_choices,
+        options: prev.skill_choices.options.includes(skill)
+          ? prev.skill_choices.options.filter(s => s !== skill)
+          : [...prev.skill_choices.options, skill]
+      }
+    }))
+  }
+
+  // Feature choice helpers
+  const toggleFeatureChoice = (index: number, checked: boolean) => {
+    const newFeatures = [...form.features]
+    newFeatures[index] = {
+      ...newFeatures[index],
+      isChoice: checked,
+      choices: checked
+        ? (newFeatures[index].choices || {
+            category: "Feature Option",
+            options: [{ name: "", description: "" }],
+            count: 1,
+          })
+        : undefined,
+    }
+    setForm({ ...form, features: newFeatures })
+  }
+
+  const updateFeatureChoiceField = (featIndex: number, field: keyof FeatureChoice, value: unknown) => {
+    const newFeatures = [...form.features]
+    const existing = newFeatures[featIndex].choices || { category: "", options: [], count: 1 }
+    newFeatures[featIndex] = { ...newFeatures[featIndex], choices: { ...existing, [field]: value } }
+    setForm({ ...form, features: newFeatures })
+  }
+
+  const addChoiceOption = (featIndex: number) => {
+    const newFeatures = [...form.features]
+    const existing = newFeatures[featIndex].choices!
+    newFeatures[featIndex] = {
+      ...newFeatures[featIndex],
+      choices: { ...existing, options: [...existing.options, { name: "", description: "" }] }
+    }
+    setForm({ ...form, features: newFeatures })
+  }
+
+  const updateChoiceOption = (
+    featIndex: number,
+    optIndex: number,
+    field: "name" | "description" | "modifierRefs" | "linkedModifiers",
+    value: string | string[] | LinkedModifierInstance[],
+  ) => {
+    const newFeatures = [...form.features]
+    const existing = newFeatures[featIndex].choices!
+    const newOptions = existing.options.map((o, i) => {
+      if (i !== optIndex) return o
+      if (field === "linkedModifiers" && Array.isArray(value)) {
+        return syncModifierRefs({ ...o, linkedModifiers: value as LinkedModifierInstance[] })
+      }
+      return { ...o, [field]: value as string | string[] }
+    })
+    newFeatures[featIndex] = {
+      ...newFeatures[featIndex],
+      choices: { ...existing, options: newOptions as FeatureChoice["options"] },
+    }
+    setForm({ ...form, features: newFeatures })
+  }
+
+  const removeChoiceOption = (featIndex: number, optIndex: number) => {
+    const newFeatures = [...form.features]
+    const existing = newFeatures[featIndex].choices!
+    newFeatures[featIndex] = {
+      ...newFeatures[featIndex],
+      choices: { ...existing, options: existing.options.filter((_, i) => i !== optIndex) }
+    }
+    setForm({ ...form, features: newFeatures })
+  }
+
+  // Starting equipment helpers
+  const addEquipmentGroup = () => {
+    setForm(prev => ({
+      ...prev,
+      starting_equipment_groups: [
+        ...prev.starting_equipment_groups,
+        { description: "Choose one of the following", options: [{ label: "(a)", items: [{ name: "", quantity: 1 }] }] }
+      ]
+    }))
+  }
+
+  const removeEquipmentGroup = (gi: number) => {
+    setForm(prev => ({ ...prev, starting_equipment_groups: prev.starting_equipment_groups.filter((_, i) => i !== gi) }))
+  }
+
+  const addEquipmentOption = (gi: number) => {
+    const groups = [...form.starting_equipment_groups]
+    const alpha = String.fromCharCode(97 + groups[gi].options.length)
+    groups[gi] = { ...groups[gi], options: [...groups[gi].options, { label: `(${alpha})`, items: [{ name: "", quantity: 1 }] }] }
+    setForm({ ...form, starting_equipment_groups: groups })
+  }
+
+  const removeEquipmentOption = (gi: number, oi: number) => {
+    const groups = [...form.starting_equipment_groups]
+    groups[gi] = { ...groups[gi], options: groups[gi].options.filter((_, i) => i !== oi) }
+    setForm({ ...form, starting_equipment_groups: groups })
+  }
+
+  const addItemToOption = (gi: number, oi: number) => {
+    const groups = [...form.starting_equipment_groups]
+    groups[gi].options[oi].items.push({ name: "", quantity: 1 })
+    setForm({ ...form, starting_equipment_groups: groups })
+  }
+
+  const updateOptionItem = (gi: number, oi: number, ii: number, field: "name" | "quantity", value: string | number) => {
+    const groups = [...form.starting_equipment_groups]
+    groups[gi].options[oi].items[ii] = { ...groups[gi].options[oi].items[ii], [field]: value }
+    setForm({ ...form, starting_equipment_groups: groups })
+  }
+
+  const removeOptionItem = (gi: number, oi: number, ii: number) => {
+    const groups = [...form.starting_equipment_groups]
+    groups[gi].options[oi].items = groups[gi].options[oi].items.filter((_, i) => i !== ii)
+    setForm({ ...form, starting_equipment_groups: groups })
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <MainNav />
+        <main className="max-w-4xl mx-auto px-4 py-8">
+          <div className="animate-pulse">
+            <div className="h-8 bg-muted rounded w-1/3 mb-8" />
+            <div className="space-y-4">
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="h-12 bg-muted rounded" />
+              ))}
+            </div>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <MainNav />
+      <CompendiumEditorToolbar
+        tab="classes"
+        title={id === "new" ? "New Class" : "Edit Class"}
+        isNew={id === "new"}
+        saving={saving}
+        saveLabel="Save Class"
+        onExport={handleExport}
+        onCopy={canCopy ? handleCopy : undefined}
+        copying={copying}
+        onDelete={id !== "new" ? handleDelete : undefined}
+      />
+
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border-2 border-destructive/40 bg-card p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-destructive/10">
+                <Trash2 className="h-6 w-6 text-destructive" />
+              </div>
+              <div>
+                <h2 className="text-xl font-black text-foreground">
+                  Delete {form.name.trim() || "this class"}?
+                </h2>
+                <p className="text-sm text-muted-foreground">This cannot be undone.</p>
+              </div>
+            </div>
+            <p className="mb-6 text-muted-foreground">
+              This permanently removes{" "}
+              <strong className="text-foreground">{form.name.trim() || "this class"}</strong> from
+              your compendium.
+              {subclassCount > 0 ? (
+                <>
+                  {" "}
+                  It will also delete{" "}
+                  <strong className="text-foreground">
+                    {subclassCount} subclass{subclassCount === 1 ? "" : "es"}
+                  </strong>
+                  .
+                </>
+              ) : null}
+              {classResourceRows.length > 0 ? (
+                <>
+                  {" "}
+                  Linked{" "}
+                  <strong className="text-foreground">
+                    {classResourceRows.length} class resource
+                    {classResourceRows.length === 1 ? "" : "s"}
+                  </strong>{" "}
+                  will be removed.
+                </>
+              ) : null}{" "}
+              Spells that list this class by name are kept. Saved characters that use this class will
+              lose those class levels.
+            </p>
+            {relatedLoading ? (
+              <p className="mb-6 text-sm text-muted-foreground">Checking for related feats and companions…</p>
+            ) : (
+              <RelatedCascadeOptions
+                related={relatedCascade}
+                includeFeats={includeRelatedFeats}
+                includeCreatures={includeRelatedCreatures}
+                includeAbilities={includeRelatedAbilities}
+                onIncludeFeatsChange={setIncludeRelatedFeats}
+                onIncludeCreaturesChange={setIncludeRelatedCreatures}
+                onIncludeAbilitiesChange={setIncludeRelatedAbilities}
+                disabled={deleting}
+              />
+            )}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmOpen(false)}
+                disabled={deleting}
+                className="flex-1 rounded-xl border-2 border-border bg-card px-4 py-3 font-semibold text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDelete()}
+                disabled={deleting || relatedLoading}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-destructive px-4 py-3 font-semibold text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {deleting ? "Deleting…" : "Delete class"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        {(error || copyError) && (
+          <div className="mb-6 p-4 bg-destructive/10 border border-destructive/20 rounded-xl text-destructive">
+            {error || copyError}
+          </div>
+        )}
+
+        <form id={COMPENDIUM_EDITOR_FORM_ID} onSubmit={handleSubmit} className="space-y-6">
+          <CompendiumEditorHeaderRow
+            nameLabel="Class Name"
+            name={form.name}
+            onNameChange={(name) => setForm({ ...form, name })}
+            namePlaceholder="Fighter"
+            source={form.source}
+            onSourceChange={(source) => setForm({ ...form, source })}
+            creatorUrl={form.creator_url}
+            onCreatorUrlChange={(creator_url) => setForm({ ...form, creator_url })}
+            icon={form.icon}
+            onIconChange={(icon) => setForm({ ...form, icon })}
+            accentColor={form.accent_color as CompendiumThemeColorId | null}
+            onAccentColorChange={(accent_color) => setForm({ ...form, accent_color })}
+            cardImageUrl={form.card_image_url}
+            onCardImageUrlChange={(card_image_url) => setForm({ ...form, card_image_url })}
+            cardImagePlacement="none"
+          />
+
+          <CompendiumDescriptionCardImageRow
+            description={form.description}
+            onDescriptionChange={(description) => setForm({ ...form, description })}
+            descriptionPlaceholder="How it feels to play this class — a short original summary, not a Becoming checklist…"
+            cardImageUrl={form.card_image_url}
+            onCardImageUrlChange={(card_image_url) => setForm({ ...form, card_image_url })}
+            cardImageCrop="top"
+            descriptionExtras={
+              <>
+                <CardBlurbField
+                  value={form.card_blurb}
+                  onChange={(card_blurb) => setForm({ ...form, card_blurb })}
+                  placeholder="A master of weapons and armor who adapts to any martial role…"
+                  rows={2}
+                />
+                <div>
+                  <label className="block text-sm font-semibold text-foreground mb-2">
+                    Complexity
+                  </label>
+                  <select
+                    value={form.complexity}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        complexity: e.target.value as ClassComplexity | "",
+                      })
+                    }
+                    className="w-full md:w-48 px-4 py-2.5 bg-card border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary"
+                  >
+                    <option value="">Not set</option>
+                    {CLASS_COMPLEXITY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {formatClassComplexityPhrase(option.value)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            }
+          />
+
+          <CompendiumEditorPanel title="Proficiencies">
+          <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Hit Die
+            </label>
+            <select
+              value={form.hit_die}
+              onChange={(e) => setForm({ ...form, hit_die: parseInt(e.target.value) })}
+              className="w-full md:w-48 px-4 py-3 bg-card border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary"
+            >
+              {[4, 6, 8, 10, 12, 20].map((die) => (
+                <option key={die} value={die}>d{die}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Primary Abilities */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Primary Abilities
+            </label>
+            <div className="flex flex-wrap gap-3">
+              {ABILITIES.map((ability) => (
+                <label key={ability} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.primary_ability.includes(ability)}
+                    onChange={() => toggleArrayField("primary_ability", ability)}
+                    className="w-4 h-4 rounded border-border accent-primary"
+                  />
+                  <span className="text-foreground">{ability}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Saving Throws */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Saving Throw Proficiencies
+            </label>
+            <div className="flex flex-wrap gap-3">
+              {ABILITIES.map((ability) => (
+                <label key={ability} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.saving_throws.includes(ability)}
+                    onChange={() => toggleArrayField("saving_throws", ability)}
+                    className="w-4 h-4 rounded border-border accent-primary"
+                  />
+                  <span className="text-foreground">{ability}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Armor Proficiencies */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Armor Proficiencies
+            </label>
+            <div className="flex flex-wrap gap-3">
+              {ARMOR_TYPES.map((armor) => (
+                <label key={armor} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.armor_proficiencies.includes(armor)}
+                    onChange={() => toggleArrayField("armor_proficiencies", armor)}
+                    className="w-4 h-4 rounded border-border accent-primary"
+                  />
+                  <span className="text-foreground">{armor}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Weapon Proficiencies */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Weapon Proficiencies
+            </label>
+            <div className="flex flex-wrap gap-3">
+              {WEAPON_TYPES.map((weapon) => (
+                <label key={weapon} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.weapon_proficiencies.includes(weapon)}
+                    onChange={() => toggleArrayField("weapon_proficiencies", weapon)}
+                    className="w-4 h-4 rounded border-border accent-primary"
+                  />
+                  <span className="text-foreground">{weapon}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Tool Proficiencies */}
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Tool Proficiencies
+            </label>
+            <p className="text-xs text-muted-foreground mb-2">
+              Fixed tools grant proficiency. Choice phrases (e.g. Choose 3 Musical Instruments) become
+              builder pickers.
+            </p>
+            <select
+              value={toolPick}
+              onChange={(e) => {
+                const value = e.target.value
+                setToolPick(value)
+                if (value && value !== TOOL_OTHER_VALUE) {
+                  addToolProficiency(value)
+                  setToolPick("")
+                }
+              }}
+              className="w-full px-4 py-2 bg-background border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary mb-2"
+            >
+              <option value="">Add tool or choice phrase...</option>
+              <optgroup label="Choice phrases">
+                {TOOL_CHOICE_PRESETS.filter(
+                  (preset) => !form.tool_proficiencies.includes(preset),
+                ).map((preset) => (
+                  <option key={preset} value={preset}>
+                    {preset}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="SRD tools">
+                {SRD_TOOL_NAMES.filter(
+                  (tool) => !form.tool_proficiencies.includes(tool),
+                ).map((tool) => (
+                  <option key={tool} value={tool}>
+                    {tool}
+                  </option>
+                ))}
+              </optgroup>
+              <option value={TOOL_OTHER_VALUE}>Other...</option>
+            </select>
+            {toolPick === TOOL_OTHER_VALUE && (
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={otherToolInput}
+                  onChange={(e) => setOtherToolInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      addToolProficiency(otherToolInput)
+                      setOtherToolInput("")
+                      setToolPick("")
+                    }
+                  }}
+                  placeholder="e.g. Thieves' Tools"
+                  className="flex-1 px-4 py-2 bg-background border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    addToolProficiency(otherToolInput)
+                    setOtherToolInput("")
+                    setToolPick("")
+                  }}
+                  className="px-4 py-2 bg-primary/10 text-primary rounded-xl font-semibold hover:bg-primary/20"
+                >
+                  Add
+                </button>
+              </div>
+            )}
+            {form.tool_proficiencies.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {form.tool_proficiencies.map((tool) => (
+                  <span
+                    key={tool}
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-muted rounded-full text-sm"
+                  >
+                    {tool}
+                    <button
+                      type="button"
+                      onClick={() => removeToolProficiency(tool)}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No tool proficiencies yet.</p>
+            )}
+          </div>
+          </div>
+          </CompendiumEditorPanel>
+
+          <CompendiumEditorPanel title="Skill Proficiency Choices">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-sm text-muted-foreground">Choose from:</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Count</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={6}
+                  value={form.skill_choices.count}
+                  onChange={(e) => setForm(prev => ({
+                    ...prev,
+                    skill_choices: { ...prev.skill_choices, count: parseInt(e.target.value) || 2 }
+                  }))}
+                  className="w-16 px-2 py-1 bg-background border-2 border-border rounded-lg text-center"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {SKILLS.map((skill) => (
+                <label key={skill} className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.skill_choices.options.includes(skill)}
+                    onChange={() => toggleSkillOption(skill)}
+                    className="w-4 h-4 rounded border-border accent-primary"
+                  />
+                  <span className="text-foreground">{skill}</span>
+                </label>
+              ))}
+            </div>
+          </CompendiumEditorPanel>
+
+          <CompendiumEditorPanel title="Spellcasting">
+            <label className="flex items-center gap-2 cursor-pointer mb-4">
+              <input
+                type="checkbox"
+                checked={hasSpellcasting}
+                onChange={(e) => {
+                  setHasSpellcasting(e.target.checked)
+                  if (e.target.checked && !form.spellcasting) {
+                    setForm(prev => ({
+                      ...prev,
+                      spellcasting: { ability: "Intelligence", starts_at: 1 }
+                    }))
+                  }
+                }}
+                className="w-4 h-4 rounded border-border accent-primary"
+              />
+              <span className="font-semibold text-foreground">Has Spellcasting</span>
+            </label>
+            
+            {hasSpellcasting && form.spellcasting && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-muted-foreground mb-2">
+                    Spellcasting Ability
+                  </label>
+                  <select
+                    value={form.spellcasting.ability}
+                    onChange={(e) => setForm(prev => ({
+                      ...prev,
+                      spellcasting: { ...prev.spellcasting!, ability: e.target.value }
+                    }))}
+                    className="w-full px-4 py-3 bg-background border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary"
+                  >
+                    {ABILITIES.map((ability) => (
+                      <option key={ability} value={ability}>{ability}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-muted-foreground mb-2">
+                    Starts at Level
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={form.spellcasting.starts_at ?? 1}
+                    onChange={(e) => setForm(prev => ({
+                      ...prev,
+                      spellcasting: { ...prev.spellcasting!, starts_at: parseInt(e.target.value) || 1 }
+                    }))}
+                    className="w-full px-4 py-3 bg-background border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+            )}
+
+            {hasSpellcasting && form.spellcasting && (
+              <div className="mt-4 rounded-xl border border-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setSpellSlotsOpen((open) => !open)}
+                  aria-expanded={spellSlotsOpen}
+                  className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left bg-muted/30 hover:bg-muted/50 transition-colors"
+                >
+                  <span className="text-sm font-semibold text-foreground">Spell slots by level</span>
+                  <ChevronDown
+                    className={cn(
+                      "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                      spellSlotsOpen && "rotate-180",
+                    )}
+                  />
+                </button>
+                {spellSlotsOpen && (
+                  <div className="space-y-4 border-t border-border p-4">
+                    <div>
+                      <label className="block text-sm font-medium text-muted-foreground mb-2">
+                        Caster progression
+                      </label>
+                      <select
+                        value={
+                          form.spellcasting.caster_progression ??
+                          getCasterSlotType(form.name.trim(), form.spellcasting) ??
+                          "full"
+                        }
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            spellcasting: {
+                              ...prev.spellcasting!,
+                              caster_progression: e.target.value as CasterSlotType,
+                            },
+                          }))
+                        }
+                        className="w-full md:max-w-md px-4 py-3 bg-background border-2 border-border rounded-xl text-foreground focus:outline-none focus:border-primary"
+                      >
+                        <option value="full">Full caster (Bard, Cleric, Druid, Sorcerer, Wizard)</option>
+                        <option value="half">Half caster (Paladin, Ranger, Artificer)</option>
+                        <option value="third">One-third caster (Eldritch Knight, Arcane Trickster)</option>
+                        <option value="pact">Pact magic (Warlock)</option>
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Determines the spell-slot progression. Defaults are inferred from the class
+                        name when not set explicitly.
+                      </p>
+                    </div>
+
+                    {form.name.trim() && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          SRD spell slot progression for this caster type (levels 1–20). Authoring a
+                          custom progression table on the class overrides builder spell-pick limits
+                          when present.
+                        </p>
+                        <SpellSlotProgressionTable
+                          className={form.name.trim()}
+                          spellcasting={form.spellcasting}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </CompendiumEditorPanel>
+
+          <CompendiumEditorSection
+            title="Class Resources"
+            hint="Level-scaling pools (Rage, Focus Points, etc.) live in the Class Resources compendium section."
+            headerActions={
+              id !== "new" ? (
+                <Link
+                  href={`${compendiumEditHref("class_resources", "new")}?class_id=${id}`}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-primary/10 text-primary rounded-lg hover:bg-primary/20 whitespace-nowrap"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Resource
+                </Link>
+              ) : undefined
+            }
+            collapsible
+          >
+            {id === "new" ? (
+              <p className="text-sm text-muted-foreground">Save this class first, then add resources.</p>
+            ) : classResources.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No resources yet.{" "}
+                <Link href={compendiumListHref("class_resources")} className="text-primary hover:underline">
+                  Browse Class Resources
+                </Link>
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {classResourceRows.map((resource) => (
+                  <li
+                    key={resource.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  >
+                    <span>
+                      <span className="font-semibold text-foreground">{resource.name}</span>
+                      <span className="ml-2 font-mono text-xs text-muted-foreground">{resource.resource_key}</span>
+                    </span>
+                    <Link
+                      href={compendiumEditHref("class_resources", resource.id)}
+                      className="text-xs text-primary hover:underline shrink-0"
+                    >
+                      Edit
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CompendiumEditorSection>
+
+          <CompendiumEditorSection
+            title="Class Features"
+            addLabel="Add Feature"
+            onAdd={addFeature}
+            collapsible
+          >
+            <div className="space-y-4">
+              {form.features.map((feature, index) => (
+                <div
+                  key={index}
+                  className={cn(
+                    "bg-card border-2 rounded-xl p-4 space-y-3",
+                    featureNeedsModifierReview(feature)
+                      ? "border-destructive bg-destructive/5"
+                      : "border-border",
+                  )}
+                >
+                  {featureNeedsModifierReview(feature) ? (
+                    <p className="text-xs font-medium text-destructive">
+                      No modifier linked — use Modifier effects below, then save.
+                    </p>
+                  ) : null}
+                  <div className="flex items-start gap-4">
+                    <div className="flex-1">
+                      <input
+                        type="text"
+                        value={feature.name}
+                        onChange={(e) => updateFeatureField(index, "name", e.target.value)}
+                        placeholder="Feature name"
+                        className="w-full px-4 py-2 bg-background border-2 border-border rounded-lg text-foreground focus:outline-none focus:border-primary"
+                      />
+                    </div>
+                    <div className="w-32">
+                      <select
+                        value={feature.level}
+                        onChange={(e) => updateFeatureField(index, "level", parseInt(e.target.value, 10))}
+                        className="w-full px-3 py-2 bg-background border-2 border-border rounded-lg text-foreground text-center focus:outline-none focus:border-primary"
+                      >
+                        {LEVELS.map((lvl) => (
+                          <option key={lvl} value={lvl}>Level {lvl}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeFeature(index)}
+                      className="p-2 text-muted-foreground hover:text-destructive transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <ClassFeatureFields
+                    feature={feature}
+                    index={index}
+                    classResources={classResources}
+                    modifierCatalog={modifierCatalog}
+                    spellOptions={allSpells}
+                    siblingFeatures={form.features.map((feat) => ({
+                      name: feat.name,
+                      level: feat.level,
+                    }))}
+                    onUpdate={updateFeature}
+                    onToggleChoice={toggleFeatureChoice}
+                    onUpdateChoiceField={updateFeatureChoiceField}
+                    onAddChoiceOption={addChoiceOption}
+                    onUpdateChoiceOption={updateChoiceOption}
+                    onRemoveChoiceOption={removeChoiceOption}
+                    onToggleLimitedUses={(featIndex, checked) => {
+                      if (checked) {
+                        updateFeature(featIndex, { limitedUses: { type: "unlimited" } })
+                      } else {
+                        updateFeature(featIndex, { limitedUses: null })
+                      }
+                    }}
+                    onUpdateLimitedUses={(featIndex, uses) =>
+                      updateFeature(featIndex, { limitedUses: uses })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </CompendiumEditorSection>
+
+          <CompendiumEditorSection
+            title="Starting Equipment"
+            hint="Define equipment choice groups. Players pick one option per group."
+            addLabel="Add Choice Group"
+            onAdd={addEquipmentGroup}
+            collapsible
+          >
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-semibold text-foreground shrink-0">Starting Gold (gp):</label>
+              <input
+                type="number"
+                min={0}
+                value={form.starting_gold}
+                onChange={(e) => setForm({ ...form, starting_gold: Math.max(0, parseInt(e.target.value) || 0) })}
+                className="w-28 px-3 py-2 bg-background border-2 border-border rounded-xl text-foreground text-center focus:outline-none focus:border-primary"
+              />
+              <span className="text-xs text-muted-foreground">
+                Players can take gold instead of equipment choices.
+              </span>
+            </div>
+
+            {/* Choice Groups */}
+            {form.starting_equipment_groups.map((group, gi) => (
+              <div key={gi} className="border-2 border-border rounded-xl p-3 space-y-3 bg-background">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={group.description}
+                    onChange={(e) => {
+                      const groups = [...form.starting_equipment_groups]
+                      groups[gi] = { ...groups[gi], description: e.target.value }
+                      setForm({ ...form, starting_equipment_groups: groups })
+                    }}
+                    placeholder="e.g. Choose one of the following weapons"
+                    className="flex-1 px-3 py-2 bg-card border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-primary font-medium"
+                  />
+                  <button type="button" onClick={() => addEquipmentOption(gi)}
+                    className="px-2 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 text-xs font-semibold whitespace-nowrap">
+                    + Option
+                  </button>
+                  <button type="button" onClick={() => removeEquipmentGroup(gi)}
+                    className="p-2 text-muted-foreground hover:text-destructive">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {group.options.map((opt, oi) => (
+                  <div key={oi} className="pl-3 border-l-2 border-primary/20 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={opt.label}
+                        onChange={(e) => {
+                          const groups = [...form.starting_equipment_groups]
+                          groups[gi].options[oi] = { ...groups[gi].options[oi], label: e.target.value }
+                          setForm({ ...form, starting_equipment_groups: groups })
+                        }}
+                        placeholder="(a)"
+                        className="w-20 px-2 py-1 bg-card border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-primary"
+                      />
+                      <span className="text-xs text-muted-foreground">Label</span>
+                      <button type="button" onClick={() => addItemToOption(gi, oi)}
+                        className="ml-auto px-2 py-1 text-xs bg-muted text-muted-foreground rounded hover:bg-muted/80">
+                        + Item
+                      </button>
+                      <button type="button" onClick={() => removeEquipmentOption(gi, oi)}
+                        className="p-1 text-muted-foreground hover:text-destructive">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    {opt.items.map((item, ii) => (
+                      <div key={ii} className="flex items-center gap-2 ml-2">
+                        <input
+                          type="number"
+                          min={1}
+                          value={item.quantity}
+                          onChange={(e) => updateOptionItem(gi, oi, ii, "quantity", parseInt(e.target.value) || 1)}
+                          className="w-16 px-2 py-1 bg-card border border-border rounded-lg text-sm text-center focus:outline-none focus:border-primary"
+                        />
+                        <input
+                          type="text"
+                          value={item.name}
+                          onChange={(e) => updateOptionItem(gi, oi, ii, "name", e.target.value)}
+                          placeholder="Item name"
+                          className="flex-1 px-3 py-1 bg-card border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-primary"
+                        />
+                        <button type="button" onClick={() => removeOptionItem(gi, oi, ii)}
+                          className="p-1 text-muted-foreground hover:text-destructive">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ))}
+
+            {form.starting_equipment_groups.length === 0 && (
+              <p className="text-sm text-muted-foreground italic text-center py-2">
+                No equipment choice groups yet. Click &quot;Add Choice Group&quot; to begin.
+              </p>
+            )}
+          </CompendiumEditorSection>
+
+        </form>
+      </main>
+    </div>
+  )
+}
