@@ -8,6 +8,8 @@ Effective 2026-10-13. Baseline: visual v0.32 (833145ec4706a7e79fe7f3669a37ed79be
 
 No rules forks by edition. `NEXT_PUBLIC_UI_EDITION` is a presentation capability only. Compact builds force it to `compact` in Next configuration, including SSR. Persisted image fields are retained for import/export compatibility but no artwork is rendered or requested. Icons are not character art. Do not delete stored portraits while opening a visual character in compact mode.
 
+The four art-free README captures explicitly allowlisted by `scripts/check-compact-assets.mjs` under `docs/screenshots/` are approved documentation exceptions to the raster-image ban. They are not application assets; do not include portraits, private rulebook prose, or source masters in captures.
+
 ## Visual consumer
 
 `Geph/dump-stat-character-builder` owns the visual UI and approved artwork. Its `lib/` is a generated, reviewed snapshot of this repository, pinned in `shared-core.lock.json`. It must not be edited independently. The transport preserves paths to avoid a risky simultaneous rewrite of every import and retains offline, reproducible builds. This is source vendoring, not an npm registry dependency.

@@ -1,8 +1,10 @@
 # Dump Stat — Compact Edition
 
+[![Compact Dump Stat home page](docs/screenshots/compact-home.jpg)](https://geph.github.io/Dump-Stat-Character-Builder-5.5e/)
+
 An art-free 5E-compatible character builder, compendium, and interactive character sheet. This repository owns the shared gameplay, import, and persistence functionality used by both Dump Stat editions.
 
-Current release baseline: **0.32**. The compact UI uses dense lists, text, licensed interface icons, and color themes. It includes no portraits, generated artwork, or decorative backgrounds. Optional BYO LLM import guidance remains available; “art-free” does not mean the code or optional tools are AI-free.
+Current release baseline: **0.32**. The compact UI uses dense lists, text, licensed interface icons, and a parchment palette. It includes no portraits, generated artwork, or decorative backgrounds. Optional BYO LLM import guidance remains available; “art-free” does not mean the code or optional tools are AI-free.
 
 ## Run locally
 
@@ -21,6 +23,24 @@ Open http://localhost:3002. This separate port avoids colliding with the visual 
 - Editable compendium, JSON/Foundry import, shared modifier wiring, and optional BYO prompts.
 - SRD 5.2.1 and the existing approved optional KibblesTasty/Mage Hand Press packs.
 - Browser persistence and export backups. Data is not migrated automatically between site URLs.
+
+### Character builder
+
+Choose your class, origin, abilities, equipment, and spells alongside a live character preview.
+
+![Compact character builder with SRD class choices and a live character preview](docs/screenshots/compact-builder.jpg)
+
+### Content compendium
+
+Browse and manage classes, spells, creatures, equipment, and custom content in an art-free catalog.
+
+![Compact compendium with SRD classes and content filters](docs/screenshots/compact-compendium.jpg)
+
+### Interactive character sheet
+
+Keep ability scores, skills, proficiencies, combat, and character details close at hand.
+
+![Compact character sheet showing skills, ability scores, and proficiencies](docs/screenshots/compact-sheet.jpg)
 
 ## Contributing
 

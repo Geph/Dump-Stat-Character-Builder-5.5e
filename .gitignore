@@ -751,5 +751,11 @@ lib/import/__tests__/tmp-*.test.ts
 *.gif
 *.pdf
 
+# Approved art-free README captures only; never bundled as application artwork.
+!/docs/screenshots/compact-home.jpg
+!/docs/screenshots/compact-builder.jpg
+!/docs/screenshots/compact-compendium.jpg
+!/docs/screenshots/compact-sheet.jpg
+
 /*.log
 /.env.local

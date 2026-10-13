@@ -3,6 +3,7 @@ import { BookOpen, Download, NotebookText, Users } from "lucide-react"
 import { MainNav } from "@/components/main-nav"
 import { SiteFooter } from "@/components/site-footer"
 import { WelcomeSplashOverlay } from "@/components/home/welcome-splash-overlay"
+import { CompendiumStats } from "@/components/home/compendium-stats"
 const sections = [
   { href: "/builder", title: "Character Builder", description: "Choose your class, origin, abilities, equipment, and spells.", icon: NotebookText },
   { href: "/characters", title: "Manage Characters", description: "Open a sheet, roll dice, and track resources and companions.", icon: Users },
@@ -24,5 +25,6 @@ export default function HomePage() {
           </div>
           <p className="mt-3 text-muted-foreground">{description}</p>
         </Link>)}</div>
+      <CompendiumStats />
     </main><SiteFooter id="home-footer" /></div></WelcomeSplashOverlay>
 }
