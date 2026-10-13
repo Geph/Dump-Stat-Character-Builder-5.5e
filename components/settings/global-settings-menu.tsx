@@ -19,15 +19,12 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
-import { SiteGraphicsSettings } from "@/components/settings/site-graphics-settings"
 import { ClearCompendiumSection } from "@/components/settings/clear-compendium-section"
 import { useBuilderLayout } from "@/components/settings/use-builder-layout"
 import { useAppPresentationMode } from "@/components/settings/use-app-presentation-mode"
-import { useDefaultMidjourneyGraphics } from "@/components/settings/use-default-midjourney-graphics"
 import { useGmDashboardNav } from "@/components/settings/use-gm-dashboard-nav"
 import { useResumeLastCharacter } from "@/components/settings/use-resume-last-character"
 import { useManualSkillAbility } from "@/components/settings/use-manual-skill-ability"
-import { useWelcomeSplashSuppress } from "@/components/settings/use-welcome-splash-suppress"
 import { useSearchAutocomplete } from "@/components/settings/use-search-autocomplete"
 import { useDisplayNonCombatActions } from "@/components/settings/use-display-non-combat-actions"
 import { cn } from "@/lib/utils"
@@ -56,8 +53,6 @@ export function GlobalSettingsMenu() {
   const { theme, setTheme } = useAppTheme()
   const { layout: builderLayout, setLayout: setBuilderLayout } = useBuilderLayout()
   const { isCompactOnly } = useAppPresentationMode()
-  const { disabled: hideDefaultMidjourney, setDisabled: setHideDefaultMidjourney } =
-    useDefaultMidjourneyGraphics()
   const { enabled: gmDashboardNavEnabled, setEnabled: setGmDashboardNavEnabled } = useGmDashboardNav()
   const { enabled: resumeLastCharacter, setEnabled: setResumeLastCharacter } = useResumeLastCharacter()
   const { enabled: manualSkillAbility, setEnabled: setManualSkillAbility } = useManualSkillAbility()
@@ -65,8 +60,6 @@ export function GlobalSettingsMenu() {
     useSearchAutocomplete()
   const { enabled: displayNonCombatActions, setEnabled: setDisplayNonCombatActions } =
     useDisplayNonCombatActions()
-  const { suppressed: hideWelcomeSplash, setSuppressed: setHideWelcomeSplash } =
-    useWelcomeSplashSuppress()
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
@@ -186,45 +179,6 @@ export function GlobalSettingsMenu() {
               </div>
             </TabsContent>
 
-            <TabsContent value="graphics" className="mt-0 space-y-4">
-              {!isCompactOnly ? (
-                <SiteGraphicsSettings onStatus={setStatus} />
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Background graphics are hidden in Compact Only mode. Choose Visual + Compact on the
-                  home page splash to re-enable them.
-                </p>
-              )}
-              <div className="border-t border-border pt-4">
-                <p className="text-sm font-semibold text-foreground">
-                  Disable default Midjourney graphics
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-                  Hides bundled portraits automatically attached to seeded or imported content (SRD,
-                  PHB, Ravenloft, and similar). Home page photos go blank unless you uploaded
-                  replacements above. Your own custom card art stays.
-                </p>
-                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
-                  <input
-                    type="checkbox"
-                    checked={hideDefaultMidjourney}
-                    onChange={(event) => {
-                      setHideDefaultMidjourney(event.target.checked)
-                      setStatus(
-                        event.target.checked
-                          ? "Default Midjourney graphics hidden"
-                          : "Default Midjourney graphics enabled",
-                      )
-                    }}
-                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
-                  />
-                  <span className="text-sm leading-snug text-foreground">
-                    Hide bundled default graphics
-                  </span>
-                </label>
-              </div>
-            </TabsContent>
-
             <TabsContent value="options" className="mt-0 space-y-6">
               <div>
                 <p className="text-sm font-semibold text-foreground">Navigation</p>
@@ -279,23 +233,7 @@ export function GlobalSettingsMenu() {
                     </span>
                   </span>
                 </label>
-                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/20 p-3">
-                  <input
-                    type="checkbox"
-                    checked={hideWelcomeSplash}
-                    onChange={(event) => setHideWelcomeSplash(event.target.checked)}
-                    className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
-                  />
-                  <span className="text-sm leading-snug">
-                    <span className="font-semibold text-foreground">
-                      Don&apos;t show home page splash
-                    </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      Hides the first-visit Visual / Compact / No AI choice overlay. Uncheck to see it
-                      again on the next home page visit.
-                    </span>
-                  </span>
-                </label>
+                
               </div>
 
               <div>
