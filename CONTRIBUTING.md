@@ -14,8 +14,7 @@ cd Dump-Stat-Character-Builder-5.5e
 corepack enable
 pnpm install
 cp .env.example .env.local
-# Configure DATABASE_URL (or MYSQL_* fields), then:
-pnpm db:setup   # or apply mysql/schema.sql manually
+# The example defaults to browser storage; no database setup is required.
 pnpm dev
 ```
 
@@ -63,15 +62,11 @@ Changes that affect SRD / 5E rules accuracy (class features, species traits, spe
 
 ## What not to commit
 
-Please keep copyrighted and personal working files out of the public tree:
+- Artwork, portraits, screenshots, image originals, PDFs or decorative backgrounds. This edition is art-free; interface icons and fonts keep their licenses.
+- Private rulebook prose or local import JSON. Existing approved publisher seed packs retain their documented scope; a new import is not permission to bundle it.
+- Secrets, `.env.local`, audit dumps or scratch files.
 
-- **Rulebook text** — Do not add Player’s Handbook, setting-book, or other non-SRD prose to `lib/srd/`, Seed data, or tracked GitHub JSON. Mechanical wiring without book text is fine.
-- **Card art** — Only ship art you are allowed to distribute. GitHub-eligible optimized art comes from **SRD** source folders, plus **Mage Hand Press class** portraits and **free-subclass** portraits on the seed allowlist. **Paid** Mage Hand Press subclasses, **Kibbles Tasty**, Player’s Handbook, and other setting-book portraits stay on your machine after `pnpm images:optimize`; do not `git add` those PNGs or `public/images/compendium/local-available-card-art.json`. Import still picks up those local files when they exist.
-- **Custom content folders** — If you add your own uniquely named art or import folders under `scripts/` or `public/images/compendium/`, leave them uncommitted; the app can still use them locally.
-- **Secrets** — Never commit `.env`, `.env.local`, API keys, or database passwords.
-- **Scratch files** — Skip local prompts, audit dumps, and temporary scripts unless the PR is deliberately adding a maintained tool.
-
-More on how the repo separates licensed content from local-only books: [docs/repository-overview.md](docs/repository-overview.md#copyright-and-licensing). Optional local art workflow: [README — Local card art](README.md#local-card-art-optional).
+Hosted MySQL is optional: configure `NEXT_PUBLIC_DEPLOY_MODE=hosted` and database credentials locally, then follow mysql/schema.sql and the migration scripts. Never commit those credentials.
 
 ## Where everyday changes go
 
