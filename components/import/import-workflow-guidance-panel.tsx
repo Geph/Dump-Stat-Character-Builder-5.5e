@@ -100,7 +100,7 @@ export function ImportWorkflowGuidancePanel() {
   return (
     <div className="space-y-2">
       <p className="text-xs font-medium text-muted-foreground">Import tips</p>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         {TOPIC_BUTTONS.map((entry) => {
           const Icon = entry.icon
           return (

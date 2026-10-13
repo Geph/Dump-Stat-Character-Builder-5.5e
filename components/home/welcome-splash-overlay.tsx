@@ -31,7 +31,7 @@ export function WelcomeSplashOverlay({ children }: { children: ReactNode }) {
           <a href="https://cursor.com/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-4">Cursor</a>
           {" and "}
           <a href="https://openai.com/codex/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-4">Codex</a>
-          , AI-assisted coding tools.
+          , AI-assisted coding tools. It also invites users to use their own LLM to process content for import.
         </p>
         <p className="mt-4 font-semibold">Would you like to proceed?</p>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">

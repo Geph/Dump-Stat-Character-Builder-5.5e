@@ -438,19 +438,47 @@ export function ClipboardImportPanel({
       <section className="space-y-4">
         <div>
           <h2 className="text-base font-bold text-foreground">
-            {isImagesImport ? "Step 1 — Map image URLs" : "Step 1 — Extract with your LLM"}
+            {isImagesImport ? "Step 1 — Map image URLs" : "Step 1 — Prepare your JSON"}
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
             {isImagesImport
               ? "Paste direct image URLs and/or a public directory listing URL. Server AI crawls listings with fetch_url. For BYO, copy the prompt into a tool-capable LLM, then paste the returned card_art JSON in Step 2. Or download the template and fill it in yourself."
-              : "Choose one path below. Both produce the same JSON format for Step 2."}
+              : "Choose one of three paths below. All use the same JSON format for Step 2."}
           </p>
-          {!isImagesImport ? (
-            <div className="mt-3">
-              <ByoPromptModeSelect value={promptMode} onChange={setPromptMode} />
-            </div>
-          ) : null}
         </div>
+
+        <div className="rounded-xl border-2 border-primary/50 bg-primary/5 p-5 space-y-4 shadow-sm">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold uppercase tracking-wide text-primary">
+              {isImagesImport ? "Optional" : "Option A"}
+            </p>
+            <p className="text-base text-foreground mt-2">
+              {isImagesImport
+                ? "Skip the LLM — download the card_art JSON template and fill in URLs by hand."
+                : "Skip the LLM — download the JSON template and fill it in by hand."}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <ImportContentTypeHintSelect
+              value={contentType}
+              onChange={onContentTypeChange}
+              focusRingClassName="focus:ring-lime"
+              label="Template type:"
+            />
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              <Download className="h-4 w-4" />
+              Download JSON template
+            </button>
+          </div>
+        </div>
+
+        {!isImagesImport ? (
+          <ByoPromptModeSelect value={promptMode} onChange={setPromptMode} />
+        ) : null}
 
         <div className={isImagesImport ? "space-y-4" : "grid gap-4 lg:grid-cols-2"}>
           {!isImagesImport ? (
@@ -461,7 +489,7 @@ export function ClipboardImportPanel({
               </div>
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                  Option A
+                  Option B
                 </p>
                 <h3 className="text-sm font-semibold text-foreground">PDF upload</h3>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
@@ -573,7 +601,7 @@ export function ClipboardImportPanel({
               </div>
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                  {isImagesImport ? "Image URLs" : "Option B"}
+                  {isImagesImport ? "Image URLs" : "Option C"}
                 </p>
                 <h3 className="text-sm font-semibold text-foreground">
                   {isImagesImport ? "Paste one or more URLs" : "Pasted source text"}
@@ -657,34 +685,7 @@ export function ClipboardImportPanel({
           </div>
         </div>
 
-        <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-              {isImagesImport ? "Optional" : "Option C"}
-            </p>
-            <p className="text-sm text-foreground mt-0.5">
-              {isImagesImport
-                ? "Skip the LLM — download the card_art JSON template and fill in URLs by hand."
-                : "Skip the LLM — download the JSON template and fill it in by hand."}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <ImportContentTypeHintSelect
-              value={contentType}
-              onChange={onContentTypeChange}
-              focusRingClassName="focus:ring-lime"
-              label="Template type:"
-            />
-            <button
-              type="button"
-              onClick={handleDownloadTemplate}
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium hover:bg-muted/60"
-            >
-              <Download className="h-4 w-4" />
-              Download JSON template
-            </button>
-          </div>
-        </div>
+
       </section>
 
       <section className="space-y-3 rounded-xl border-2 border-lime/20 bg-lime/[0.03] p-4">

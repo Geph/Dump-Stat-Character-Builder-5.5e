@@ -42,9 +42,9 @@ type ByoPromptModeSelectProps = {
 export function ByoPromptModeSelect({ value, onChange }: ByoPromptModeSelectProps) {
   const active = MODE_OPTIONS.find((option) => option.value === value) ?? MODE_OPTIONS[1]
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-      <span className="text-sm font-medium text-muted-foreground">Prompt size</span>
-      <div role="radiogroup" aria-label="Prompt size" className="inline-flex rounded-lg border border-border bg-muted p-0.5">
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-primary/30 bg-card p-4">
+      <span className="text-sm font-bold text-foreground">LLM prompt size</span>
+      <div role="radiogroup" aria-label="Prompt size" className="inline-flex rounded-xl border-2 border-primary bg-background p-1 shadow-sm">
         {MODE_OPTIONS.map((option) => (
           <button
             key={option.value}
@@ -52,9 +52,9 @@ export function ByoPromptModeSelect({ value, onChange }: ByoPromptModeSelectProp
             role="radio"
             aria-checked={value === option.value}
             onClick={() => onChange(option.value)}
-            className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-lime ${
+            className={`min-h-11 min-w-20 rounded-lg px-5 py-2 text-sm font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
               value === option.value
-                ? "bg-card text-foreground shadow-sm"
+                ? "bg-primary text-primary-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
