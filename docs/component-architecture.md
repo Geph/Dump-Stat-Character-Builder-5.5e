@@ -1,6 +1,15 @@
 # Component architecture — agent guide
 
-Last reviewed: 2026-10-12.
+Last reviewed: 2026-10-13.
+
+The public compact UI uses text character cards in the library and GM picker,
+and short icon/name rows for Favorite Abilities. Portrait fields remain in saved
+characters and exports but have no display, zoom, or upload controls on the sheet.
+`CompendiumDetailOverlay` always renders a scrollable text dialog, including
+level-up subclass/spell callers that still pass legacy portrait layout props.
+Keep tags, header actions, focus handling, Escape dismissal, and the nested
+wizard's overlay stacking. Import tips omit the visual edition's image hosting
+workflow; import parsing and persisted image fields remain shared contracts.
 
 `ActionSlotRestore` is the small shared action-overlay control for feature-use
 restoration by spell slot. Slot eligibility and used-count logic live in
@@ -13,12 +22,14 @@ link also dispatches `dumpstat:open-attribution` so repeated clicks on the same
 home-footer hash reopen it. Scrolling follows expansion; collapsed credits are
 inert. Keep SRD and font license notices intact when shortening surrounding copy.
 
-Home onboarding keeps version selection in `WelcomeSplashOverlay`, followed by
-`WelcomeThemePicker` for both Visual + Compact and Compact Only. Theme previews
-use the shared `APP_THEMES` metadata and `useAppTheme` provider. Graphical mode
-shows five 2:3 background-art previews across desktop and uses `SwipeVisualPicker`
-on phones. Compact mode gets color swatches without artwork. The existing suppression preference applies
-to the entire flow; Back returns to the presentation choice.
+Home onboarding uses `WelcomeSplashOverlay` to disclose that Dump Stat was made
+with Cursor and Codex. Yes opens the home page and is remembered for the current
+tab session under a compact-only sessionStorage key; No links to
+`https://noai.duckduckgo.com/`. There is no theme picker: the compact provider and
+CSS always use parchment without reading or overwriting the visual edition's
+stored theme preference. Shared `lib/themes` metadata remains available to the
+visual consumer. The builder has no landscape banner upload or random banner
+assignment; existing `banner_url` values still round-trip through saved characters.
 
 Sheet action tiles show the name (at most two lines), compact cost/use counts and
 attack statistics. Trigger sentences and bonus explanations belong in the action
@@ -34,17 +45,14 @@ concentration footer notes. Keep resource/Metamagic costs and casting warnings.
 Spell pins add shortcuts to Abilities & Skills → Non-Combat Actions, grouped by
 casting time; they do not remove spells from the Combat spell list.
 
-`signature-abilities.tsx` owns the Favorite Abilities panel with two portrait shortcuts above Combat saves, the
+`signature-abilities.tsx` owns the Favorite Abilities panel with two icon/name shortcuts above Combat saves, the
 spell/action destination menus, and drag targets. `SignatureAbilitiesProvider`
 persists only typed action/spell/weapon IDs in per-character local storage. Unconfigured
 sheets default to the first resource-backed action; explicit empty slots stay empty.
 Cards reuse the spell selector or request the existing `SheetActionsPanel` overlay
 in its owning scope, then acknowledge the request so later renders cannot reopen it.
-The mobile section links include `sheet-signatures`. In visual mode, art resolves
-from a per-character favorite image override, then the spell/custom ability/weapon,
-then the primary class for slot 1 or its subclass for slot 2. Compact mode uses icons.
-The favorite menu opens `FavoriteImagePicker` for uploads, URLs, and existing art;
-overrides use typed target IDs and report local-storage failures. Weapon favorites
+The mobile section links include `sheet-signatures`. Stored image overrides remain
+compatible with the visual edition; compact never offers artwork choices. Weapon favorites
 use hand + equipment ID and open the shared `WeaponAttackCard` with the original
 roll, resource, and modifier props. Main/off-hand attacks remain distinct.
 No mechanics are copied
@@ -208,7 +216,7 @@ reminders (such as Skulker); preset badge synchronization updates older imports.
 
 - Put logic you can unit test in `lib/` and test it with Vitest there. Components in
   this repo are mostly verified by the lib tests behind them plus a manual pass.
-- For a visible change, run `pnpm dev` (port 3001) and click through the affected
+- For a visible change, run `pnpm dev` (port 3002) and click through the affected
   builder step or sheet tab. Say what you checked in the PR.
 
 Random detail generation delegates names to lib/builder/random-character-name.ts. Original syllable pools vary by normalized species name, with Genasi elemental variants; unknown or missing species select from all styles. Keep naming data out of builder React. Random details preserve an existing character name.

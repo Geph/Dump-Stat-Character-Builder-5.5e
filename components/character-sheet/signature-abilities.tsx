@@ -1,8 +1,5 @@
 "use client"
 
-import { CompactImage } from "@/components/compact-image"
-
-
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import { MoreHorizontal, Pin, Sparkles } from "lucide-react"
 import { GameIcon } from "@/components/game-icon-picker"
@@ -10,9 +7,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { getCompendiumCardImageUrl, normalizeCardImageUrl } from "@/lib/compendium/card-image"
 import type { SheetActionEntry } from "@/lib/character/sheet-actions"
 import { useAppPresentationMode } from "@/components/settings/use-app-presentation-mode"
-import { FavoriteImagePicker } from "@/components/character-sheet/favorite-image-picker"
 import type { Equipment, Spell } from "@/lib/types"
-import { favoriteImage, defaultSignatureAction, parseSignatureTarget, placeSignature, SIGNATURE_DRAG_TYPE, type SignatureSlots, type SignatureTarget } from "@/lib/character/signature-abilities"
+import { defaultSignatureAction, parseSignatureTarget, placeSignature, SIGNATURE_DRAG_TYPE, type SignatureSlots, type SignatureTarget } from "@/lib/character/signature-abilities"
 
 type Item = SignatureTarget & { name: string; icon?: string | null; image: string | null }
 type Request = { id: string; scope: "combat" | "utility" | "weapon" }
@@ -101,7 +97,7 @@ export function SignaturePinMenu({ target, utilityPinned, onUtilityToggle, spell
   return <DropdownMenu><DropdownMenuTrigger asChild>
     <button type="button" aria-label={spell ? "Pin spell" : "Action options"}
       onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card/90 text-foreground hover:bg-muted">
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border bg-card/90 text-foreground hover:bg-muted">
       {spell ? <Pin className="h-4 w-4" /> : <MoreHorizontal className="h-4 w-4" />}
     </button>
   </DropdownMenuTrigger><DropdownMenuContent onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
@@ -112,32 +108,27 @@ export function SignaturePinMenu({ target, utilityPinned, onUtilityToggle, spell
 
 export function SignatureAbilitiesPanel() {
   const context = useSignatureAbilities()
-  const [editing, setEditing] = useState<SignatureTarget | null>(null)
   if (!context) return null
   return <section id="sheet-signatures" className="scroll-mt-20 rounded-xl border border-border bg-card/80 p-3">
     <h2 className="mb-2 flex items-center gap-2 text-sm font-bold"><Sparkles className="h-4 w-4" />Favorite Abilities</h2>
-    <div className="grid grid-cols-2 gap-2">{([0, 1] as const).map(index => {
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{([0, 1] as const).map(index => {
       const target = context.slots[index]
       const item = context.items.find(row => row.id === target?.id && row.kind === target.kind)
-      const image = item ? favoriteImage(context.visual, context.images[`${item.kind}:${item.id}`], item.image, context.fallbackImages[index]) : null
-      return <div key={index} className="relative aspect-[2/3] min-w-0 overflow-hidden rounded-xl border border-border bg-muted/40"
+      return <div key={index} className="relative flex min-h-16 min-w-0 items-center rounded-xl border border-border bg-muted/40"
         onDragOver={event => { if (event.dataTransfer.types.includes(SIGNATURE_DRAG_TYPE)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy" } }}
         onDrop={event => { event.preventDefault(); try { const next = parseSignatureTarget(JSON.parse(event.dataTransfer.getData(SIGNATURE_DRAG_TYPE))); if (next) context.pin(index, next) } catch { /* Not a sheet ability. */ } }}>
         {item ? <button type="button" onClick={() => context.open(item)} aria-label={`Open ${item.name}`} draggable
           onDragStart={event => event.dataTransfer.setData(SIGNATURE_DRAG_TYPE, JSON.stringify(item))}
-          className="absolute inset-0 flex w-full flex-col items-center justify-center text-center focus-visible:ring-2 focus-visible:ring-primary">
-          {image ? <CompactImage key={image} src={image} alt="" className="absolute inset-0 h-full w-full object-cover object-top" onError={event => { event.currentTarget.style.display = "none" }} /> : null}
-          <span className="text-primary">{item.icon ? <GameIcon name={item.icon} className="h-14 w-14" /> : <Sparkles className="h-12 w-12" />}</span>
-          <span className={`absolute inset-x-0 bottom-0 p-2 pt-8 text-sm font-bold leading-tight ${image ? "bg-gradient-to-t from-black via-black/80 to-transparent text-white" : "text-foreground"}`}>{item.name}</span>
-        </button> : <div className="flex h-full items-center justify-center p-3 text-center text-xs text-muted-foreground">{target ? "Ability unavailable. Choose another." : "Drop a spell, weapon, or action here, or choose one from the menu."}</div>}
-        <div className="absolute right-1 top-1"><DropdownMenu><DropdownMenuTrigger asChild><button type="button" aria-label={`Favorite ${index + 1} options`} className="rounded-lg border border-border bg-card/90 p-2"><MoreHorizontal className="h-4 w-4" /></button></DropdownMenuTrigger>
-          <DropdownMenuContent className="max-h-72 overflow-y-auto">
-            {target && context.visual && <DropdownMenuItem onSelect={() => setEditing(target)}>Choose or upload image</DropdownMenuItem>}
+          className="flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-xl p-3 text-left focus-visible:ring-2 focus-visible:ring-primary">
+          <span className="shrink-0 text-primary">{item.icon ? <GameIcon name={item.icon} className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}</span>
+          <span className="min-w-0 break-words text-sm font-bold leading-tight text-foreground">{item.name}</span>
+        </button> : <div className="min-w-0 flex-1 p-3 text-xs text-muted-foreground">{target ? "Ability unavailable. Choose another." : "Choose a spell, weapon, or action from the menu, or drop one here."}</div>}
+        <div className="shrink-0 pr-1"><DropdownMenu><DropdownMenuTrigger asChild><button type="button" aria-label={`Favorite ${index + 1} options`} className="flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-card/90"><MoreHorizontal className="h-4 w-4" /></button></DropdownMenuTrigger>
+          <DropdownMenuContent className="max-h-72 max-w-[calc(100vw-2rem)] overflow-y-auto">
             {target && <DropdownMenuItem onSelect={() => context.pin(index, null)}>Clear favorite</DropdownMenuItem>}
             {context.items.map(choice => <DropdownMenuItem key={`${choice.kind}:${choice.id}`} onSelect={() => context.pin(index, choice)}>{choice.name} · {choice.kind === "spell" ? "Spell" : choice.kind === "weapon" ? "Weapon" : "Action"}</DropdownMenuItem>)}
           </DropdownMenuContent></DropdownMenu></div>
       </div>
     })}</div>
-    {editing && <FavoriteImagePicker value={context.images[`${editing.kind}:${editing.id}`] ?? null} gallery={context.gallery} error={context.imageError} onChange={image => context.setImage(editing, image)} onClose={() => setEditing(null)} />}
   </section>
 }

@@ -26,11 +26,11 @@ export function MainNav() {
 
   return (
     <header className="sticky top-0 z-50 bg-card/95 backdrop-blur-lg border-b border-border">
-      <div className="max-w-7xl mx-auto px-4">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4">
         <div className="flex items-center justify-between h-16">
 
           {/* Logo — Spiked Dragon Head by Delapouite (CC BY 3.0) */}
-          <Link href="/" className="flex items-center gap-3 group">
+          <Link href="/" aria-label="Dump Stat home" className="flex min-h-11 min-w-11 items-center gap-3 group">
             <div className="w-10 h-10 rounded-xl bg-card border border-border flex items-center justify-center shrink-0">
               {/* Inline SVG: spiked-dragon-head by Delapouite, game-icons.net, CC BY 3.0 — recolored to lime */}
               <svg
@@ -53,8 +53,8 @@ export function MainNav() {
             </span>
           </Link>
 
-          <div className="flex items-center gap-2 shrink-0">
-          <nav className="flex items-center gap-1">
+          <div className="flex items-center gap-0 sm:gap-2 shrink-0">
+          <nav aria-label="Main navigation" className="flex items-center sm:gap-1">
             {visibleNavItems.map((item) => {
               const isActive = pathname === item.href ||
                 (item.href !== "/" && pathname.startsWith(item.href))
@@ -64,14 +64,17 @@ export function MainNav() {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`relative px-3 py-2 rounded-lg transition-colors ${
+                  aria-label={item.label}
+                  aria-current={isActive ? "page" : undefined}
+                  title={item.label}
+                  className={`relative flex min-h-11 min-w-11 items-center justify-center px-3 py-2 rounded-lg transition-colors ${
                     item.href === "/dashboard" ? "hidden md:block" : ""
                   }`}
                 >
                   <span className={`flex items-center gap-2 relative z-10 font-semibold text-sm ${
                     isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
                   }`}>
-                    <Icon className="w-4 h-4" />
+                    <Icon className="w-4 h-4" aria-hidden />
                     <span className="hidden md:inline">
                       {item.label}
                       {"beta" in item && item.beta ? (

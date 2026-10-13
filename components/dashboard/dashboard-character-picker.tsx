@@ -1,9 +1,6 @@
 "use client"
 
-import { CompactImage } from "@/components/compact-image"
-
-
-import { Check, User } from "lucide-react"
+import { Check } from "lucide-react"
 import {
   DASHBOARD_MAX_CHARACTERS,
   DASHBOARD_MIN_CHARACTERS,
@@ -48,9 +45,9 @@ export function DashboardCharacterPicker({
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[...Array(4)].map((_, index) => (
-            <div key={index} className="aspect-square rounded-2xl border-2 border-border bg-muted/40 animate-pulse" />
+            <div key={index} className="h-20 rounded-2xl border-2 border-border bg-muted/40 animate-pulse" />
           ))}
         </div>
       ) : characters.length === 0 ? (
@@ -58,7 +55,7 @@ export function DashboardCharacterPicker({
           No characters in your library yet. Create one in the builder first.
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {characters.map((character) => {
             const selected = selectedIds.includes(character.id)
             const disabled = !selected && atMax
@@ -67,6 +64,7 @@ export function DashboardCharacterPicker({
                 key={character.id}
                 type="button"
                 disabled={disabled}
+                aria-pressed={selected}
                 onClick={() => onToggle(character.id)}
                 title={
                   disabled
@@ -83,22 +81,9 @@ export function DashboardCharacterPicker({
                       : "border-border hover:border-primary/50"
                 }`}
               >
-                <div className="aspect-square bg-muted/30">
-                  {character.portrait_url ? (
-                    <CompactImage
-                      src={character.portrait_url}
-                      alt=""
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <User className="w-12 h-12 text-muted-foreground" />
-                    </div>
-                  )}
-                </div>
-                <div className="p-3">
-                  <p className="font-bold text-sm text-foreground truncate">{character.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">
+                <div className="min-h-20 p-3 pr-12">
+                  <p className="break-words font-bold text-sm text-foreground">{character.name}</p>
+                  <p className="text-xs text-muted-foreground">
                     {character.classes?.name ?? "Adventurer"} · Lvl {character.level}
                   </p>
                 </div>

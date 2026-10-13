@@ -1,6 +1,5 @@
 "use client"
 
-import { CompactImage } from "@/components/compact-image"
 
 import { healCompanion, upsertCompanionBuff } from "@/lib/character/companion-buffs"
 import { applyCompanionResourceSpends, companionResourceMaximum } from "@/lib/character/companion-resource"
@@ -840,7 +839,6 @@ export default function CharacterSheetClient({ id }: { id: string }) {
   const [conditionDropdownOpen, setConditionDropdownOpen] = useState(false)
   const [sheetMenuOpen, setSheetMenuOpen] = useState(false)
   const [pdfExportOpen, setPdfExportOpen] = useState(false)
-  const [portraitZoomOpen, setPortraitZoomOpen] = useState(false)
   const [bannerRestOpen, setBannerRestOpen] = useState(false)
   const [selectedSpell, setSelectedSpell] = useState<Spell | null>(null)
   const [spellCastEconomyOverride, setSpellCastEconomyOverride] = useState<ActionEconomyKind | null>(null)
@@ -5081,56 +5079,20 @@ export default function CharacterSheetClient({ id }: { id: string }) {
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          className="relative mb-3 overflow-hidden rounded-2xl min-h-[140px] max-sm:min-h-[120px]"
+          className="relative mb-3 overflow-hidden rounded-2xl"
         >
-          {character.banner_url ? (
-            <div className="absolute inset-0 overflow-hidden rounded-2xl">
-              <CompactImage
-                src={character.banner_url}
-                alt=""
-                className="absolute inset-0 h-full w-full object-cover"
-              />
-            </div>
-          ) : null}
           <div
-            className={`relative flex flex-col gap-2 p-4 max-sm:gap-1.5 max-sm:p-2.5 ${
-              character.banner_url
-                ? ""
-                : "bg-gradient-to-br from-primary/20 to-secondary/20"
-            }`}
+            className="relative flex flex-col gap-2 bg-gradient-to-br from-primary/20 to-secondary/20 p-4 max-sm:gap-1.5 max-sm:p-2.5"
           >
             <div className="absolute right-2.5 top-2.5 z-10 sm:hidden">
               <ManualRollTrigger />
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4">
               <div className="flex min-w-0 flex-1 items-start gap-2.5 max-sm:pr-12 sm:gap-4">
-              {character.portrait_url ? (
-                <button
-                  type="button"
-                  onClick={() => setPortraitZoomOpen((open) => !open)}
-                  aria-label={portraitZoomOpen ? "Close portrait" : "Enlarge portrait"}
-                  className="shrink-0 overflow-hidden rounded-lg border-2 border-background shadow-md focus:outline-none focus:ring-2 focus:ring-primary sm:rounded-xl sm:shadow-lg"
-                >
-                  <CompactImage
-                    src={character.portrait_url}
-                    alt={character.name}
-                    className="h-11 w-11 object-cover sm:h-24 sm:w-24"
-                  />
-                </button>
-              ) : (
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border-2 border-background bg-card sm:h-24 sm:w-24 sm:rounded-xl">
-                  <User className="h-5 w-5 text-muted-foreground sm:h-12 sm:w-12" />
-                </div>
-              )}
-
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-start gap-1">
                   <h1
-                    className={`min-w-0 max-w-full text-lg font-black leading-tight text-foreground sm:text-2xl ${
-                      character.banner_url
-                        ? "w-fit rounded-md bg-background/85 px-2 py-0.5"
-                        : ""
-                    }`}
+                    className="min-w-0 max-w-full break-words text-lg font-black leading-tight text-foreground sm:text-2xl"
                     style={nameFontStyle(readNameFontId(character.appearance))}
                   >
                     {character.name}
@@ -6355,19 +6317,6 @@ export default function CharacterSheetClient({ id }: { id: string }) {
                 Character Details
               </h2>
               <div className="overflow-hidden">
-                {character.portrait_url ? (
-                  <button
-                    type="button"
-                    onClick={() => setPortraitZoomOpen(true)}
-                    className="float-left mr-4 mb-2 w-80 sm:w-96 max-w-full sm:max-w-[55%] rounded-xl overflow-hidden border-2 border-border shadow-md focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <CompactImage
-                      src={character.portrait_url}
-                      alt={character.name}
-                      className="w-full h-auto object-cover"
-                    />
-                  </button>
-                ) : null}
                 <div className="space-y-3 min-w-0">
                   {character.alignment && (
                     <p className="text-sm">
@@ -7583,33 +7532,6 @@ export default function CharacterSheetClient({ id }: { id: string }) {
               isFreeCastSpell(slotlessCastSpellKeys, selectedSpell.name)
             }
           />
-        ) : null}
-        {portraitZoomOpen && character.portrait_url ? (
-          <motion.div
-            key="portrait-zoom"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-            onClick={() => setPortraitZoomOpen(false)}
-          >
-            <button
-              type="button"
-              className="absolute top-4 right-4 p-2 text-white/80 hover:text-white"
-              onClick={() => setPortraitZoomOpen(false)}
-            >
-              <X className="w-6 h-6" />
-            </button>
-            <motion.img
-              initial={{ scale: 0.9 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.9 }}
-              src={character.portrait_url}
-              alt={character.name}
-              className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            />
-          </motion.div>
         ) : null}
       </AnimatePresence>
       {levelUpOpen && character ? (

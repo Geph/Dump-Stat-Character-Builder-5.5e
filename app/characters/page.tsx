@@ -1,8 +1,5 @@
 "use client"
 
-import { CompactImage } from "@/components/compact-image"
-
-
 import { useState, useEffect, useMemo, useRef, useDeferredValue } from "react"
 import { motion } from "framer-motion"
 import { MainNav } from "@/components/main-nav"
@@ -521,7 +518,7 @@ export default function CharactersPage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredCharacters.map((character, index) => (
               <motion.div
                 key={character.id}
@@ -530,71 +527,50 @@ export default function CharactersPage() {
                 transition={{ delay: index * 0.1 }}
                 className="group flex h-full flex-col overflow-hidden rounded-2xl border-2 border-border transition-colors hover:border-primary/50"
               >
-                {/* Large Portrait as main focus */}
-                <Link href={characterSheetHref(character.id)} className="block relative aspect-square">
-                  {character.portrait_url ? (
-                    <CompactImage
-                      src={character.portrait_url}
-                      alt={character.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-primary/20 to-secondary/20 flex items-center justify-center">
-                      <User className="w-20 h-20 text-muted-foreground" />
-                    </div>
-                  )}
-                  {/* Level badge overlay */}
-                  <div className="absolute top-3 left-3 max-w-[calc(100%-3.25rem)] px-2 py-1 bg-black/60 backdrop-blur-sm rounded-lg">
-                    <span className="line-clamp-2 text-xs font-bold leading-tight text-white">
-                      {characterLevelClassLabel(character)}
-                    </span>
-                  </div>
-                  {/* Delete button overlay */}
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      setCharacterToDelete(character)
-                    }}
-                    className="absolute top-3 right-3 p-2 bg-black/60 backdrop-blur-sm rounded-lg text-white/70 hover:text-destructive opacity-0 group-hover:opacity-100 transition-all"
-                    title="Delete character"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </Link>
-                
-                {/* Character Info - Below the image */}
-                <div className="flex-1 p-4 bg-card/75 backdrop-blur">
-                  <div className="flex items-start justify-between gap-2">
-                    <Link href={characterSheetHref(character.id)} className="min-w-0 flex-1">
-                      <h3 className="font-bold text-lg text-foreground truncate hover:text-primary transition-colors">
+                <div className="flex-1 p-4 bg-card/75">
+                  <div className="flex flex-col gap-2">
+                    <Link href={characterSheetHref(character.id)} className="min-h-11 min-w-0 hover:text-primary">
+                      <h3 className="break-words font-bold text-lg text-foreground hover:text-primary transition-colors">
                         {character.name}
                       </h3>
+                      <p className="text-xs font-semibold text-muted-foreground">{characterLevelClassLabel(character)}</p>
                     </Link>
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
                         onClick={() => handleExportCharacter(character)}
-                        className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                        className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
                         title="Download JSON"
+                        aria-label={`Download ${character.name} as JSON`}
                       >
                         <Download className="w-4 h-4" />
                       </button>
                       <button
                         type="button"
                         onClick={() => setLevelUpCharacterId(character.id)}
-                        className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                        className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
                         title="Level up"
+                        aria-label={`Level up ${character.name}`}
                       >
                         <Award className="w-4 h-4" />
                       </button>
                       <Link
                         href={`/builder?edit=${character.id}`}
-                        className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                        className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
                         title="Edit character"
+                        aria-label={`Edit ${character.name}`}
                       >
                         <Pencil className="w-4 h-4" />
                       </Link>
+                      <button
+                        type="button"
+                        onClick={() => setCharacterToDelete(character)}
+                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        title="Delete character"
+                        aria-label={`Delete ${character.name}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-1">

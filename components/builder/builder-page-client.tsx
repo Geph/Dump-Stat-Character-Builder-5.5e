@@ -322,7 +322,6 @@ import {
   withCombinedMilestoneAsiAllocation,
 } from "@/lib/builder/asi-allocation"
 import { generateRandomCharacterDetails } from "@/lib/builder/random-character-details"
-import { pickRandomSheetBannerUrl } from "@/lib/site-images"
 import {
   CINEMATIC_TWO_COL_PAGE_SIZE,
   getCinematicPickerContainerClass,
@@ -1142,31 +1141,12 @@ export default function BuilderPageClient() {
     reader.readAsDataURL(file)
   }
 
-  const handleBannerUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    if (file.size > MAX_PORTRAIT_FILE_BYTES) {
-      alert(`Image must be ${MAX_PORTRAIT_FILE_MB} MB or smaller.`)
-      return
-    }
-
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      patchCharacter({ banner_url: reader.result as string })
-    }
-    reader.readAsDataURL(file)
-  }
-
   const applyRandomCharacterDetails = () => {
     const generated = generateRandomCharacterDetails(selectedSpecies?.name)
-    const stockBanner = isCompactOnly ? null : pickRandomSheetBannerUrl()
     setCharacter((prev) => ({
       ...prev,
       ...generated,
       name: prev.name.trim() ? prev.name : generated.name,
-      // Always assign in visual mode so the landscape slot updates on each click.
-      banner_url: stockBanner ?? prev.banner_url,
     }))
   }
 
@@ -7127,7 +7107,7 @@ export default function BuilderPageClient() {
                   </div>
                 )}
 
-                {/* Portrait & banner uploads */}
+                {/* Character identity */}
                 <div className="mb-6 space-y-6">
                   <div hidden className="w-full min-w-0 items-start gap-2 sm:gap-4">
                     <div className="relative shrink-0">
@@ -7181,40 +7161,6 @@ export default function BuilderPageClient() {
                     )}
                     </div>
 
-                    <div className="relative min-w-0 flex-1 sm:min-w-[200px]">
-                      {character.banner_url ? (
-                        <div className="relative">
-                          {!isCompactOnly && cardViewMode === "cinematic" ? (<CompactImage
-                            src={character.banner_url}
-                            alt="Banner"
-                            className="h-20 w-full rounded-xl object-cover border-4 border-border sm:h-32 sm:rounded-2xl"
-                          />) : (<span className="flex min-h-20 items-center justify-center rounded-xl border border-border bg-muted p-4 text-sm">Banner assigned</span>)}
-                          <button
-                            onClick={() => patchCharacter({ banner_url: null })}
-                            className="absolute -top-2 -right-2 w-6 h-6 bg-destructive text-white rounded-full flex items-center justify-center"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <label className="flex h-20 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-border bg-muted px-2 text-center cursor-pointer transition-colors hover:border-primary sm:h-32 sm:rounded-2xl sm:px-4">
-                          <Upload className="mb-0.5 h-5 w-5 text-muted-foreground sm:mb-1 sm:h-8 sm:w-8" />
-                          <span className="text-[10px] font-medium text-foreground sm:text-xs">
-                            Landscape banner
-                            <span className="hidden sm:inline"> (optional)</span>
-                          </span>
-                          <span className="mt-0.5 hidden text-[10px] leading-tight text-muted-foreground sm:mt-1 sm:block">
-                            {formatImageUploadHint("banner")}
-                          </span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleBannerUpload}
-                            className="sr-only"
-                          />
-                        </label>
-                      )}
-                    </div>
                   </div>
 
                   <div>

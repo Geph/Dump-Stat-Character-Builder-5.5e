@@ -1,9 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { Settings, ExternalLink, Bug, LayoutGrid, Sparkles } from "lucide-react"
+import { Settings, ExternalLink, Bug } from "lucide-react"
 import Link from "next/link"
-import { useAppTheme, APP_THEMES } from "@/components/providers/app-theme-provider"
 import {
   getAppVersion,
   getDeployMode,
@@ -20,39 +19,18 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { ClearCompendiumSection } from "@/components/settings/clear-compendium-section"
-import { useBuilderLayout } from "@/components/settings/use-builder-layout"
-import { useAppPresentationMode } from "@/components/settings/use-app-presentation-mode"
 import { useGmDashboardNav } from "@/components/settings/use-gm-dashboard-nav"
 import { useResumeLastCharacter } from "@/components/settings/use-resume-last-character"
 import { useManualSkillAbility } from "@/components/settings/use-manual-skill-ability"
 import { useSearchAutocomplete } from "@/components/settings/use-search-autocomplete"
 import { useDisplayNonCombatActions } from "@/components/settings/use-display-non-combat-actions"
-import { cn } from "@/lib/utils"
 
 const GITHUB_ISSUES_URL = "https://github.com/Geph/Dump-Stat-Character-Builder-5.5e/issues"
-
-const BUILDER_LAYOUT_OPTIONS = [
-  {
-    id: "visual" as const,
-    label: "Visual",
-    description: "Card art and richer pickers in the builder and compendium.",
-    icon: Sparkles,
-  },
-  {
-    id: "compact" as const,
-    label: "Compact",
-    description: "Dense lists without card art so more fits on screen.",
-    icon: LayoutGrid,
-  },
-]
 
 const TAB_TRIGGER_CLASS =
   "rounded-lg border border-transparent px-2 py-2 text-xs sm:px-3 sm:text-sm data-[state=active]:border-border data-[state=active]:bg-muted data-[state=active]:shadow-none"
 
 export function GlobalSettingsMenu() {
-  const { theme, setTheme } = useAppTheme()
-  const { layout: builderLayout, setLayout: setBuilderLayout } = useBuilderLayout()
-  const { isCompactOnly } = useAppPresentationMode()
   const { enabled: gmDashboardNavEnabled, setEnabled: setGmDashboardNavEnabled } = useGmDashboardNav()
   const { enabled: resumeLastCharacter, setEnabled: setResumeLastCharacter } = useResumeLastCharacter()
   const { enabled: manualSkillAbility, setEnabled: setManualSkillAbility } = useManualSkillAbility()
@@ -79,16 +57,12 @@ export function GlobalSettingsMenu() {
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-xl">
         <DialogHeader className="border-b border-border px-6 py-4 text-left">
           <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>Theme, preferences, and about.</DialogDescription>
+          <DialogDescription>Preferences and about.</DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="theme" className="gap-0">
+        <Tabs defaultValue="options" className="gap-0">
           <div className="border-b border-border px-4 pt-3 sm:px-6">
-            <TabsList className="grid h-auto w-full grid-cols-3 gap-1 bg-transparent p-0">
-              <TabsTrigger value="theme" className={TAB_TRIGGER_CLASS}>
-                Theme
-              </TabsTrigger>
-              
+            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 bg-transparent p-0">
               <TabsTrigger value="options" className={TAB_TRIGGER_CLASS}>
                 Options
               </TabsTrigger>
@@ -99,86 +73,6 @@ export function GlobalSettingsMenu() {
           </div>
 
           <div className="max-h-[min(70vh,32rem)] overflow-y-auto px-6 py-4 lg:max-h-[min(80vh,42rem)]">
-            <TabsContent value="theme" className="mt-0 space-y-3">
-              <div>
-                <p className="text-sm font-semibold text-foreground">Card layout</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {isCompactOnly
-                    ? "This edition uses compact lists without artwork."
-                    : "Default Visual or Compact presentation for the character builder and compendium. You can still toggle it on those pages, however if you selected compact mode from the initial choice on the home page visual art may not import."}
-                </p>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {BUILDER_LAYOUT_OPTIONS.filter(
-                    (option) => !isCompactOnly || option.id === "compact",
-                  ).map((option) => {
-                    const Icon = option.icon
-                    const active = builderLayout === option.id
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => setBuilderLayout(option.id)}
-                        aria-pressed={active}
-                        className={cn(
-                          "flex flex-col gap-1 rounded-xl border-2 p-3 text-left transition-colors",
-                          active
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:bg-muted/60",
-                        )}
-                      >
-                        <span className="flex items-center gap-2 font-semibold text-foreground">
-                          <Icon className="h-4 w-4" />
-                          {option.label}
-                        </span>
-                        <span className="text-xs text-muted-foreground leading-snug">
-                          {option.description}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="border-t border-border pt-4 space-y-3">
-                <p className="text-sm font-semibold text-foreground">Color theme</p>
-                <p className="text-xs text-muted-foreground">
-                  Choose a color theme for the app interface.
-                </p>
-                <ul className="space-y-2">
-                  {APP_THEMES.map((t) => (
-                    <li key={t.id}>
-                      <button
-                        type="button"
-                        onClick={() => setTheme(t.id)}
-                        className={cn(
-                          "flex w-full items-start gap-3 rounded-xl border-2 p-3 text-left transition-colors",
-                          theme === t.id
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:bg-muted/60",
-                        )}
-                      >
-                        <span className="mt-0.5 flex shrink-0 gap-1" aria-hidden>
-                          {t.swatches.map((color, i) => (
-                            <span
-                              key={i}
-                              className="h-4 w-4 rounded-full border border-border/80"
-                              style={{ background: color }}
-                            />
-                          ))}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block font-semibold text-foreground">{t.label}</span>
-                          <span className="block text-xs text-muted-foreground leading-snug">
-                            {t.description}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </TabsContent>
-
             <TabsContent value="options" className="mt-0 space-y-6">
               <div>
                 <p className="text-sm font-semibold text-foreground">Navigation</p>
