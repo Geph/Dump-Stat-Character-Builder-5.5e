@@ -2,6 +2,15 @@
 
 Last reviewed: 2026-10-12.
 
+### Artificer spell-list restoration (2026-10-13)
+
+The private Eberron Artificer fixture now retains its 80 spell names on the class's
+`spell_list`, in addition to its spell rows. This lets the existing shared matcher
+offer spells even when catalog rows lack the Artificer class tag. The fixture
+regression checks the full list and level-one choices with class tags removed.
+Existing BYO class-list guidance already requires both representations; no prompt
+or schema change is needed. Source prose remains outside this repository.
+
 ### Ravenloft, Faerûn and October Psion audit (2026-10-12)
 
 `setting-subclass-wiring.ts` runs at import and compendium enrichment boundaries,

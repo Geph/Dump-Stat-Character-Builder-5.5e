@@ -1832,11 +1832,11 @@ export default function BuilderPageClient() {
   const pickerGridClass =
     cardViewMode === "cinematic"
       ? getCinematicPickerContainerClass(3)
-      : "grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 px-1 py-2"
+      : "grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3 px-1 py-2"
   const backgroundPickerGridClass =
     cardViewMode === "cinematic"
       ? getCinematicPickerContainerClass(2)
-      : "grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 px-1 py-2"
+      : "grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3 px-1 py-2"
   const backgroundPickerPageSize =
     cardViewMode === "cinematic" ? CINEMATIC_TWO_COL_PAGE_SIZE : pickerPageSize
   const cinematicPickerPaginationClass = useSwipeVisualPicker ? "max-sm:hidden" : undefined
@@ -3787,7 +3787,7 @@ export default function BuilderPageClient() {
       
       <div id="builder-steps" className={pageStepStripClass}>
         <div className="max-w-7xl mx-auto px-4 pt-3 pb-1">
-          <div className="flex items-center justify-center gap-x-1.5 sm:gap-x-0">
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-3 sm:gap-x-0">
             {visibleSteps.map((step, index) => {
               const Icon = step.icon
               const isActive = currentStep === step.id
@@ -3876,7 +3876,7 @@ export default function BuilderPageClient() {
           {/* Left Column: Step Content (choices) */}
           <div
             id="builder-step-panel"
-            className={`lg:col-span-3 bg-card/80 backdrop-blur-md rounded-2xl border-2 border-border p-6 min-h-[720px] ${
+            className={`lg:col-span-3 bg-card/80 backdrop-blur-md rounded-2xl border-2 border-border p-3 sm:p-6 min-h-[720px] ${
               mobilePanel === "preview" ? "hidden lg:block" : ""
             }`}
           >
@@ -6152,7 +6152,7 @@ export default function BuilderPageClient() {
                     isStandardValueUsedElsewhere={isStandardValueUsedElsewhere}
                   />
                 ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {ABILITY_NAMES.map((ability) => (
                     <div key={ability} className="bg-card rounded-xl p-4 border-2 border-border text-center">
                       <h3 className="font-bold text-foreground capitalize mb-2">{ability}</h3>
@@ -7690,6 +7690,7 @@ export default function BuilderPageClient() {
           const classFlavor = getCompendiumDetailFlavor(cls, "class")
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
@@ -7788,6 +7789,7 @@ export default function BuilderPageClient() {
           }
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
@@ -7844,6 +7846,7 @@ export default function BuilderPageClient() {
           const traits = sp.traits ?? []
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
@@ -7893,6 +7896,7 @@ export default function BuilderPageClient() {
           const bg = item as Background
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
@@ -7917,6 +7921,7 @@ export default function BuilderPageClient() {
           const spell = item as Spell
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
@@ -7959,6 +7964,7 @@ export default function BuilderPageClient() {
           const eq = item as Equipment
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               open
               onClose={close}
               item={eq}
@@ -7982,6 +7988,7 @@ export default function BuilderPageClient() {
           ].filter(Boolean)
           return (
             <CompendiumDetailOverlay
+              showSourceDetails
               open
               onClose={close}
               item={feat}

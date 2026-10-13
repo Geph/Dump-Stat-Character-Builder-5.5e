@@ -139,7 +139,7 @@ export function ToolGroupedChoices({
                   <div
                     className={cn(
                       compact
-                        ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5"
+                        ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-1.5"
                         : "grid grid-cols-1 sm:grid-cols-2 gap-2",
                     )}
                   >

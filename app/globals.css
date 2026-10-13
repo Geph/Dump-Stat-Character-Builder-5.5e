@@ -298,16 +298,16 @@
 }
 
 #builder-preview .builder-preview-panel .text-\[7px\] {
-  font-size: calc(7px * var(--preview-text-scale));
+  font-size: max(0.875rem, calc(7px * var(--preview-text-scale)));
 }
 #builder-preview .builder-preview-panel .text-\[8px\] {
-  font-size: calc(8px * var(--preview-text-scale));
+  font-size: max(0.875rem, calc(8px * var(--preview-text-scale)));
 }
 #builder-preview .builder-preview-panel .text-\[9px\] {
-  font-size: calc(9px * var(--preview-text-scale));
+  font-size: max(0.875rem, calc(9px * var(--preview-text-scale)));
 }
 #builder-preview .builder-preview-panel .text-\[10px\] {
-  font-size: calc(10px * var(--preview-text-scale));
+  font-size: max(0.875rem, calc(10px * var(--preview-text-scale)));
 }
 #builder-preview .builder-preview-panel .text-xs {
   font-size: calc(0.75rem * var(--preview-text-scale));
@@ -349,4 +349,29 @@ html[data-page-background="active"] .page-top-gradient {
     color-mix(in oklab, var(--background) 62%, transparent),
     transparent
   );
+}
+
+/* Compact builder baseline: legacy dense choices must remain readable and tappable. */
+#builder-root :is(.text-xs, .text-\[7px\], .text-\[8px\], .text-\[9px\], .text-\[10px\], .text-\[11px\], .text-\[12px\], .text-\[13px\]) {
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+#builder-root :is(button, select, input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"])) {
+  min-height: 2.75rem;
+}
+
+#builder-root button:not(header button) {
+  min-width: 2.75rem;
+}
+
+#builder-main label:has(input:is([type="checkbox"], [type="radio"])) {
+  min-height: 2.75rem;
+}
+
+/* Avoid iOS zoom while editing, and leave enough width for enlarged steppers. */
+@media (max-width: 639px) {
+  #builder-root :is(input, select, textarea) {
+    font-size: 1rem;
+  }
 }

@@ -345,10 +345,10 @@ export function MultiSelectChoices({
   const gridClass = compact
     ? showOptionSummaries
       ? "grid min-w-0 grid-cols-1 sm:grid-cols-2 gap-1.5"
-      : "grid min-w-0 grid-cols-1 sm:grid-cols-3 gap-1.5"
+      : "grid min-w-0 grid-cols-1 sm:grid-cols-2 gap-1.5"
     : showOptionSummaries
       ? "grid min-w-0 grid-cols-1 sm:grid-cols-2 gap-2"
-      : "grid min-w-0 grid-cols-1 sm:grid-cols-3 gap-2"
+      : "grid min-w-0 grid-cols-1 sm:grid-cols-2 gap-2"
 
   const renderOption = (option: ChoiceOption) => {
     const locked = isLockedName(option.name)
@@ -392,7 +392,7 @@ export function MultiSelectChoices({
               />
             ) : null}
             <p
-              className={`font-semibold text-foreground min-w-0 ${compact ? "text-xs" : "text-sm"}`}
+              className="min-w-0 break-words text-base font-semibold text-foreground"
             >
               {option.name}
             </p>

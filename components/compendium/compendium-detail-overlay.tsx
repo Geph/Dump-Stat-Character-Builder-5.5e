@@ -8,6 +8,7 @@ import { Dialog, DialogClose, DialogOverlay, DialogPortal, DialogTitle } from "@
 import type { CompendiumCardImageCrop, CompendiumCardVisual } from "@/lib/compendium/card-image"
 import { compendiumAccentColorStyles, type CompendiumThemeColorId } from "@/lib/compendium/theme-colors"
 import { cn } from "@/lib/utils"
+import { ItemSourceDetails } from "@/components/compendium/item-source-details"
 
 export type CompendiumDetailTag = {
   label: string
@@ -18,7 +19,8 @@ export type CompendiumDetailTag = {
 type CompendiumDetailOverlayProps = {
   open: boolean
   onClose: () => void
-  item: CompendiumCardVisual & { name: string }
+  item: CompendiumCardVisual & { name: string; source?: string | null; creator_url?: string | null }
+  showSourceDetails?: boolean
   subtitle?: string
   tagline?: string
   tags?: CompendiumDetailTag[]
@@ -39,6 +41,7 @@ export function CompendiumDetailOverlay({
   open,
   onClose,
   item,
+  showSourceDetails = false,
   subtitle,
   tagline,
   tags = [],
@@ -102,6 +105,7 @@ export function CompendiumDetailOverlay({
             ) : null}
             {headerActions ? <div className="mb-3 flex flex-wrap gap-2">{headerActions}</div> : null}
             {children}
+            {showSourceDetails ? <ItemSourceDetails item={item} /> : null}
           </div>
         </DialogPrimitive.Content>
       </DialogPortal>

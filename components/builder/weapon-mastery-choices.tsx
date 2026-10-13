@@ -199,7 +199,7 @@ export function WeaponMasteryChoices({
                 />
               ))}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {filteredOptions.map((option) => {
                 const isSelected = selectedSet.has(option.name)
                 const optionMastery = masteryByWeapon.get(option.name) ?? null

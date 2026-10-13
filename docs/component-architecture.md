@@ -2,6 +2,17 @@
 
 Last reviewed: 2026-10-13.
 
+Builder item detail overlays opt into `showSourceDetails`, rendered by
+`ItemSourceDetails`. Preserve the saved source and freeform `creator_url` citation;
+HTTP(S) URL citations open in a new tab, while other citation text stays plain text.
+
+Compact builder readability is enforced under `#builder-root` in `app/globals.css`:
+small labels have a 14px floor and buttons/form controls have 44px minimum tap targets.
+Dense selection cards use 18px names and wrapping 14px source labels. Class, species,
+and background grids fit columns to a 15rem minimum card width; other choice grids
+use at most two columns and stack on phones. Keep long spell names wrapped and
+level badges in normal flow so larger text never sits underneath them.
+
 The public compact UI uses text character cards in the library and GM picker,
 and short icon/name rows for Favorite Abilities. Portrait fields remain in saved
 characters and exports but have no display, zoom, or upload controls on the sheet.

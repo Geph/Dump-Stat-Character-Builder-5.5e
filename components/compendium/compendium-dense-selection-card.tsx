@@ -60,7 +60,7 @@ export function CompendiumDenseSelectionCard({
         }
       }}
       className={cn(
-        "relative flex flex-col rounded-xl border-2 bg-card p-3 text-left transition-all cursor-pointer",
+        "relative flex min-w-0 flex-col rounded-xl border-2 bg-card p-4 text-left transition-all cursor-pointer",
         selected
           ? selectedClassName
           : "border-border hover:border-primary/40",
@@ -70,12 +70,12 @@ export function CompendiumDenseSelectionCard({
     >
       {onLearnMore && onSelect && (
         <button type="button" aria-label={`Details for ${name}`}
-          className="mt-2 flex min-h-11 items-center justify-center rounded-md border border-border px-2 text-xs text-foreground hover:bg-muted order-last"
+          className="mt-3 flex min-h-11 items-center justify-center rounded-md border border-border px-3 text-sm font-semibold text-foreground hover:bg-muted order-last"
           onClick={(event) => { event.stopPropagation(); onLearnMore() }}>
           Details
         </button>
       )}
-      {badge && <div className="absolute right-2 top-2">{badge}</div>}
+      {badge && <div className="mb-2 self-end">{badge}</div>}
       <div className="flex items-start gap-2">
         {icon && (
           <GameIcon
@@ -85,11 +85,11 @@ export function CompendiumDenseSelectionCard({
         )}
         <div className="min-w-0 flex-1">
           {subtitle && (
-            <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            <p className="text-sm leading-snug text-muted-foreground break-words">
               {subtitle}
             </p>
           )}
-          <h3 className="font-bold text-xs text-foreground leading-tight">{name}</h3>
+          <h3 className="mt-1 font-bold text-lg text-foreground leading-snug break-words">{name}</h3>
         </div>
       </div>
     </div>

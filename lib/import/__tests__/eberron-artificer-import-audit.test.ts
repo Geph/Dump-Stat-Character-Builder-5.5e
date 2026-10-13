@@ -4,6 +4,8 @@ import { applyClassSpellListsToImport } from "@/lib/import/class-spell-lists"
 import { enrichImportContentModifiers } from "@/lib/import/enrich-import-modifiers"
 import { parseImportContentJson } from "@/lib/import/parse-import-content-json"
 import { getSpellSlotTable } from "@/lib/compendium/spell-slots"
+import { spellMatchesClassName } from "@/lib/compendium/investigator-spell-list"
+import { getSpellLimits } from "@/lib/builder/spell-limits"
 import type { LinkedModifierInstance } from "@/lib/compendium/linked-modifiers"
 import {
   hasHomebrewFixture,
@@ -31,6 +33,21 @@ function featureChars(feature: {
 describe.runIf(hasHomebrewFixture("eberron-artificer-class.json"))(
   "Eberron Artificer local import fixtures",
   () => {
+  it("retains the complete class spell list when catalog spell class tags are absent", () => {
+    const raw = loadFixture("eberron-artificer-class.json")!
+    const cls = raw.classes!.find((row) => row.name === "Artificer")!
+    const listSpells = raw.spells!.filter((spell) => spell.classes?.includes(cls.name))
+    expect(cls.spell_list).toHaveLength(80)
+    expect(new Set(cls.spell_list)).toEqual(new Set(listSpells.map((spell) => spell.name)))
+    const available = listSpells.filter((spell) =>
+      spellMatchesClassName({ name: spell.name, classes: [] }, cls.name, cls.spell_list),
+    )
+    const limits = getSpellLimits(cls.spellcasting as DndClass["spellcasting"], 1, cls.name)
+    expect(limits).toEqual({ cantrips: 2, prepared: 2, maxSpellLevel: 1 })
+    expect(available.filter((spell) => spell.level === 0)).toHaveLength(17)
+    expect(available.filter((spell) => spell.level === 1)).toHaveLength(14)
+  })
+
   it("class JSON has Artificer L1 slots + Tinker's Magic + Flash of Genius wiring after enrich", () => {
     const raw = loadFixture("eberron-artificer-class.json")
     expect(raw).not.toBeNull()

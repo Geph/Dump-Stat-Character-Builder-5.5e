@@ -172,7 +172,7 @@ export function BuilderSpellCompactPick({
         {selected && <Check className="h-2.5 w-2.5 text-white" />}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{spell.name}</p>
+        <p className="break-words text-base font-semibold leading-snug text-foreground">{spell.name}</p>
         <p className={getDenseSpellPickerSchoolClass()}>{spell.school}</p>
       </div>
       </label>

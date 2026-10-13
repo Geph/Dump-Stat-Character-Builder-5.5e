@@ -46,7 +46,7 @@ export function BuilderFeatChoiceButton({
         <p
           className={cn(
             "font-semibold",
-            nameClassName ?? (compact ? "text-xs text-foreground" : "text-sm text-foreground"),
+            nameClassName ?? "text-base text-foreground",
           )}
         >
           {feat.name}
