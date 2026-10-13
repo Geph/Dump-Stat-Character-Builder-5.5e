@@ -25,3 +25,7 @@ Keep storage/export formats compatible. Different deployed URLs can have differe
 ## Working in separate chats
 
 Use this checkout for gameplay/import fixes and compact UI. Use the visual checkout for visual UI/art and core updates. Read this file and AGENTS.md at each new chat. Commit IDs, tests, and contract changes form the handoff, not assumptions about another chat's memory.
+
+## Browser storage scope
+
+IndexedDB uses the database name `dump-stat` and is scoped to origin, not URL path. Two project sites under `https://geph.github.io` therefore share that database and localStorage. Ports 3001 and 3002 are separate local origins. Preserve compatible schemas and image fields; do not run a migration or clear content merely because the UI repository changed. Take an export backup before testing either edition against an existing origin. A future decision to isolate editions must be explicit and include a user-controlled migration.
