@@ -34,7 +34,6 @@ import {
   Check, 
   Upload,
   X,
-  Wand2,
   Search,
   Heart,
   Sparkles,
@@ -321,7 +320,6 @@ import {
   trimAsiAllocation,
   withCombinedMilestoneAsiAllocation,
 } from "@/lib/builder/asi-allocation"
-import { generateRandomCharacterDetails } from "@/lib/builder/random-character-details"
 import {
   CINEMATIC_TWO_COL_PAGE_SIZE,
   getCinematicPickerContainerClass,
@@ -1139,15 +1137,6 @@ export default function BuilderPageClient() {
       if (typeof reader.result === "string") setPortraitCropSrc(reader.result)
     }
     reader.readAsDataURL(file)
-  }
-
-  const applyRandomCharacterDetails = () => {
-    const generated = generateRandomCharacterDetails(selectedSpecies?.name)
-    setCharacter((prev) => ({
-      ...prev,
-      ...generated,
-      name: prev.name.trim() ? prev.name : generated.name,
-    }))
   }
 
   const selectedClass = classes.find(c => c.id === character.class_id)
@@ -7084,14 +7073,6 @@ export default function BuilderPageClient() {
                 <h2 className="text-2xl font-black text-foreground mb-2">Character Details</h2>
                     <p className={pageFloatingHintClass}>Give your character a name and personality.</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={applyRandomCharacterDetails}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border-2 border-border bg-card text-sm font-semibold text-foreground hover:border-primary hover:text-primary transition-colors"
-                  >
-                    <Wand2 className="w-4 h-4" />
-                    Randomly generate
-                  </button>
                 </div>
 
                 {multiclassAbilityIssues.length > 0 && (

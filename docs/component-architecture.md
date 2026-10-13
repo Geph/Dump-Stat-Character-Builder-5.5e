@@ -219,7 +219,7 @@ reminders (such as Skulker); preset badge synchronization updates older imports.
 - For a visible change, run `pnpm dev` (port 3002) and click through the affected
   builder step or sheet tab. Say what you checked in the PR.
 
-Random detail generation delegates names to lib/builder/random-character-name.ts. Original syllable pools vary by normalized species name, with Genasi elemental variants; unknown or missing species select from all styles. Keep naming data out of builder React. Random details preserve an existing character name.
+The compact builder omits random detail generation. Shared random-name and detail generators remain in lib/builder/ for the visual consumer.
 
 Builder detail overlays use compact text panels when the builder is dense or global Compact Only is enabled; never hide the details action when selection limits are full. Compact spell info buttons have named, 44px targets. Font preview grid children must retain min-width: 0 to prevent long names from widening the popover.
 
