@@ -920,6 +920,7 @@ The same ability is sometimes introduced twice in a source — once as a brief g
 
 export const EquipmentImportSchema = z.object({
   name: z.string(),
+  icon: z.string().nullable().optional(),
   source: z.string().nullable().optional(),
   card_image_url: z.string().nullable().optional(),
   category: z.string(),

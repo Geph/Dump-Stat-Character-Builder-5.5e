@@ -1171,7 +1171,10 @@ const UNASSIGNED_SPELL_CLASS = "__unassigned__"
   const renderContentCard = (item: unknown) => {
     const data = item as unknown as Record<string, unknown>
     const editPath = compendiumEditHref(activeTab, data.id as string)
-    const iconName = getCompendiumItemIcon(activeTab, data)
+    const iconName = getCompendiumItemIcon(activeTab, {
+      ...data,
+      class_name: data.class_name ?? classNamesById[String(data.class_id ?? "")],
+    })
     const accentStyles = compendiumAccentColorStyles(getCompendiumItemAccentColor(data))
     const enabled = isCompendiumItemEnabled(data)
     const isSystemCatalog = activeTab === "abilities" && isProtectedSystemCompendiumRow(castCompendiumRow<{ id?: string; is_system?: boolean }>(data))
@@ -2506,7 +2509,7 @@ const UNASSIGNED_SPELL_CLASS = "__unassigned__"
                   }),
                   icon: getCompendiumItemIcon(
                     activeTab,
-                    selectedItem as unknown as Record<string, unknown>,
+                    { ...selectedItem, class_name: classNamesById[String((selectedItem as { class_id?: string }).class_id ?? "")] },
                   ),
                 }
           }

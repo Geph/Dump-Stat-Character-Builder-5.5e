@@ -3993,7 +3993,7 @@ export default function BuilderPageClient() {
                           return (
                             <BuilderSelectedCatalogItem
                               key={cl.classId}
-                              item={cls}
+                              item={{ ...cls, icon: getCompendiumItemIcon("classes", cls) }}
                               cardViewMode={cardViewMode}
                               portrait={useCinematicPortraitCards}
                               selectionVariant={isPrimary ? "primary" : "secondary"}
@@ -4164,7 +4164,7 @@ export default function BuilderPageClient() {
                                 key={cls.id}
                                 name={cls.name}
                                 subtitle={cls.source || "Custom"}
-                                icon={cls.icon}
+                                icon={getCompendiumItemIcon("classes", cls)}
                                 accentColor={accent}
                                 selected={isSelected}
                                 selectionVariant={isSelected && !isPrimary ? "secondary" : "primary"}
@@ -4179,7 +4179,7 @@ export default function BuilderPageClient() {
                           return (
                             <CompendiumSelectionCard
                               key={cls.id}
-                              item={cls}
+                              item={{ ...cls, icon: getCompendiumItemIcon("classes", cls) }}
                               subtitle={cls.source || "Custom"}
                               accentColor={accent}
                               selected={isSelected}
@@ -4247,7 +4247,7 @@ export default function BuilderPageClient() {
                           <ClassLevelRow
                             key={cl.classId}
                             classNameLabel={cls?.name ?? "Class"}
-                            icon={cls?.icon}
+                            icon={cls ? getCompendiumItemIcon("classes", cls) : undefined}
                             level={cl.level}
                             max={maxForClass}
                             isPrimary={isPrimary}
@@ -5057,7 +5057,7 @@ export default function BuilderPageClient() {
                   pinnedWhenComplete={
                     selectedSpecies ? (
                       <BuilderSelectedCatalogItem
-                        item={selectedSpecies}
+                        item={{ ...selectedSpecies, icon: getCompendiumItemIcon("species", selectedSpecies) }}
                         cardViewMode={cardViewMode}
                         portrait={useCinematicPortraitCards}
                         onLearnMore={() =>
@@ -5198,7 +5198,7 @@ export default function BuilderPageClient() {
                         key={sp.id}
                               name={sp.name}
                               subtitle={sp.source || "Custom"}
-                              icon={sp.icon}
+                              icon={getCompendiumItemIcon("species", sp)}
                               accentColor={accent}
                               selected={isSelected}
                               onSelect={selectSpecies}
@@ -5209,7 +5209,7 @@ export default function BuilderPageClient() {
                         return (
                       <CompendiumSelectionCard
                         key={sp.id}
-                        item={sp}
+                        item={{ ...sp, icon: getCompendiumItemIcon("species", sp) }}
                         subtitle={sp.source || "Custom"}
                         accentColor={accent}
                         selected={isSelected}
@@ -5535,7 +5535,7 @@ export default function BuilderPageClient() {
                   pinnedWhenComplete={
                     selectedBackground ? (
                       <BuilderSelectedCatalogItem
-                        item={selectedBackground}
+                        item={{ ...selectedBackground, icon: getCompendiumItemIcon("backgrounds", selectedBackground) }}
                         cardViewMode={cardViewMode}
                         portrait={false}
                         onLearnMore={() =>
@@ -5720,7 +5720,7 @@ export default function BuilderPageClient() {
                         key={bg.id}
                               name={bg.name}
                               subtitle={bg.source || "Custom"}
-                              icon={bg.icon}
+                              icon={getCompendiumItemIcon("backgrounds", bg)}
                               accentColor={accent}
                               selected={isSelected}
                               onSelect={selectBackground}
@@ -5731,7 +5731,7 @@ export default function BuilderPageClient() {
                         return (
                       <CompendiumSelectionCard
                         key={bg.id}
-                        item={bg}
+                        item={{ ...bg, icon: getCompendiumItemIcon("backgrounds", bg) }}
                         subtitle={bg.source || "Custom"}
                         accentColor={accent}
                         selected={isSelected}
@@ -7694,7 +7694,7 @@ export default function BuilderPageClient() {
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
-              item={cls}
+              item={{ ...cls, icon: getCompendiumItemIcon("classes", cls) }}
               imageCrop="top"
               panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "portrait" : "compact"}
               subtitle={cls.source || "Custom"}
@@ -7850,7 +7850,7 @@ export default function BuilderPageClient() {
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
-              item={sp}
+              item={{ ...sp, icon: getCompendiumItemIcon("species", sp) }}
               imageCrop="top"
               panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "portrait-species" : "compact"}
               subtitle={sp.source || "Custom"}
@@ -7900,7 +7900,7 @@ export default function BuilderPageClient() {
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
-              item={bg}
+              item={{ ...bg, icon: getCompendiumItemIcon("backgrounds", bg) }}
               heroLayout="widescreen"
               panelWidth={!isCompactOnly && cardViewMode === "cinematic" ? "widescreen" : "compact"}
               subtitle={bg.source || "Custom"}
@@ -7925,7 +7925,7 @@ export default function BuilderPageClient() {
               enableCardImage={!isCompactOnly && cardViewMode === "cinematic"}
               open
               onClose={close}
-              item={spell}
+              item={{ ...spell, icon: getCompendiumItemIcon("spells", spell) }}
               subtitle={spell.school}
               imageCrop="top"
               panelWidth={cardViewMode === "cinematic" && !isCompactOnly ? "portrait-spell" : "compact"}
@@ -7967,7 +7967,7 @@ export default function BuilderPageClient() {
               showSourceDetails
               open
               onClose={close}
-              item={eq}
+              item={{ ...eq, icon: getCompendiumItemIcon("equipment", eq) }}
               enableCardImage={false}
               subtitle={eq.category}
               accentColor={accent}
@@ -7991,7 +7991,7 @@ export default function BuilderPageClient() {
               showSourceDetails
               open
               onClose={close}
-              item={feat}
+              item={{ ...feat, icon: getCompendiumItemIcon("feats", feat) }}
               panelWidth="compact"
               enableCardImage={false}
               subtitle={featSubtitleBits.join(" · ") || feat.source || "Feat"}

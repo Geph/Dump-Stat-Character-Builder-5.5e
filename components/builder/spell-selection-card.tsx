@@ -6,6 +6,7 @@ import { CompactImage } from "@/components/compact-image"
 import { Check, Info } from "lucide-react"
 import { motion } from "framer-motion"
 import { GameIcon } from "@/components/game-icon-picker"
+import { getCompendiumItemIcon } from "@/lib/compendium/content-types"
 import { compendiumCardHeroImageClass } from "@/lib/compendium/card-image"
 import { resolveSpellCardImageUrl } from "@/lib/compendium/enrich-srd-spells"
 import { getDenseSpellPickerSchoolClass } from "@/lib/builder/picker-pagination"
@@ -89,11 +90,9 @@ export function SpellSelectionCard({
       <div
         className={cn("pointer-events-none absolute inset-0", SPELL_SELECTION_CARD_GRADIENT_CLASS)}
       />
-      {spell.icon && (
-        <div className="absolute left-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-white/35 bg-black/50 backdrop-blur-sm">
-          <GameIcon name={spell.icon} className={cn("h-6 w-6", accent.imageCardIconText)} />
-        </div>
-      )}
+      <div className="absolute left-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-white/35 bg-black/50 backdrop-blur-sm">
+        <GameIcon name={getCompendiumItemIcon("spells", spell)} className={cn("h-6 w-6", accent.imageCardIconText)} />
+      </div>
       <div className="relative z-10 flex flex-1 flex-col justify-end p-3 pt-2">
         <h3 className="font-serif text-[0.84rem] sm:text-[0.94rem] font-black text-white leading-tight drop-shadow-md">
           {spell.name}
@@ -171,6 +170,7 @@ export function BuilderSpellCompactPick({
       >
         {selected && <Check className="h-2.5 w-2.5 text-white" />}
       </div>
+      <GameIcon name={getCompendiumItemIcon("spells", spell)} className="h-6 w-6 shrink-0 text-primary" />
       <div className="min-w-0 flex-1">
         <p className="break-words text-base font-semibold leading-snug text-foreground">{spell.name}</p>
         <p className={getDenseSpellPickerSchoolClass()}>{spell.school}</p>

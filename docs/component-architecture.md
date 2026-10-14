@@ -2,6 +2,13 @@
 
 Last reviewed: 2026-10-13.
 
+Compact builder catalog cards, selected summaries, spell choices and detail headers
+resolve icons with `getCompendiumItemIcon`, preserving stored choices and using the
+shared name/type defaults when no icon is stored. Compendium subclass lists and
+details pass the parent class name to that resolver. Do not persist generic fallback
+icons merely to make a control display one. `GameIcon` and the static picker manifest
+include `getBasePath()` so project-site URLs load under the GitHub Pages project path.
+
 Builder item detail overlays opt into `showSourceDetails`, rendered by
 `ItemSourceDetails`. Preserve the saved source and freeform `creator_url` citation;
 HTTP(S) URL citations open in a new tab, while other citation text stays plain text.

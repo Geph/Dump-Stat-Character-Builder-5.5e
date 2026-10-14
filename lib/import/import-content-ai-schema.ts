@@ -874,6 +874,7 @@ const EquipmentPropertiesAiSchema = z.object({
 
 const EquipmentAiSchema = z.object({
   name: z.string(),
+  icon: z.string().nullable(),
   source: z.string().nullable(),
   category: z.string(),
   subcategory: z.string().nullable(),
@@ -1427,6 +1428,7 @@ export function normalizeAiImportContent(raw: AiImportContent): ImportContent {
       coerceMagicEquipmentImportFields(
         omitNull({
           name: item.name,
+          icon: item.icon,
           source: item.source,
           category: item.category,
           subcategory: item.subcategory,

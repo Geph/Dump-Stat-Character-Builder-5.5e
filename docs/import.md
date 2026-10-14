@@ -1,6 +1,12 @@
 # Import formats
 
-Last reviewed: 2026-10-12.
+Last reviewed: 2026-10-13.
+
+Equipment JSON preserves an explicit `icon` through parsing, AI normalization,
+and persistence normalization. Hand-authored and legacy JSON may omit it or use
+`null`; server AI structured output requires the key with a nullable value, as
+required by strict JSON schema providers. This does not rewrite existing stored
+assignments or change the equipment database format.
 
 Hand-authored feat and custom-ability JSON can set `modifierWiring: "explicit"`
 alongside `linkedModifiers` to retain its wiring without adding name presets or
