@@ -2,21 +2,7 @@
 
 [![Compact Dump Stat home page](docs/screenshots/compact-home.jpg)](https://geph.github.io/Dump-Stat-Character-Builder-5.5e/)
 
-An art-free 5E-compatible character builder, compendium, and interactive character sheet. This repository owns the shared gameplay, import, and persistence functionality used by both Dump Stat editions.
-
-Current release baseline: **0.32**. The compact UI uses dense lists, text, licensed interface icons, and a parchment palette. It includes no portraits, generated artwork, or decorative backgrounds. Optional BYO LLM import guidance remains available; “art-free” does not mean the code or optional tools are AI-free.
-
-## Run locally
-
-Use Node **24.21.0 LTS** (`.nvmrc`) and **pnpm 11.9.0**. CI uses the same Node pin. Coordinate changes to a machine-wide runtime shared with the visual checkout.
-
-```sh
-pnpm install --frozen-lockfile
-# Copy .env.example to .env.local (browser storage by default).
-pnpm dev
-```
-
-Open http://localhost:3002. This separate port avoids colliding with the visual checkout. For a GitHub Pages export, run `pnpm build:static`. Hosted MySQL remains supported; configure `NEXT_PUBLIC_DEPLOY_MODE=hosted` and your database credentials locally.
+A compact, art-free 5.5e character builder, customizable compendium, and interactive character sheet.
 
 ## Functionality
 
@@ -44,11 +30,23 @@ Keep ability scores, skills, proficiencies, combat, and character details close 
 
 ![Compact character sheet showing skills, ability scores, and proficiencies](docs/screenshots/compact-sheet.jpg)
 
+## Run locally
+
+Use Node **24.21.0 LTS** (`.nvmrc`) and **pnpm 11.9.0**. CI uses the same Node pin.
+
+```sh
+pnpm install --frozen-lockfile
+# Copy .env.example to .env.local (browser storage by default).
+pnpm dev
+```
+
+Open http://localhost:3002. For a GitHub Pages export, run `pnpm build:static`. Hosted MySQL remains supported; configure `NEXT_PUBLIC_DEPLOY_MODE=hosted` and your database credentials locally.
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [architecture and ownership](docs/repository-ownership.md), and [import documentation](docs/import.md). Shared fixes start in this repository; the visual edition pins an exact reviewed commit. Never copy image sources or private rulebook extracts into this repository.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [import documentation](docs/import.md). Never copy image sources or private rulebook extracts into this repository.
 
-Run `pnpm check:compact`, `pnpm core:check`, `pnpm lint`, `pnpm exec tsc --noEmit`, `pnpm test`, and `pnpm build:static`. Physical-art integration suites are run by the visual edition; the compact edition tests that artwork cannot be bundled or rendered.
+Run `pnpm check:compact`, `pnpm core:check`, `pnpm lint`, `pnpm exec tsc --noEmit`, `pnpm test`, and `pnpm build:static`. The compact edition tests that artwork cannot be bundled or rendered.
 
 ## Attribution
 
