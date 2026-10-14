@@ -7,7 +7,7 @@ import { CC_BY_SA_4_URL } from "@/lib/fonts/solbera-attribution"
 import { SrdAttribution } from "@/components/srd-attribution"
 import { cn } from "@/lib/utils"
 
-const GITHUB_REPO_URL = "https://github.com/Geph/dump-stat-character-builder"
+const GITHUB_REPO_URL = "https://github.com/Geph/Dump-Stat-Character-Builder-5.5e"
 
 type SiteFooterProps = {
   id?: string
