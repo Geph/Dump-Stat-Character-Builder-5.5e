@@ -2,7 +2,7 @@
   "id": "kibbles-tasty",
   "label": "Kibbles Tasty",
   "source": "Kibbles Tasty",
-  "version": "2026-08-20",
+  "version": "2026-10-13",
   "files": [
     "kibbles-backgrounds.json",
     "kibbles-crafting-feats.json",
@@ -15,6 +15,6 @@
     "kibbles-warden-class.json"
   ],
   "notes": [
-    "All Kibbles Tasty Drive import-json files included."
+    "Spell revisions reviewed against Legends & Legacies v1.0.2 and Craft & Creation v1.2; includes 54 October 2026 playtest spell entries."
   ]
 }

@@ -58,11 +58,11 @@ describe("prefer-same-source", () => {
       { id: "srd-animate", name: "Animate Objects", source: SRD_SOURCE },
       {
         id: "kib-dancing",
-        name: "Dancing Objects (Animate Object)",
+        name: "Dancing Object",
         source: "Kibbles Tasty",
       },
     ]
-    expect(resolvePreferredNameMatch("Animate Objects", animateCatalog)?.id).toBe("kib-dancing")
+    expect(resolvePreferredNameMatch("Animate Objects", animateCatalog, "Kibbles Tasty")?.id).toBe("srd-animate")
     expect(
       resolvePreferredNameMatch("Dancing Objects (Animate Object)", animateCatalog)?.id,
     ).toBe("kib-dancing")
@@ -75,7 +75,7 @@ describe("prefer-same-source", () => {
       "srd-befuddlement",
       "srd-detect",
       "srd-pass",
-      "kib-dancing",
+      "srd-animate",
     ])
   })
   it("filters SRD duplicates when a preferred-source replacement exists", () => {

@@ -46,6 +46,43 @@ Card art for Mage Hand Press **classes** and **free subclasses** ships under `pu
 
 Seeding **continues after per-file errors** and returns `errors` / `partial` so the UI can offer retry of failed files.
 
+### Kibbles spell revisions (2026-10-13)
+
+The spell bundle has 381 unique entries. Superseded Dancing Object variants,
+Chromatic Breaths, Divine Judgement, Martial Steel Wind Strike, Blood Explosion,
+and Transfuse Life are replaced by Dancing Object, Chromatic Breath, Divine
+Judgment, Flickering Strikes, Corpse Explosion, and Blood Transfusion. Shared
+lookup aliases retain legacy grants, but SRD Animate Objects is a separate spell.
+The visual Dancing Object mapping retains its existing filename; no artwork is
+added here. Existing saved rows are not deleted or migrated by this update.
+
+New extraction sources: Legends & Legacies v1.0.2 (PDF pages 221, 284, 290–297),
+Craft & Creation v1.2 (pages 59, 317–318), and the October 2026 Playtest Packet
+(pages 75–88). These add 54 playtest spells, seven crafting spells, six subclass
+Glyph spells, and the missing blood spells. Glyph of Force on Craft & Creation
+page 58 is an upgrade granting Wall of Force, not an additional spell.
+Despair Cascade and Reality Refraction have blank class fields in the playtest;
+their availability is left for GM approval. Hemorrhaging Curse is a Red Coven
+spell with Classes: N/A. Glyph spells likewise do not grant general Inventor
+spell-list access. Source playtest status and unedited markers are retained in
+descriptions; source rule inconsistencies are not silently revised.
+
+Includes content by KibblesTasty Homebrew LLC, available at
+<https://www.kthomebrew.com/>. Use of these spells in this character builder
+follows the publisher's [permissions](https://www.kthomebrew.com/permissions);
+do not describe the entire bundle as CC BY or include publisher artwork.
+Bone Spear, Field of Rot, Raven's Wings, Screaming Skull, and Wall of Blood
+are credited to somanyrobots, from
+[So Many Spells](https://www.gmbinder.com/share/-NMZq9u_rDyV_XD5YTxf), licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Their bundled source
+and creator links retain that credit. PDF text is reformatted for app display;
+print footnote markers are removed from spell names.
+
+The private Drive `import-json/kibbles tasty/kibbles-spells.json` source was
+updated alongside the bundle so `pnpm seed-packs:build` preserves these additions.
+The regression in `__tests__/kibbles-spell-revisions.test.ts` verifies current
+names, revised mechanics, all 54 playtest entries, attribution and lookup isolation.
+
 ## Distribution checks (reviewed 2026-10-09)
 
 - The [MHP public categories](https://magehandpress.com/categories/) list all 39 currently bundled subclass names. The allowlist test checks every MHP JSON pack, including subclass ability ownership and paid-only prerequisites.

@@ -13,9 +13,9 @@ describe("spell-name-aliases", () => {
     expect(canonicalSpellName("Feeblemind")).toBe("Befuddlement")
     expect(canonicalSpellName("Detect Evil and Good")).toBe("Detect Evil and Good")
     expect(canonicalSpellName("Fireball")).toBe("Fireball")
-    expect(canonicalSpellName("Animate Objects")).toBe("Dancing Objects (Animate Object)")
-    expect(canonicalSpellName("Animate Object")).toBe("Dancing Objects (Animate Object)")
-    expect(canonicalSpellName("Dancing Objects")).toBe("Dancing Objects (Animate Object)")
+    expect(canonicalSpellName("Animate Objects")).toBe("Animate Objects")
+    expect(canonicalSpellName("Animate Object")).toBe("Animate Object")
+    expect(canonicalSpellName("Dancing Objects")).toBe("Dancing Object")
   })
 
   it("treats each alias pair as the same lookup key", () => {
@@ -28,12 +28,12 @@ describe("spell-name-aliases", () => {
     expect(canonicalSpellLookupKey("Feeblemind")).toBe(
       canonicalSpellLookupKey("Befuddlement"),
     )
-    expect(canonicalSpellLookupKey("Animate Objects")).toBe(
-      canonicalSpellLookupKey("Dancing Objects (Animate Object)"),
+    expect(canonicalSpellLookupKey("Dancing Objects (Animate Object)")).toBe(
+      canonicalSpellLookupKey("Dancing Object"),
     )
     expect(spellNamesAliasEqual("Feeblemind", "Befuddlement")).toBe(true)
     expect(spellNamesAliasEqual("Animate Objects", "Dancing Objects (Animate Object)")).toBe(
-      true,
+      false,
     )
     expect(spellNamesAliasEqual("Fireball", "Feeblemind")).toBe(false)
   })
@@ -43,12 +43,25 @@ describe("spell-name-aliases", () => {
       "befuddlement",
       "feeblemind",
     ])
-    expect(spellAliasLookupKeys("Animate Objects").sort()).toEqual([
-      "animate object",
-      "animate objects",
+    expect(spellAliasLookupKeys("Animate Objects")).toEqual(["animate objects"])
+    expect(spellAliasLookupKeys("Dancing Object").sort()).toEqual([
+      "dancing object",
       "dancing object (animate object)",
       "dancing objects",
       "dancing objects (animate object)",
     ])
+  })
+
+  it("routes superseded Kibbles print names to current revisions", () => {
+    for (const [oldName, currentName] of [
+      ["Chromatic Breaths", "Chromatic Breath"],
+      ["Divine Judgement", "Divine Judgment"],
+      ["Martial Steel Wind Strike", "Flickering Strikes"],
+      ["Blood Explosion", "Corpse Explosion"],
+      ["Transfuse Life", "Blood Transfusion"],
+    ]) {
+      expect(canonicalSpellName(oldName)).toBe(currentName)
+    }
+    expect(spellNamesAliasEqual("Steel Wind Strike", "Flickering Strikes")).toBe(false)
   })
 })

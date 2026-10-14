@@ -2,6 +2,14 @@
 
 Last reviewed: 2026-10-13.
 
+Bundled Kibbles spells use current Legends & Legacies names. Legacy Dancing
+Object names resolve to Dancing Object; Animate Objects/Animate Object are never
+redirected to that second-level spell. Blood Explosion and Transfuse Life resolve
+to Corpse Explosion and Blood Transfusion. Alias routing updates name-based grants,
+not stored spell IDs or user rows. The October 2026 spells carry a playtest notice;
+blank class lists and subclass-only Glyph availability remain explicit. See
+`lib/seed-packs/README.md` for extraction sources and publisher attribution.
+
 Equipment JSON preserves an explicit `icon` through parsing, AI normalization,
 and persistence normalization. Hand-authored and legacy JSON may omit it or use
 `null`; server AI structured output requires the key with a nullable value, as

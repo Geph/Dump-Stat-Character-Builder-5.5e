@@ -22,6 +22,7 @@ export function spellNameToCardImageSlug(spellName: string): string {
  * (typos in masters, plural/singular import variants, shortened titles).
  */
 const SPELL_CARD_IMAGE_SLUG_OVERRIDES: Record<string, string> = {
+  "Dancing Object": "dancing-object-animate-object",
   "Dancing Objects (Animate Object)": "dancing-object-animate-object",
 }
 
@@ -158,6 +159,7 @@ export const BUNDLED_SPELL_CARD_IMAGE_NAMES = [
   "Cryptogram",
   "Cure Wounds",
   "Dancing Lights",
+  "Dancing Object",
   "Dancing Object (Animate Object)",
   "Dancing Objects (Animate Object)",
   "Darkness",

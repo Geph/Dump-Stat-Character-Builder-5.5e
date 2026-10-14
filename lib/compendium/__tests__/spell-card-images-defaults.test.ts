@@ -34,6 +34,12 @@ describe("spell card image defaults", () => {
     expect(defaultSpellCardImageUrl("Hex: Evil Eye", mapped)).toMatch(/\/hex-evil-eye\.png$/)
   })
 
+  it("keeps the visual edition's existing art path for the current Dancing Object name", () => {
+    expect(defaultSpellCardImageUrl("Dancing Object", { requireAvailable: false })).toMatch(
+      /\/dancing-object-animate-object\.png$/,
+    )
+  })
+
   it("maps Kibbles import spell names to local art when the PNG is present", () => {
     expect(defaultSpellCardImageUrl("Mutate")).toMatch(/\/mutate\.png$/)
     expect(defaultSpellCardImageUrl("Awaken Rope")).toMatch(/\/awaken-rope\.png$/)

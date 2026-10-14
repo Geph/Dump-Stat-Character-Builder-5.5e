@@ -19,11 +19,15 @@ export const SPELL_NAME_ALIAS_TO_CANONICAL: Readonly<Record<string, string>> = {
   "detect good and evil": "Detect Evil and Good",
   "pass without a trace": "Pass without Trace",
   "feeblemind": "Befuddlement",
-  // Kibbles Casting rename of SRD Animate Objects
-  "animate objects": "Dancing Objects (Animate Object)",
-  "animate object": "Dancing Objects (Animate Object)",
-  "dancing object (animate object)": "Dancing Objects (Animate Object)",
-  "dancing objects": "Dancing Objects (Animate Object)",
+  // Kibbles print revisions; SRD Animate Objects is a different spell.
+  "dancing object (animate object)": "Dancing Object",
+  "dancing objects (animate object)": "Dancing Object",
+  "dancing objects": "Dancing Object",
+  "chromatic breaths": "Chromatic Breath",
+  "divine judgement": "Divine Judgment",
+  "martial steel wind strike": "Flickering Strikes",
+  "blood explosion": "Corpse Explosion",
+  "transfuse life": "Blood Transfusion",
 }
 
 /** Preferred catalog name for a spell print name (unchanged when not aliased). */
