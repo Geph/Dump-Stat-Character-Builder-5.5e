@@ -8,6 +8,8 @@ Thanks for wanting to help. This guide is for people opening pull requests — s
 
 Follow [Quick start](README.md#quick-start) in the README:
 
+Use Node **24.21.0 LTS** (pinned in `.nvmrc`, also used by CI) and **pnpm 11.9.0**. Coordinate runtime upgrades when the compact and visual checkouts share a machine. Use pnpm so `pnpm-lock.yaml` remains the dependency source of truth.
+
 ```bash
 git clone https://github.com/Geph/Dump-Stat-Character-Builder-5.5e.git
 cd Dump-Stat-Character-Builder-5.5e
@@ -18,7 +20,7 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-Open [http://localhost:3002](http://localhost:3002). Prefer `pnpm dev` (or `npm run dev`) so the port is set in the script. Cursor/VS Code integrated terminals also export `PORT=3002` (see `.vscode/settings.json`), so bare `npx next dev` uses 3002 after you open a **new** terminal. With npm instead of pnpm: `npm install` and `npm run dev`.
+Open [http://localhost:3002](http://localhost:3002). Use `pnpm dev` so the port is set in the script. Cursor/VS Code integrated terminals also export `PORT=3002` (see `.vscode/settings.json`).
 
 ## Checks before you push
 

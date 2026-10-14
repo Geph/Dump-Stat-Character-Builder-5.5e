@@ -8,6 +8,8 @@ Current release baseline: **0.32**. The compact UI uses dense lists, text, licen
 
 ## Run locally
 
+Use Node **24.21.0 LTS** (`.nvmrc`) and **pnpm 11.9.0**. CI uses the same Node pin. Coordinate changes to a machine-wide runtime shared with the visual checkout.
+
 ```sh
 pnpm install --frozen-lockfile
 # Copy .env.example to .env.local (browser storage by default).

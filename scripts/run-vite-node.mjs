@@ -48,7 +48,7 @@ if (!process.argv[2]) {
 
 const viteNode = resolveViteNodeMjs()
 if (!viteNode) {
-  console.error("Could not find vite-node. Is vitest installed?")
+  console.error("Could not find vite-node. Run pnpm install with dev dependencies.")
   process.exit(1)
 }
 
